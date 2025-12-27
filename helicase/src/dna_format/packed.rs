@@ -1,15 +1,16 @@
 use std::fmt::{self, Write};
 
-#[derive(Debug, Clone, Default)]
+type T = u128;
+const BITS_PER_BP: usize = 2;
+const BITS_PER_BLOCK: usize = T::BITS as usize;
+const BP_PER_BLOCK: usize = BITS_PER_BLOCK / BITS_PER_BP;
+const PADDING: usize = 3;
+
+#[derive(Clone, Default)]
 pub struct PackedDNA {
-    pub bits: Vec<u128>,
+    pub bits: Vec<T>,
     pub num_bits: usize,
 }
-
-type T = u128;
-const BITS_PER_BLOCK: usize = T::BITS as usize;
-const BP_PER_BLOCK: usize = BITS_PER_BLOCK / 2;
-const PADDING: usize = 3;
 
 impl PackedDNA {
     #[inline(always)]
@@ -70,16 +71,26 @@ impl PackedDNA {
     }
 
     #[inline(always)]
+    pub fn bits(&self) -> &[u128] {
+        &self.bits
+    }
+
+    #[inline(always)]
     pub fn get(&self, i: usize) -> u8 {
         ((self.bits[i / BP_PER_BLOCK] >> (2 * (i % BP_PER_BLOCK))) & 0b11) as u8
+    }
+
+    #[inline(always)]
+    pub fn get_char(&self, i: usize) -> char {
+        const LUT: [char; 4] = ['A', 'C', 'T', 'G'];
+        LUT[self.get(i) as usize]
     }
 }
 
 impl fmt::Display for PackedDNA {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        const LUT: [char; 4] = ['A', 'C', 'T', 'G'];
         for i in 0..self.len() {
-            f.write_char(LUT[self.get(i) as usize])?;
+            f.write_char(self.get_char(i))?;
         }
         Ok(())
     }

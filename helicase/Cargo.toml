@@ -10,6 +10,7 @@ license = "MIT"
 [dependencies]
 deko = { version = "0.5", default-features = false }
 memmap2 = "0.9"
+paraseq = { version = "0.4", default-features = false, optional = true }
 
 [features]
 default = ["gz", "zstd"]

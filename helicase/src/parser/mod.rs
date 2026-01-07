@@ -3,6 +3,8 @@
 mod fasta;
 mod fastq;
 mod fastx;
+#[cfg(feature = "paraseq")]
+mod paraseq_traits;
 mod traits;
 
 pub use fasta::*;

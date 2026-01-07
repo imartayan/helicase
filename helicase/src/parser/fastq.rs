@@ -193,8 +193,25 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastqParser<'a, CONF
 
     #[inline(always)]
     fn get_dna_len(&self) -> usize {
-        assert!(flag_is_set(CONFIG, COMPUTE_DNA_LEN));
-        self.dna_len
+        assert!(flag_is_set(
+            CONFIG,
+            COMPUTE_DNA_LEN | COMPUTE_DNA_STRING | COMPUTE_DNA_COLUMNAR | COMPUTE_DNA_PACKED
+        ));
+        if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
+            self.dna_len
+        } else if flag_is_set(CONFIG, COMPUTE_DNA_STRING) {
+            if I::RANDOM_ACCESS && flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
+                self.dna_range.len()
+            } else {
+                self.cur_dna_string.len()
+            }
+        } else if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
+            self.cur_dna_columnar.len()
+        } else if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
+            self.cur_dna_packed.len()
+        } else {
+            unreachable!()
+        }
     }
 }
 
@@ -334,7 +351,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                             );
                         }
                         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
-                            self.dna_len += 64 - self.pos_in_block;
+                            self.dna_len +=
+                                self.lexer.input.current_chunk_len() - self.pos_in_block;
                         }
                         self.block = match self.lexer.next() {
                             Some(b) => b,
@@ -370,7 +388,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         );
                     }
                     if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
-                        self.dna_len += self.pos_in_block;
+                        self.dna_len += self.pos_in_block - first_pos;
                     }
                     let return_pos = if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
                         self.global_pos()

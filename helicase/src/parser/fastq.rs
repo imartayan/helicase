@@ -99,7 +99,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastqParser<'a, CONF
 
     #[inline(always)]
     fn get_header(&self) -> &[u8] {
-        assert!(flag_is_set(CONFIG, COMPUTE_HEADER));
+        if flag_is_not_set(CONFIG, COMPUTE_HEADER) {
+            panic!("Parser config error: headers are ignored")
+        }
         if I::RANDOM_ACCESS {
             &self.lexer.input.data()[self.header_range.clone()]
         } else {
@@ -109,7 +111,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastqParser<'a, CONF
 
     #[inline(always)]
     fn get_header_owned(&mut self) -> Vec<u8> {
-        assert!(flag_is_set(CONFIG, COMPUTE_HEADER));
+        if flag_is_not_set(CONFIG, COMPUTE_HEADER) {
+            panic!("Parser config error: headers are ignored")
+        }
         if I::RANDOM_ACCESS {
             self.lexer.input.data()[self.header_range.clone()].to_vec()
         } else {
@@ -121,7 +125,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastqParser<'a, CONF
 
     #[inline(always)]
     fn get_quality(&self) -> Option<&[u8]> {
-        assert!(flag_is_set(CONFIG, COMPUTE_QUALITY));
+        if flag_is_not_set(CONFIG, COMPUTE_QUALITY) {
+            panic!("Parser config error: quality is ignored")
+        }
         if I::RANDOM_ACCESS {
             Some(&self.lexer.input.data()[self.quality_range.clone()])
         } else {
@@ -131,7 +137,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastqParser<'a, CONF
 
     #[inline(always)]
     fn get_quality_owned(&mut self) -> Option<Vec<u8>> {
-        assert!(flag_is_set(CONFIG, COMPUTE_QUALITY));
+        if flag_is_not_set(CONFIG, COMPUTE_QUALITY) {
+            panic!("Parser config error: quality is ignored")
+        }
         if I::RANDOM_ACCESS {
             Some(self.lexer.input.data()[self.quality_range.clone()].to_vec())
         } else {
@@ -143,7 +151,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastqParser<'a, CONF
 
     #[inline(always)]
     fn get_dna_string(&self) -> &[u8] {
-        assert!(flag_is_set(CONFIG, COMPUTE_DNA_STRING));
+        if flag_is_not_set(CONFIG, COMPUTE_DNA_STRING) {
+            panic!("Parser config error: dna_string is not enabled")
+        }
         if I::RANDOM_ACCESS && flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
             &self.lexer.input.data()[self.dna_range.clone()]
         } else {
@@ -153,7 +163,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastqParser<'a, CONF
 
     #[inline(always)]
     fn get_dna_string_owned(&mut self) -> Vec<u8> {
-        assert!(flag_is_set(CONFIG, COMPUTE_DNA_STRING));
+        if flag_is_not_set(CONFIG, COMPUTE_DNA_STRING) {
+            panic!("Parser config error: dna_string is not enabled")
+        }
         if I::RANDOM_ACCESS && flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
             self.lexer.input.data()[self.dna_range.clone()].to_vec()
         } else {
@@ -165,13 +177,17 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastqParser<'a, CONF
 
     #[inline(always)]
     fn get_dna_columnar(&self) -> &ColumnarDNA {
-        assert!(flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR));
+        if flag_is_not_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
+            panic!("Parser config error: dna_columnar is not enabled")
+        }
         &self.cur_dna_columnar
     }
 
     #[inline(always)]
     fn get_dna_columnar_owned(&mut self) -> ColumnarDNA {
-        assert!(flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR));
+        if flag_is_not_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
+            panic!("Parser config error: dna_columnar is not enabled")
+        }
         let mut res = ColumnarDNA::with_capacity(self.cur_dna_columnar.capacity());
         swap(&mut res, &mut self.cur_dna_columnar);
         res
@@ -179,13 +195,17 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastqParser<'a, CONF
 
     #[inline(always)]
     fn get_dna_packed(&self) -> &PackedDNA {
-        assert!(flag_is_set(CONFIG, COMPUTE_DNA_PACKED));
+        if flag_is_not_set(CONFIG, COMPUTE_DNA_PACKED) {
+            panic!("Parser config error: dna_packed is not enabled")
+        }
         &self.cur_dna_packed
     }
 
     #[inline(always)]
     fn get_dna_packed_owned(&mut self) -> PackedDNA {
-        assert!(flag_is_set(CONFIG, COMPUTE_DNA_PACKED));
+        if flag_is_not_set(CONFIG, COMPUTE_DNA_PACKED) {
+            panic!("Parser config error: dna_packed is not enabled")
+        }
         let mut res = PackedDNA::with_capacity(self.cur_dna_packed.capacity());
         swap(&mut res, &mut self.cur_dna_packed);
         res
@@ -193,10 +213,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastqParser<'a, CONF
 
     #[inline(always)]
     fn get_dna_len(&self) -> usize {
-        assert!(flag_is_set(
-            CONFIG,
-            COMPUTE_DNA_LEN | COMPUTE_DNA_STRING | COMPUTE_DNA_COLUMNAR | COMPUTE_DNA_PACKED
-        ));
         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
             self.dna_len
         } else if flag_is_set(CONFIG, COMPUTE_DNA_STRING) {
@@ -210,7 +226,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastqParser<'a, CONF
         } else if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
             self.cur_dna_packed.len()
         } else {
-            unreachable!()
+            panic!("Parser config error: dna is ignored")
         }
     }
 }
@@ -605,7 +621,7 @@ mod tests {
         assert_eq!(
             res,
             vec![
-                "TTTCTTAAAAAAGAAAAACAA", // uppercased
+                "TTTCTTAAAAAAGAAAAACAA",
                 "CTCTTA",
                 "AAACAAA",
                 "AGCTTT",
@@ -620,11 +636,7 @@ mod tests {
         }
         assert_eq!(
             res,
-            vec![
-                "TTTCTTAAAAAAGAAAAACAA", // uppercased
-                "CTCTTAAAACAAAAGCTTT",
-                "CCAC"
-            ]
+            vec!["TTTCTTAAAAAAGAAAAACAA", "CTCTTAAAACAAAAGCTTT", "CCAC"]
         );
     }
 
@@ -638,7 +650,7 @@ mod tests {
         assert_eq!(
             res,
             vec![
-                "TTTCTTAAAAAAGAAAAACAA", // uppercased
+                "TTTCTTAAAAAAGAAAAACAA",
                 "CTCTTA",
                 "AAACAAA",
                 "AGCTTT",
@@ -653,11 +665,7 @@ mod tests {
         }
         assert_eq!(
             res,
-            vec![
-                "TTTCTTAAAAAAGAAAAACAA", // uppercased
-                "CTCTTAAAACAAAAGCTTT",
-                "CCAC"
-            ]
+            vec!["TTTCTTAAAAAAGAAAAACAA", "CTCTTAAAACAAAAGCTTT", "CCAC"]
         );
     }
 }

@@ -21,15 +21,10 @@ pub trait InputData<'a>: Iterator<Item = &'a [u8]> {
         unimplemented!()
     }
 
-    /// Get a reference to the current chunk of up to 64 bytes.
+    /// Get a reference to the current block of up to 64 bytes.
     ///
     /// If the length is smaller than 64, the following bytes are guaranteed to be zeros.
-    fn current_chunk(&self) -> &[u8];
-
-    /// Returns the length of the current chunk.
-    ///
-    /// This is faster than calling `current_chunk().len()`.
-    fn current_chunk_len(&self) -> usize;
+    fn current_block(&self) -> &[u8];
 
     /// Get a reference to the internal buffer.
     ///
@@ -83,19 +78,19 @@ pub struct SliceInput<'a> {
     data: &'a [u8],
     pos: usize,
     first_byte: u8,
-    last_chunk: [u8; 64],
+    last_block: [u8; 64],
 }
 
 impl<'a> SliceInput<'a> {
     pub fn new(data: &'a [u8]) -> Self {
         assert!(!data.is_empty());
-        let mut last_chunk = [0; 64];
-        last_chunk[..data.len() % 64].copy_from_slice(&data[(data.len() / 64) * 64..]);
+        let mut last_block = [0; 64];
+        last_block[..data.len() % 64].copy_from_slice(&data[(data.len() / 64) * 64..]);
         Self {
             data,
             pos: 0,
             first_byte: data[0],
-            last_chunk,
+            last_block,
         }
     }
 }
@@ -112,7 +107,7 @@ impl<'a> Iterator for SliceInput<'a> {
         } else if pos < self.data.len() {
             unsafe {
                 Some(std::slice::from_raw_parts(
-                    self.last_chunk.as_ptr(),
+                    self.last_block.as_ptr(),
                     self.data.len() % 64,
                 ))
             }
@@ -131,20 +126,11 @@ impl<'a> InputData<'a> for SliceInput<'a> {
     }
 
     #[inline(always)]
-    fn current_chunk(&self) -> &[u8] {
+    fn current_block(&self) -> &[u8] {
         if 64 <= self.pos && self.pos <= self.data.len() {
             unsafe { std::slice::from_raw_parts(self.data.as_ptr().add(self.pos - 64), 64) }
         } else {
-            unsafe { std::slice::from_raw_parts(self.last_chunk.as_ptr(), self.data.len() % 64) }
-        }
-    }
-
-    #[inline(always)]
-    fn current_chunk_len(&self) -> usize {
-        if self.pos <= self.data.len() {
-            64
-        } else {
-            self.data.len() % 64
+            unsafe { std::slice::from_raw_parts(self.last_block.as_ptr(), self.data.len() % 64) }
         }
     }
 
@@ -215,13 +201,8 @@ impl<'a> InputData<'a> for MmapInput<'a> {
     }
 
     #[inline(always)]
-    fn current_chunk(&self) -> &[u8] {
-        self.slice.current_chunk()
-    }
-
-    #[inline(always)]
-    fn current_chunk_len(&self) -> usize {
-        self.slice.current_chunk_len()
+    fn current_block(&self) -> &[u8] {
+        self.slice.current_block()
     }
 
     #[inline(always)]
@@ -287,13 +268,8 @@ impl InputData<'static> for RamFileInput {
     }
 
     #[inline(always)]
-    fn current_chunk(&self) -> &[u8] {
-        self.slice.current_chunk()
-    }
-
-    #[inline(always)]
-    fn current_chunk_len(&self) -> usize {
-        self.slice.current_chunk_len()
+    fn current_block(&self) -> &[u8] {
+        self.slice.current_block()
     }
 
     #[inline(always)]
@@ -393,7 +369,7 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
     const RANDOM_ACCESS: bool = false;
 
     #[inline(always)]
-    fn current_chunk(&self) -> &[u8] {
+    fn current_block(&self) -> &[u8] {
         if 64 <= self.pos && self.pos <= self.len {
             unsafe { std::slice::from_raw_parts(self.data.as_ptr().add(self.pos - 64), 64) }
         } else {
@@ -403,15 +379,6 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
                     self.len % 64,
                 )
             }
-        }
-    }
-
-    #[inline(always)]
-    fn current_chunk_len(&self) -> usize {
-        if 64 <= self.pos && self.pos <= self.len {
-            64
-        } else {
-            self.len % 64
         }
     }
 
@@ -496,13 +463,8 @@ impl InputData<'static> for FileInput {
     const RANDOM_ACCESS: bool = false;
 
     #[inline(always)]
-    fn current_chunk(&self) -> &[u8] {
-        self.reader.current_chunk()
-    }
-
-    #[inline(always)]
-    fn current_chunk_len(&self) -> usize {
-        self.reader.current_chunk_len()
+    fn current_block(&self) -> &[u8] {
+        self.reader.current_block()
     }
 
     #[inline(always)]
@@ -575,13 +537,8 @@ impl InputData<'static> for StdinInput {
     const RANDOM_ACCESS: bool = false;
 
     #[inline(always)]
-    fn current_chunk(&self) -> &[u8] {
-        self.reader.current_chunk()
-    }
-
-    #[inline(always)]
-    fn current_chunk_len(&self) -> usize {
-        self.reader.current_chunk_len()
+    fn current_block(&self) -> &[u8] {
+        self.reader.current_block()
     }
 
     #[inline(always)]

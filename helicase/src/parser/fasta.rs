@@ -270,7 +270,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
         let mut first_pos = self.pos_in_block;
         while position == 0 {
             if flag_is_set(CONFIG, COMPUTE_HEADER) && !I::RANDOM_ACCESS {
-                let header_chunk = &self.lexer.input().current_chunk()[self.pos_in_block..];
+                let header_chunk = &self.lexer.input().current_block()[self.pos_in_block..];
                 self.cur_header.extend_from_slice(header_chunk);
             }
             self.block = match self.lexer.next() {
@@ -286,7 +286,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
         }
         self.pos_in_block = position.trailing_zeros() as usize;
         if flag_is_set(CONFIG, COMPUTE_HEADER) && !I::RANDOM_ACCESS {
-            let header_chunk = &self.lexer.input().current_chunk()[first_pos..self.pos_in_block];
+            let header_chunk = &self.lexer.input().current_block()[first_pos..self.pos_in_block];
             self.cur_header.extend_from_slice(header_chunk);
         }
         false
@@ -300,7 +300,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
         while position == 0 {
             if flag_is_set(CONFIG, COMPUTE_DNA_STRING) && !(I::RANDOM_ACCESS && self.contiguous_dna)
             {
-                let dna_chunk = &self.lexer.input().current_chunk()[self.pos_in_block..];
+                let dna_chunk = &self.lexer.input().current_block()[self.pos_in_block..];
                 self.cur_dna_string.extend_from_slice(dna_chunk);
             }
             if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
@@ -317,12 +317,12 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
                 );
             }
             if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
-                self.dna_len += self.lexer.input.current_chunk_len() - self.pos_in_block;
+                self.dna_len += self.block.len - self.pos_in_block;
             }
             self.block = match self.lexer.next() {
                 Some(b) => b,
                 None => {
-                    self.pos_in_block = self.lexer.input().current_chunk_len();
+                    self.pos_in_block = self.block.len;
                     return true;
                 }
             };
@@ -333,7 +333,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
         }
         self.pos_in_block = position.trailing_zeros() as usize;
         if flag_is_set(CONFIG, COMPUTE_DNA_STRING) && !(I::RANDOM_ACCESS && self.contiguous_dna) {
-            let dna_chunk = &self.lexer.input().current_chunk()[first_pos..self.pos_in_block];
+            let dna_chunk = &self.lexer.input().current_block()[first_pos..self.pos_in_block];
             self.cur_dna_string.extend_from_slice(dna_chunk);
         }
         if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
@@ -363,7 +363,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             self.block = match self.lexer.next() {
                 Some(b) => b,
                 None => {
-                    self.pos_in_block = self.lexer.input().current_chunk_len();
+                    self.pos_in_block = self.block.len;
                     return true;
                 }
             };

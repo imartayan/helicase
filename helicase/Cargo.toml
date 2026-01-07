@@ -9,12 +9,13 @@ license = "MIT"
 
 [dependencies]
 deko = { version = "0.5", default-features = false }
+flate2 = { version = "1.1", optional = true, features = ["zlib-rs"] }
 memmap2 = "0.9"
 paraseq = { version = "0.4", default-features = false, optional = true }
 
 [features]
 default = ["gz", "zstd"]
 bz2 = ["deko/bzip2"]
-gz = ["deko/flate2"]
+gz = ["deko/flate2", "flate2"]
 xz = ["deko/xz"]
 zstd = ["deko/zstd"]

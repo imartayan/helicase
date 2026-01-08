@@ -8,8 +8,8 @@ keywords = ["bioinformatics", "fasta", "fastq", "parser", "simd"]
 license = "MIT"
 
 [dependencies]
-deko = { version = "0.5", default-features = false }
-flate2 = { version = "1.1", optional = true, features = ["zlib-rs"] }
+deko = { version = "0.6", default-features = false }
+flate2 = { version = "1.1", features = ["zlib-rs"], optional = true }
 memmap2 = "0.9"
 paraseq = { version = "0.4", default-features = false, optional = true }
 

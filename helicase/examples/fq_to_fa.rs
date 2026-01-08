@@ -9,10 +9,11 @@ const CONFIG: Config = ParserOptions::default().config();
 fn main() {
     let path_str = std::env::args().nth(1).expect("No input file given");
     let path = Path::new(&path_str);
-    let mut parser = FastxParser::<CONFIG>::from_file(path).expect("Cannot open file");
-
     let out_path = path.with_extension("fa");
-    let out_file = File::create(out_path).expect("Cannot create file");
+    assert_ne!(path, out_path, "Input and output paths must be different!");
+
+    let mut parser = FastxParser::<CONFIG>::from_file(path).expect("Cannot open file");
+    let out_file = File::create(out_path).expect("Cannot create output file");
     let mut writer = BufWriter::new(out_file);
 
     while let Some(_event) = parser.next() {

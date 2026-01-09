@@ -57,7 +57,7 @@ const CONFIG: Config = ParserOptions::default()
 ### Bitpacked DNA formats
 
 The parser can output a bitpacked representation of the sequence in two different formats:
-- `PackedDNA` which maps each base to two bits and packs them.
+- `PackedDNA` which maps each base to two bits and packs them (compatible with [packed-seq](https://github.com/rust-seq/packed-seq) using the corresponding [feature](#crate-features)).
 - `ColumnarDNA` which separates the high bit and the low bit of each base, and store them in two bitmasks.
 
 Since each base is encoded using two bits, we have to handle non-ACTG bases differently.
@@ -91,6 +91,9 @@ fn main() {
         // get a reference to the packed sequence
         let seq = parser.get_dna_packed();
 
+        // or directly get a PackedSeq (requires the packed-seq feature)
+        let packed_seq = parser.get_packed_seq();
+
         // ...
     }
 }
@@ -98,11 +101,19 @@ fn main() {
 
 ## Crate features
 
+### Decompression
+
 This library supports transparent file decompression using [deko](https://github.com/igankevich/deko), you can choose the supported formats using the following features:
 - `bz2` for bzip2 (disabled by default)
 - `gz` for gzip (enabled by default)
 - `xz` for xz (disabled by default)
 - `zstd` for zstd (enabled by default)
+
+### Packed-seq
+
+The [PackedDNA format](#bitpacked-dna-formats) is compatible with [packed-seq](https://github.com/rust-seq/packed-seq) and can be converted when the `packed-seq` feature is enabled (disabled by default).
+
+This can be useful for [hashing *k*-mers](https://github.com/rust-seq/seq-hash) or [computing minimizers & syncmers](https://github.com/rust-seq/simd-minimizers).
 
 ## Benchmarks
 

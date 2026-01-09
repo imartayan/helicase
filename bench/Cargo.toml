@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+helicase = { path = "../helicase" }
 needletail = { version = "0.6", default-features = false, features = [
     "flate2",
     "zstd",
@@ -11,4 +12,8 @@ needletail = { version = "0.6", default-features = false, features = [
 paraseq = { version = "0.4", default-features = false, features = ["niffler"] }
 rayon = "1"
 regex = "1.11"
-helicase = { path = "../helicase" }
+simd-minimizers = "2.2"
+
+[[example]]
+name = "simd_mini"
+required-features = ["helicase/packed-seq"]

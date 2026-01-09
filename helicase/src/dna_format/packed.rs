@@ -11,6 +11,7 @@ const BP_PER_BLOCK: usize = BITS_PER_BLOCK / BITS_PER_BP;
 const PADDING: usize = 3;
 
 #[derive(Clone, Default)]
+// #[repr(align(1))] // TODO check alignment
 pub struct PackedDNA {
     bits: Vec<T>,
     cur: T,
@@ -112,7 +113,9 @@ impl PackedDNA {
     #[inline(always)]
     pub fn as_packed_seq(&self) -> PackedSeq<'_> {
         let len = self.len();
-        let seq = unsafe { core::mem::transmute(self.bits.as_slice()) };
+        let data = self.bits.as_ptr() as *const u8;
+        let data_len = self.bits.len() * BITS_PER_BLOCK / 8;
+        let seq = unsafe { std::slice::from_raw_parts(data, data_len) };
         PackedSeq::from_raw_parts(seq, 0, len)
     }
 
@@ -122,9 +125,12 @@ impl PackedDNA {
         clippy::unsound_collection_transmute
     )]
     #[inline(always)]
-    pub fn to_packed_seq_vec(self) -> PackedSeqVec {
+    pub fn to_packed_seq_vec(mut self) -> PackedSeqVec {
         let len = self.len();
-        let seq = unsafe { core::mem::transmute(self.bits) };
+        let data_len = self.bits.len() * BITS_PER_BLOCK / 8;
+        let data_cap = self.bits.capacity() * BITS_PER_BLOCK / 8;
+        let data = self.bits.as_mut_ptr() as *mut u8;
+        let seq = unsafe { Vec::from_raw_parts(data, data_len, data_cap) };
         PackedSeqVec::from_raw_parts(seq, len)
     }
 }

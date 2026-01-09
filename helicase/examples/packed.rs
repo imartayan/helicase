@@ -23,6 +23,9 @@ fn main() {
         // get a reference to the packed sequence
         let seq = parser.get_dna_packed();
 
+        // or directly get a PackedSeq (requires the packed-seq feature)
+        let packed_seq = parser.get_packed_seq();
+
         // ...
     }
 }

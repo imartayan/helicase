@@ -20,3 +20,10 @@ bz2 = ["deko/bzip2"]
 gz = ["deko/flate2", "flate2"]
 xz = ["deko/xz"]
 zstd = ["deko/zstd"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[[example]]
+name = "packed"
+required-features = ["packed-seq"]

@@ -1,10 +1,14 @@
 use std::fmt::{self, Write};
 
+#[cfg(feature = "packed-seq")]
+use packed_seq::{PackedSeq, PackedSeqVec};
+
 type T = u128;
 const BITS_PER_BP: usize = 2;
 const BITS_PER_BLOCK: usize = T::BITS as usize;
 const BP_PER_BLOCK: usize = BITS_PER_BLOCK / BITS_PER_BP;
-// const PADDING: usize = 3;
+#[cfg(feature = "packed-seq")]
+const PADDING: usize = 3;
 
 #[derive(Clone, Default)]
 pub struct PackedDNA {
@@ -34,7 +38,7 @@ impl PackedDNA {
 
     #[inline(always)]
     pub const fn len(&self) -> usize {
-        self.num_bits / 2
+        self.num_bits / BITS_PER_BP
     }
 
     #[inline(always)]
@@ -65,7 +69,10 @@ impl PackedDNA {
         let x = packed & mask;
         if rem + num_bits >= BITS_PER_BLOCK {
             self.cur |= packed << rem;
-            self.bits.push(self.cur);
+            let len = self.num_bits / BITS_PER_BLOCK;
+            self.bits.reserve(1);
+            unsafe { *self.bits.get_unchecked_mut(len - 1) = self.cur };
+            unsafe { self.bits.set_len(len) };
             self.cur = x >> (BITS_PER_BLOCK - rem);
         } else {
             self.cur |= x << rem;
@@ -74,7 +81,7 @@ impl PackedDNA {
 
     #[inline(always)]
     pub fn bits(&self) -> (&[T], T) {
-        (&self.bits, self.cur)
+        (&self.bits[..self.num_bits / BITS_PER_BLOCK], self.cur)
     }
 
     #[inline(always)]
@@ -90,6 +97,35 @@ impl PackedDNA {
     pub fn get_char(&self, i: usize) -> char {
         const LUT: [char; 4] = ['A', 'C', 'T', 'G'];
         LUT[self.get(i) as usize]
+    }
+
+    #[cfg(feature = "packed-seq")]
+    #[inline(always)]
+    pub(crate) fn append_padding(&mut self) {
+        let len = self.num_bits / BITS_PER_BLOCK;
+        self.bits.resize(len + 1 + PADDING, 0);
+        self.bits[len] = self.cur;
+    }
+
+    #[cfg(feature = "packed-seq")]
+    #[allow(clippy::missing_transmute_annotations)]
+    #[inline(always)]
+    pub fn as_packed_seq(&self) -> PackedSeq<'_> {
+        let len = self.len();
+        let seq = unsafe { core::mem::transmute(self.bits.as_slice()) };
+        PackedSeq::from_raw_parts(seq, 0, len)
+    }
+
+    #[cfg(feature = "packed-seq")]
+    #[allow(
+        clippy::missing_transmute_annotations,
+        clippy::unsound_collection_transmute
+    )]
+    #[inline(always)]
+    pub fn to_packed_seq_vec(self) -> PackedSeqVec {
+        let len = self.len();
+        let seq = unsafe { core::mem::transmute(self.bits) };
+        PackedSeqVec::from_raw_parts(seq, len)
     }
 }
 

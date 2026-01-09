@@ -259,6 +259,16 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
         self.increment_pos();
         self.line_count += 1;
     }
+
+    #[inline(always)]
+    fn prepare_return(&mut self) {
+        #[cfg(feature = "packed-seq")]
+        {
+            if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
+                self.cur_dna_packed.append_padding();
+            }
+        }
+    }
 }
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CONFIG, I> {
@@ -422,6 +432,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         self.consume_newline();
                     }
                     if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
+                        self.prepare_return();
                         return Some(Event::DnaChunk(return_pos));
                     }
                 }
@@ -481,6 +492,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                     }
                     self.consume_newline();
                     if flag_is_set(CONFIG, RETURN_RECORD) {
+                        self.prepare_return();
                         return Some(Event::Record(self.global_pos()));
                     }
                 }

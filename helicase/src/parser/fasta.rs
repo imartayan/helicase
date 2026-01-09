@@ -226,6 +226,16 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
     }
 
     #[inline(always)]
+    fn prepare_return(&mut self) {
+        #[cfg(feature = "packed-seq")]
+        {
+            if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
+                self.cur_dna_packed.append_padding();
+            }
+        }
+    }
+
+    #[inline(always)]
     fn skip_to_start_header(&mut self) -> bool {
         let mask = !0 << self.pos_in_block;
         let mut position = self.block.header & mask;
@@ -396,6 +406,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                     if self.finished {
                         self.state = State::Start;
                         if flag_is_set(CONFIG, RETURN_RECORD) {
+                            self.prepare_return();
                             return Some(Event::Record(self.global_pos()));
                         }
                         continue;
@@ -404,6 +415,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                     if (1u64 << self.pos_in_block & self.block.header) != 0 {
                         self.state = State::Header;
                         if flag_is_set(CONFIG, RETURN_RECORD) {
+                            self.prepare_return();
                             return Some(Event::Record(self.global_pos()));
                         }
                     } else if (1u64 << self.pos_in_block & self.block.is_dna) != 0 {
@@ -464,6 +476,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                 State::EndDNA => {
                     self.state = State::Restart;
                     if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
+                        self.prepare_return();
                         return Some(Event::DnaChunk(self.global_pos() - 1));
                     }
                 }

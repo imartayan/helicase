@@ -1,6 +1,9 @@
 use super::*;
 use crate::dna_format::*;
 
+#[cfg(feature = "packed-seq")]
+use packed_seq::{PackedSeq, PackedSeqVec};
+
 pub trait Parser {
     /// Get the [`Format`] associated to this parser.
     fn format(&self) -> Format;
@@ -32,6 +35,31 @@ pub trait Parser {
     /// Get an owned version of the current sequence as [`PackedDNA`].
     /// This will trigger a new allocation.
     fn get_dna_packed_owned(&mut self) -> PackedDNA;
+
+    /// Get a [`PackedSeq`] based on the underlying [`PackedDNA`].
+    ///
+    /// Note this is equivalent to:
+    /// ```rust
+    /// self.get_dna_packed().as_packed_seq()
+    /// ```
+    #[cfg(feature = "packed-seq")]
+    #[inline(always)]
+    fn get_packed_seq(&self) -> PackedSeq<'_> {
+        self.get_dna_packed().as_packed_seq()
+    }
+
+    /// Get a [`PackedSeqVec`] based on the underlying [`PackedDNA`].
+    /// This will trigger a new allocation.
+    ///
+    /// Note this is equivalent to:
+    /// ```rust
+    /// self.get_dna_packed_owned().to_packed_seq_vec()
+    /// ```
+    #[cfg(feature = "packed-seq")]
+    #[inline(always)]
+    fn get_packed_seq_vec(&mut self) -> PackedSeqVec {
+        self.get_dna_packed_owned().to_packed_seq_vec()
+    }
 
     /// Get the length of the current sequence.
     fn get_dna_len(&self) -> usize;

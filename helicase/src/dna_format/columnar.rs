@@ -69,25 +69,19 @@ impl ColumnarDNA {
         }
         let rem = self.len % BITS_PER_BLOCK;
         let mask = !0 >> (BITS_PER_BLOCK - size);
+        self.len += size;
         let hi = high & mask;
         let lo = low & mask;
-        self.len += size;
-        if rem + size <= BITS_PER_BLOCK {
-            self.cur_hi |= hi << rem;
-            self.cur_lo |= lo << rem;
-            if rem + size == BITS_PER_BLOCK {
-                self.high_bits.push(self.cur_hi);
-                self.low_bits.push(self.cur_lo);
-                self.cur_hi = 0;
-                self.cur_lo = 0;
-            }
-        } else {
-            self.cur_hi |= hi << rem;
-            self.cur_lo |= lo << rem;
+        if rem + size >= BITS_PER_BLOCK {
+            self.cur_hi |= high << rem;
+            self.cur_lo |= low << rem;
             self.high_bits.push(self.cur_hi);
             self.low_bits.push(self.cur_lo);
             self.cur_hi = hi >> (BITS_PER_BLOCK - rem);
             self.cur_lo = lo >> (BITS_PER_BLOCK - rem);
+        } else {
+            self.cur_hi |= hi << rem;
+            self.cur_lo |= lo << rem;
         }
     }
 

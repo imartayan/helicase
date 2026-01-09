@@ -4,12 +4,13 @@ type T = u128;
 const BITS_PER_BP: usize = 2;
 const BITS_PER_BLOCK: usize = T::BITS as usize;
 const BP_PER_BLOCK: usize = BITS_PER_BLOCK / BITS_PER_BP;
-const PADDING: usize = 3;
+// const PADDING: usize = 3;
 
 #[derive(Clone, Default)]
 pub struct PackedDNA {
-    pub bits: Vec<T>,
-    pub num_bits: usize,
+    bits: Vec<T>,
+    cur: T,
+    num_bits: usize,
 }
 
 impl PackedDNA {
@@ -17,6 +18,7 @@ impl PackedDNA {
     pub const fn new() -> Self {
         Self {
             bits: Vec::new(),
+            cur: 0,
             num_bits: 0,
         }
     }
@@ -25,6 +27,7 @@ impl PackedDNA {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             bits: Vec::with_capacity(capacity),
+            cur: 0,
             num_bits: 0,
         }
     }
@@ -51,33 +54,36 @@ impl PackedDNA {
     }
 
     #[inline(always)]
-    pub fn append(&mut self, packed: u128, num_bits: usize) {
+    pub fn append(&mut self, packed: T, num_bits: usize) {
         if num_bits == 0 {
             // should not happen?
             return;
         }
-        let mut x = packed & (!0 >> (BITS_PER_BLOCK - num_bits));
-        let mut idx = self.num_bits / BITS_PER_BLOCK;
         let rem = self.num_bits % BITS_PER_BLOCK;
+        let mask = !0 >> (BITS_PER_BLOCK - num_bits);
         self.num_bits += num_bits;
-        self.bits
-            .resize(self.num_bits.div_ceil(BITS_PER_BLOCK) + PADDING, 0);
-        if rem != 0 {
-            unsafe { *self.bits.get_unchecked_mut(idx) |= x << rem };
-            x >>= BITS_PER_BLOCK - rem;
-            idx += 1;
+        let x = packed & mask;
+        if rem + num_bits >= BITS_PER_BLOCK {
+            self.cur |= packed << rem;
+            self.bits.push(self.cur);
+            self.cur = x >> (BITS_PER_BLOCK - rem);
+        } else {
+            self.cur |= x << rem;
         }
-        unsafe { *self.bits.get_unchecked_mut(idx) = x };
     }
 
     #[inline(always)]
-    pub fn bits(&self) -> &[u128] {
-        &self.bits
+    pub fn bits(&self) -> (&[T], T) {
+        (&self.bits, self.cur)
     }
 
     #[inline(always)]
     pub fn get(&self, i: usize) -> u8 {
-        ((self.bits[i / BP_PER_BLOCK] >> (2 * (i % BP_PER_BLOCK))) & 0b11) as u8
+        if i < self.len() & (!0 << BP_PER_BLOCK.trailing_zeros()) {
+            ((self.bits[i / BP_PER_BLOCK] >> (2 * (i % BP_PER_BLOCK))) & 0b11) as u8
+        } else {
+            ((self.cur >> (2 * (i % BP_PER_BLOCK))) & 0b11) as u8
+        }
     }
 
     #[inline(always)]

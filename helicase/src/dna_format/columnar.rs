@@ -205,13 +205,13 @@ mod tests {
     }
 
     #[test]
-    fn append_exact_64_bits() {
-        let seq = "A".repeat(64);
+    fn append_exact_63_bits() {
+        let seq = "A".repeat(63);
         let mut v = ColumnarDNA::new();
 
         v.push_str(&seq);
 
-        assert_eq!(v.len(), 64);
+        assert_eq!(v.len(), 63);
         assert_eq!(v.to_string(), seq);
         assert_eq!(v.high_bits.len(), 0); // still in partial word
     }

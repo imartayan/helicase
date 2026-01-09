@@ -53,12 +53,12 @@ pub trait Parser {
     ///
     /// Note this is equivalent to:
     /// ```rust
-    /// self.get_dna_packed_owned().to_packed_seq_vec()
+    /// self.get_dna_packed_owned().into_packed_seq_vec()
     /// ```
     #[cfg(feature = "packed-seq")]
     #[inline(always)]
     fn get_packed_seq_vec(&mut self) -> PackedSeqVec {
-        self.get_dna_packed_owned().to_packed_seq_vec()
+        self.get_dna_packed_owned().into_packed_seq_vec()
     }
 
     /// Get the length of the current sequence.

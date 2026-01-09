@@ -125,7 +125,7 @@ impl PackedDNA {
         clippy::unsound_collection_transmute
     )]
     #[inline(always)]
-    pub fn to_packed_seq_vec(mut self) -> PackedSeqVec {
+    pub fn into_packed_seq_vec(mut self) -> PackedSeqVec {
         let len = self.len();
         let data_len = self.bits.len() * BITS_PER_BLOCK / 8;
         let data_cap = self.bits.capacity() * BITS_PER_BLOCK / 8;

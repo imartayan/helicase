@@ -1,3 +1,9 @@
+mod measurement;
+use measurement::{BaseTime, Measurement};
+
+#[cfg(target_os = "linux")]
+mod linux_perf;
+
 use helicase::config::{advanced::*, *};
 use helicase::input::*;
 use helicase::*;
@@ -10,7 +16,6 @@ use std::env::args;
 use std::fs::read;
 use std::hint::black_box;
 use std::path::Path;
-use std::time::Instant;
 
 const HEADER_ONLY: Config = ParserOptions::default().ignore_dna().config();
 const DNA_STRING: Config = ParserOptions::default()
@@ -34,56 +39,84 @@ struct Setup<'a, P: AsRef<Path>> {
     compressed: bool,
 }
 
-fn bench_config<const CONFIG: Config, P: AsRef<Path>>(label: &str, s: &Setup<P>) {
-    let now = Instant::now();
+fn bench_config<const CONFIG: Config, P: AsRef<Path>, M: Measurement>(label: &str, s: &Setup<P>) {
+}
+
+fn measurment_variant<M: Measurement, P: AsRef<Path>>(s: Setup<P>) {
+    let mut m = M::new();
+    let mut dna_len = 0usize;
+
+    #[cfg(feature = "baselines")]
+    {
+        // Needletail 
+        m.start();
+        for _ in 0..s.rep {
+            let mut reader = parse_fastx_reader(s.data).expect("invalid reader");
+            dna_len = 0usize;
+            while let Some(r) = reader.next() {
+                let record = r.expect("invalid record");
+                let clean_seq = record.seq();
+                dna_len += clean_seq.len();
+            }
+        }
+        m.show::<_>("Needletail", s.size, s.rep, dna_len);
+
+       m.start();
+       for _ in 0..s.rep {
+           // let mut reader = fastx::Reader::new(data).expect("invalid reader"); // crashes on human genome
+           let mut reader = fastx::Reader::new_with_batch_size(s.data, 1).expect("invalid reader");
+           let mut record_set = reader.new_record_set();
+           dna_len = 0;
+           while record_set.fill(&mut reader).unwrap() {
+               for r in record_set.iter() {
+                   let record = r.expect("invalid record");
+                   let clean_seq = record.seq();
+                   dna_len += clean_seq.len();
+               }
+           }
+       }
+       m.show("Paraseq", s.size, s.rep, dna_len);
+    }
+
+    m.start();
     for _ in 0..s.rep {
-        let parser = FastxParser::<CONFIG>::from_file(&s.path).expect("Cannot open file");
-        parser.for_each(|ev| {
-            black_box(&ev);
-        });
+        let mut parser = FastxParser::<DNA_STRING>::from_slice(s.data);
+        dna_len = 0;
+        loop {
+            match parser.next() {
+                Some(_) => { dna_len += parser.get_dna_string().len(); },
+                None => {break;},
+            }
+        }
     }
-    println!(
-        "{label} (file):\t {:5.2} GB/s",
-        (s.size * s.rep) as f64 / 1e9 / now.elapsed().as_secs_f64()
-    );
+    m.show("helicase (DNA string)", s.size, s.rep, dna_len);
 
-    if !s.compressed {
-        let now = Instant::now();
-        for _ in 0..s.rep {
-            let parser = FastxParser::<CONFIG>::from_file_mmap(&s.path).unwrap();
-            parser.for_each(|ev| {
-                black_box(ev);
-            });
+    m.start();
+    for _ in 0..s.rep {
+        let mut parser = FastxParser::<DNA_PACKED>::from_slice(s.data);
+        dna_len = 0;
+        loop {
+            match parser.next() {
+                Some(_) => { dna_len += parser.get_dna_packed().len(); },
+                None => {break;},
+            }
         }
-        println!(
-            "{label} (mmap):\t {:5.2} GB/s",
-            (s.size * s.rep) as f64 / 1e9 / now.elapsed().as_secs_f64()
-        );
-
-        let now = Instant::now();
-        for _ in 0..s.rep {
-            let parser = FastxParser::<CONFIG>::from_slice(s.data);
-            parser.for_each(|ev| {
-                black_box(ev);
-            });
-        }
-        println!(
-            "{label} (slice):\t {:5.2} GB/s",
-            (s.size * s.rep) as f64 / 1e9 / now.elapsed().as_secs_f64()
-        );
-    } else {
-        let now = Instant::now();
-        for _ in 0..s.rep {
-            let parser = FastxParser::<CONFIG>::from_reader(s.data);
-            parser.for_each(|ev| {
-                black_box(ev);
-            });
-        }
-        println!(
-            "{label} (reader):\t {:5.2} GB/s",
-            (s.size * s.rep) as f64 / 1e9 / now.elapsed().as_secs_f64()
-        );
     }
+    m.show("helicase (DNA packed)", s.size, s.rep, dna_len);
+
+
+    m.start();
+    for _ in 0..s.rep {
+        let mut parser = FastxParser::<DNA_COLUMNAR>::from_slice(s.data);
+        dna_len = 0;
+        loop {
+            match parser.next() {
+                Some(_) => { dna_len += parser.get_dna_columnar().len(); },
+                None => {break;},
+            }
+        }
+    }
+    m.show("helicase (DNA columnar)", s.size, s.rep, dna_len);
 }
 
 fn main() {
@@ -102,108 +135,10 @@ fn main() {
         compressed,
         rep,
     };
-
-    if !compressed {
-        let match_dna = RegexBuilder::new(r"(>[^\n]*\n)").build().unwrap();
-        let now = Instant::now();
-        for _ in 0..rep {
-            match_dna.find_iter(data).for_each(|m| {
-                black_box(m);
-            });
-        }
-        println!(
-            "Regex header (slice):\t {:5.2} GB/s",
-            (size * rep) as f64 / 1e9 / now.elapsed().as_secs_f64()
-        );
-    }
-
-    let now = Instant::now();
-    for _ in 0..rep {
-        let mut reader = parse_fastx_file(&path).expect("invalid file");
-        while let Some(r) = reader.next() {
-            let record = r.expect("invalid record");
-            let clean_seq = record.seq();
-            black_box(clean_seq);
-        }
-    }
-    println!(
-        "Needletail (file):\t {:5.2} GB/s",
-        (size * rep) as f64 / 1e9 / now.elapsed().as_secs_f64()
-    );
-
-    let now = Instant::now();
-    for _ in 0..rep {
-        let mut reader = parse_fastx_reader(data).expect("invalid reader");
-        while let Some(r) = reader.next() {
-            let record = r.expect("invalid record");
-            let clean_seq = record.seq();
-            black_box(clean_seq);
-        }
-    }
-    println!(
-        "Needletail (reader):\t {:5.2} GB/s",
-        (size * rep) as f64 / 1e9 / now.elapsed().as_secs_f64()
-    );
-
-    if !compressed {
-        let now = Instant::now();
-        for _ in 0..rep {
-            // let mut reader = fastx::Reader::from_path(&path).expect("invalid file"); // crashes on human genome
-            let mut reader =
-                fastx::Reader::from_path_with_batch_size(&path, 1).expect("invalid file");
-            let mut record_set = reader.new_record_set();
-            while record_set.fill(&mut reader).unwrap() {
-                for r in record_set.iter() {
-                    let record = r.expect("invalid record");
-                    let clean_seq = record.seq();
-                    black_box(clean_seq);
-                }
-            }
-        }
-        println!(
-            "Paraseq (file):\t\t {:5.2} GB/s",
-            (size * rep) as f64 / 1e9 / now.elapsed().as_secs_f64()
-        );
-
-        let now = Instant::now();
-        for _ in 0..rep {
-            // let mut reader = fastx::Reader::new(data).expect("invalid reader"); // crashes on human genome
-            let mut reader = fastx::Reader::new_with_batch_size(data, 1).expect("invalid reader");
-            let mut record_set = reader.new_record_set();
-            while record_set.fill(&mut reader).unwrap() {
-                for r in record_set.iter() {
-                    let record = r.expect("invalid record");
-                    let clean_seq = record.seq();
-                    black_box(clean_seq);
-                }
-            }
-        }
-        println!(
-            "Paraseq (reader):\t {:5.2} GB/s",
-            (size * rep) as f64 / 1e9 / now.elapsed().as_secs_f64()
-        );
-    }
-
-    println!("---");
-
-    bench_config::<HEADER_ONLY, _>("Header only", &s);
-    bench_config::<DNA_STRING, _>("DNA string", &s);
-    bench_config::<DNA_PACKED, _>("DNA packed", &s);
-    bench_config::<DNA_COLUMNAR, _>("DNA columnar", &s);
-
-    if !compressed {
-        let now = Instant::now();
-        for _ in 0..rep {
-            let mut parser = FastaParser::<
-                { COMPUTE_DNA_LEN | SPLIT_NON_ACTG | MERGE_DNA_CHUNKS | MERGE_RECORDS },
-                _,
-            >::from_slice(data);
-            parser.next();
-            black_box(parser.get_dna_len());
-        }
-        println!(
-            "DNA len (slice):\t {:5.2} GB/s",
-            (size * rep) as f64 / 1e9 / now.elapsed().as_secs_f64()
-        );
+    if cfg!(target_os = "linux") {
+        use linux_perf::PerfMeasurement;
+        measurment_variant::<PerfMeasurement, _>(s);
+    } else {
+        measurment_variant::<BaseTime, _>(s);
     }
 }

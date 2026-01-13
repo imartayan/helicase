@@ -4,6 +4,7 @@ use measurement::{BaseTime, Measurement};
 #[cfg(target_os = "linux")]
 mod linux_perf;
 
+use helicase::config::advanced::*;
 use helicase::config::*;
 use helicase::input::*;
 use helicase::*;
@@ -30,6 +31,9 @@ const DNA_PACKED: Config = ParserOptions::default()
     .skip_non_actg()
     .config();
 
+const DNA_COUNT: Config = COMPUTE_DNA_LEN | SPLIT_NON_ACTG | MERGE_DNA_CHUNKS | MERGE_RECORDS;
+const HEADER_ONLY: Config = COMPUTE_HEADER | RETURN_RECORD;
+
 #[allow(unused)]
 struct Setup<'a, P: AsRef<Path>> {
     path: P,
@@ -42,6 +46,7 @@ struct Setup<'a, P: AsRef<Path>> {
 fn measurment_variant<M: Measurement, P: AsRef<Path>>(s: Setup<P>) {
     let mut m = M::new();
     let mut dna_len = 0usize;
+    let mut record_len = 0usize;
 
     #[cfg(feature = "baselines")]
     {
@@ -57,6 +62,28 @@ fn measurment_variant<M: Measurement, P: AsRef<Path>>(s: Setup<P>) {
             }
         }
         m.show::<_>("Needletail", s.size, s.rep, dna_len);
+
+        m.start();
+        for _ in 0..s.rep {
+            let mut reader = parse_fastx_reader(s.data).expect("invalid reader");
+            dna_len = 0usize;
+            while let Some(r) = reader.next() {
+                let record = r.expect("invalid record");
+                dna_len += record.num_bases();
+            }
+        }
+        m.show::<_>("Needletail (dna_len)", s.size, s.rep, dna_len);
+
+        m.start();
+        for _ in 0..s.rep {
+            let mut reader = parse_fastx_reader(s.data).expect("invalid reader");
+            record_len = 0usize;
+            while let Some(r) = reader.next() {
+                let _ = r.expect("invalid record");
+                record_len += 1;
+            }
+        }
+        m.show::<_>("Needletail (record_len)", s.size, s.rep, record_len);
 
         m.start();
         for _ in 0..s.rep {
@@ -83,7 +110,7 @@ fn measurment_variant<M: Measurement, P: AsRef<Path>>(s: Setup<P>) {
             dna_len += parser.get_dna_string().len();
         }
     }
-    m.show("helicase (DNA string)", s.size, s.rep, dna_len);
+    m.show("Helicase (DNA string)", s.size, s.rep, dna_len);
 
     m.start();
     for _ in 0..s.rep {
@@ -93,7 +120,7 @@ fn measurment_variant<M: Measurement, P: AsRef<Path>>(s: Setup<P>) {
             dna_len += parser.get_dna_packed().len();
         }
     }
-    m.show("helicase (DNA packed)", s.size, s.rep, dna_len);
+    m.show("Helicase (DNA packed)", s.size, s.rep, dna_len);
 
     m.start();
     for _ in 0..s.rep {
@@ -103,7 +130,26 @@ fn measurment_variant<M: Measurement, P: AsRef<Path>>(s: Setup<P>) {
             dna_len += parser.get_dna_columnar().len();
         }
     }
-    m.show("helicase (DNA columnar)", s.size, s.rep, dna_len);
+    m.show("Helicase (DNA columnar)", s.size, s.rep, dna_len);
+
+    m.start();
+    for _ in 0..s.rep {
+        let mut parser = FastxParser::<DNA_COUNT>::from_slice(s.data);
+        dna_len = 0;
+        parser.next();
+        dna_len += parser.get_dna_len();
+    }
+    m.show("Helicase (dna_len)", s.size, s.rep, dna_len);
+
+    m.start();
+    for _ in 0..s.rep {
+        let mut parser = FastxParser::<HEADER_ONLY>::from_slice(s.data);
+        record_len = 0;
+        while let Some(_) = parser.next() {
+            record_len += 1;
+        }
+    }
+    m.show("Helicase (record_len only)", s.size, s.rep, record_len);
 }
 
 fn main() {

@@ -1,8 +1,8 @@
 use colored::*;
 use perf_event::events::Hardware;
 use perf_event::{Builder, Counter};
-use std::time::Instant; // terminal colors
 use std::fmt::Display;
+use std::time::Instant; // terminal colors
 
 use crate::measurement::Measurement;
 
@@ -133,6 +133,5 @@ impl Measurement for PerfMeasurement {
         println!("    {:>16} : {}", "% branch miss", branch_miss_pct_str);
         println!("    {:>16} : {}", "branch misses", branch_miss_str);
         println!("    {:>16} : {}", "result", result);
-
     }
 }

@@ -11,7 +11,7 @@ mkdir -p "$RESULTS_DIR"
 # Iterate over all files in datasets, skip checksum files
 for dataset in "$DATASETS_DIR"/*; do
     case "$dataset" in
-        *.sha256|*.sha1) continue ;;  # skip checksum files
+        *.sha256|*.sha1|*.gz) continue ;;  # skip checksum files
     esac
 
     # Extract filename

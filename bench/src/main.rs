@@ -22,10 +22,12 @@ const DNA_STRING: Config = ParserOptions::default()
 const DNA_COLUMNAR: Config = ParserOptions::default()
     .ignore_headers()
     .dna_columnar()
+    .skip_non_actg()
     .config();
 const DNA_PACKED: Config = ParserOptions::default()
     .ignore_headers()
     .dna_packed()
+    .skip_non_actg()
     .config();
 
 #[allow(unused)]

@@ -36,9 +36,9 @@ struct Args {
     /// Enable mmap bench
     #[arg(short, long, default_value_t = false)]
     mmap: bool,
-    /// Show DNA length
-    #[arg(short = 'l', long, default_value_t = false)]
-    show_len: bool,
+    /// Show result values (length, #records...)
+    #[arg(short = 'v', long, default_value_t = false)]
+    show_val: bool,
 }
 
 const MINIMAL: Config = ParserOptions::default()
@@ -72,12 +72,27 @@ fn run_bench<M: Measurement>(args: &Args) {
         Vec::new()
     };
     let data = data.as_slice();
-    let mut record_len = 0;
+    let mut num_records = 0;
     let mut dna_len = 0;
     let mut m = M::new();
 
     if !args.no_baseline {
         if !args.no_slice {
+            m.start();
+            for _ in 0..args.repeat {
+                let mut reader = parse_fastx_reader(data).expect("Failed to parse slice");
+                num_records = 0;
+                while reader.next().is_some() {
+                    num_records += 1;
+                }
+            }
+            let result = if args.show_val {
+                Some(num_records)
+            } else {
+                None
+            };
+            m.show("Needletail #records \t(reader)", size, args.repeat, result);
+
             m.start();
             for _ in 0..args.repeat {
                 let mut reader = parse_fastx_reader(data).expect("Failed to parse slice");
@@ -88,7 +103,7 @@ fn run_bench<M: Measurement>(args: &Args) {
                     dna_len += clean_seq.len();
                 }
             }
-            let result = if args.show_len { Some(dna_len) } else { None };
+            let result = if args.show_val { Some(dna_len) } else { None };
             m.show("Needletail string \t(reader)", size, args.repeat, result);
 
             if !compressed {
@@ -107,7 +122,7 @@ fn run_bench<M: Measurement>(args: &Args) {
                         }
                     }
                 }
-                let result = if args.show_len { Some(dna_len) } else { None };
+                let result = if args.show_val { Some(dna_len) } else { None };
                 m.show("Paraseq string  \t(reader)", size, args.repeat, result);
             }
         }
@@ -122,7 +137,7 @@ fn run_bench<M: Measurement>(args: &Args) {
                     dna_len += clean_seq.len();
                 }
             }
-            let result = if args.show_len { Some(dna_len) } else { None };
+            let result = if args.show_val { Some(dna_len) } else { None };
             m.show("Needletail string \t(file)", size, args.repeat, result);
 
             m.start();
@@ -140,7 +155,7 @@ fn run_bench<M: Measurement>(args: &Args) {
                     }
                 }
             }
-            let result = if args.show_len { Some(dna_len) } else { None };
+            let result = if args.show_val { Some(dna_len) } else { None };
             m.show("Paraseq string  \t(file)", size, args.repeat, result);
         }
     }
@@ -149,13 +164,13 @@ fn run_bench<M: Measurement>(args: &Args) {
         m.start();
         for _ in 0..args.repeat {
             let parser = FastxParser::<MINIMAL>::from_slice(data);
-            record_len = 0;
+            num_records = 0;
             for _ in parser {
-                record_len += 1;
+                num_records += 1;
             }
         }
-        let result = if args.show_len {
-            Some(record_len)
+        let result = if args.show_val {
+            Some(num_records)
         } else {
             None
         };
@@ -168,8 +183,8 @@ fn run_bench<M: Measurement>(args: &Args) {
             parser.next();
             dna_len += parser.get_dna_len();
         }
-        let result = if args.show_len { Some(dna_len) } else { None };
-        m.show("Helicase #bases \t(slice)", size, args.repeat, result);
+        let result = if args.show_val { Some(dna_len) } else { None };
+        m.show("Helicase #ACTGs \t(slice)", size, args.repeat, result);
 
         m.start();
         for _ in 0..args.repeat {
@@ -179,7 +194,7 @@ fn run_bench<M: Measurement>(args: &Args) {
                 dna_len += parser.get_dna_string().len();
             }
         }
-        let result = if args.show_len { Some(dna_len) } else { None };
+        let result = if args.show_val { Some(dna_len) } else { None };
         m.show("Helicase string \t(slice)", size, args.repeat, result);
 
         m.start();
@@ -190,7 +205,7 @@ fn run_bench<M: Measurement>(args: &Args) {
                 dna_len += parser.get_dna_packed().len();
             }
         }
-        let result = if args.show_len { Some(dna_len) } else { None };
+        let result = if args.show_val { Some(dna_len) } else { None };
         m.show("Helicase packed \t(slice)", size, args.repeat, result);
 
         m.start();
@@ -201,7 +216,7 @@ fn run_bench<M: Measurement>(args: &Args) {
                 dna_len += parser.get_dna_columnar().len();
             }
         }
-        let result = if args.show_len { Some(dna_len) } else { None };
+        let result = if args.show_val { Some(dna_len) } else { None };
         m.show("Helicase columnar \t(slice)", size, args.repeat, result);
     }
     if args.file {
@@ -213,7 +228,7 @@ fn run_bench<M: Measurement>(args: &Args) {
                 dna_len += parser.get_dna_string().len();
             }
         }
-        let result = if args.show_len { Some(dna_len) } else { None };
+        let result = if args.show_val { Some(dna_len) } else { None };
         m.show("Helicase string \t(file)", size, args.repeat, result);
 
         m.start();
@@ -224,7 +239,7 @@ fn run_bench<M: Measurement>(args: &Args) {
                 dna_len += parser.get_dna_packed().len();
             }
         }
-        let result = if args.show_len { Some(dna_len) } else { None };
+        let result = if args.show_val { Some(dna_len) } else { None };
         m.show("Helicase packed \t(file)", size, args.repeat, result);
 
         m.start();
@@ -236,7 +251,7 @@ fn run_bench<M: Measurement>(args: &Args) {
                 dna_len += parser.get_dna_columnar().len();
             }
         }
-        let result = if args.show_len { Some(dna_len) } else { None };
+        let result = if args.show_val { Some(dna_len) } else { None };
         m.show("Helicase columnar \t(file)", size, args.repeat, result);
     }
     if args.mmap && !compressed {
@@ -249,7 +264,7 @@ fn run_bench<M: Measurement>(args: &Args) {
                 dna_len += parser.get_dna_string().len();
             }
         }
-        let result = if args.show_len { Some(dna_len) } else { None };
+        let result = if args.show_val { Some(dna_len) } else { None };
         m.show("Helicase string \t(mmap)", size, args.repeat, result);
 
         m.start();
@@ -261,7 +276,7 @@ fn run_bench<M: Measurement>(args: &Args) {
                 dna_len += parser.get_dna_packed().len();
             }
         }
-        let result = if args.show_len { Some(dna_len) } else { None };
+        let result = if args.show_val { Some(dna_len) } else { None };
         m.show("Helicase packed \t(mmap)", size, args.repeat, result);
 
         m.start();
@@ -273,7 +288,7 @@ fn run_bench<M: Measurement>(args: &Args) {
                 dna_len += parser.get_dna_columnar().len();
             }
         }
-        let result = if args.show_len { Some(dna_len) } else { None };
+        let result = if args.show_val { Some(dna_len) } else { None };
         m.show("Helicase columnar \t(mmap)", size, args.repeat, result);
     }
 }

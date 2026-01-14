@@ -16,11 +16,14 @@ niffler = { version = "3.0", default-features = false, features = [
     "zstd",
 ] }
 paraseq = { version = "0.4", default-features = false, features = ["niffler"] }
-simd-minimizers = { version = "2.2", features = ["scalar"] }
+simd-minimizers = { version = "2.2", features = ["scalar"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 perf-event = "0.4.8"
 
+[features]
+simd-minimizers = ["helicase/packed-seq", "dep:simd-minimizers"]
+
 [[example]]
 name = "simd_mini"
-required-features = ["helicase/packed-seq"]
+required-features = ["simd-minimizers"]

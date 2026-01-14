@@ -2,7 +2,7 @@ use colored::*;
 use perf_event::events::Hardware;
 use perf_event::{Builder, Counter};
 use std::fmt::Display;
-use std::time::Instant; // terminal colors
+use std::time::Instant;
 
 use crate::measurement::Measurement;
 
@@ -87,7 +87,7 @@ impl Measurement for PerfMeasurement {
         self.branch_misses.enable().unwrap();
     }
 
-    fn show<T: Display>(&mut self, label: &str, size: u64, rep: u64, result: T) {
+    fn show<T: Display>(&mut self, label: &str, size: u64, rep: u64, result: Option<T>) {
         let elapsed = self.start.unwrap().elapsed().as_secs_f64();
         let bytes_total = (size * rep) as f64;
 
@@ -132,6 +132,8 @@ impl Measurement for PerfMeasurement {
         println!("    {:>16} : {}", "branches/byte", bpb_str);
         println!("    {:>16} : {}", "% branch miss", branch_miss_pct_str);
         println!("    {:>16} : {}", "branch misses", branch_miss_str);
-        println!("    {:>16} : {}", "result", result);
+        if let Some(result) = result {
+            println!("    {:>16} : {}", "result", result);
+        }
     }
 }

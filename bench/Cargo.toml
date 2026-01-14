@@ -5,27 +5,21 @@ edition = "2024"
 
 [dependencies]
 helicase = { path = "../helicase" }
+clap = { version = "4.5", features = ["derive"] }
+colored = "3.0"
 needletail = { version = "0.6", default-features = false, features = [
     "flate2",
     "zstd",
 ] }
+niffler = { version = "3.0", default-features = false, features = [
+    "gz",
+    "zstd",
+] }
 paraseq = { version = "0.4", default-features = false, features = ["niffler"] }
-regex = "1.11"
-colored = "3.0.0"
-simd-minimizers = "2.2"
+simd-minimizers = { version = "2.2", features = ["scalar"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 perf-event = "0.4.8"
-
-[features]
-default = ["baselines", "slices_only", "reader_only_baseline"]
-baselines = ["regex", "needletail", "paraseq"]
-reader_only_baseline = []
-regex = []
-needletail = []
-paraseq = []
-slices_only = []
-header_only = []
 
 [[example]]
 name = "simd_mini"

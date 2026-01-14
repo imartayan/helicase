@@ -1,21 +1,51 @@
-mod measurement;
-use measurement::{BaseTime, Measurement};
-
 #[cfg(target_os = "linux")]
 mod linux_perf;
+mod measurement;
 
 use helicase::config::advanced::*;
 use helicase::config::*;
 use helicase::input::*;
 use helicase::*;
+use measurement::{BaseTime, Measurement};
 
-use needletail::parse_fastx_reader;
+use clap::Parser as ClapParser;
+use needletail::{parse_fastx_file, parse_fastx_reader};
 use paraseq::{Record, fastx};
+use std::fs::{metadata, read};
 
-use std::env::args;
-use std::fs::read;
-use std::path::Path;
+#[derive(ClapParser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Input file (FASTA/FASTQ)
+    input: String,
+    /// Number of repetitions
+    #[arg(short, long, default_value_t = 3)]
+    repeat: u64,
+    /// Disable perf metrics (Linux only)
+    #[arg(short = 'P', long)]
+    no_perf: bool,
+    /// Disable baseline (needletail & paraseq)
+    #[arg(short = 'B', long)]
+    no_baseline: bool,
+    /// Disable slice bench
+    #[arg(short = 'S', long)]
+    no_slice: bool,
+    /// Enable (compressed) file bench
+    #[arg(short, long, default_value_t = false)]
+    file: bool,
+    /// Enable mmap bench
+    #[arg(short, long, default_value_t = false)]
+    mmap: bool,
+    /// Show DNA length
+    #[arg(short = 'l', long, default_value_t = false)]
+    show_len: bool,
+}
 
+const MINIMAL: Config = ParserOptions::default()
+    .ignore_headers()
+    .ignore_dna()
+    .config();
+const DNA_LEN: Config = COMPUTE_DNA_LEN | SPLIT_NON_ACTG | MERGE_DNA_CHUNKS | MERGE_RECORDS;
 const DNA_STRING: Config = ParserOptions::default()
     .ignore_headers()
     .dna_string()
@@ -31,150 +61,236 @@ const DNA_PACKED: Config = ParserOptions::default()
     .skip_non_actg()
     .config();
 
-const DNA_COUNT: Config = COMPUTE_DNA_LEN | SPLIT_NON_ACTG | MERGE_DNA_CHUNKS | MERGE_RECORDS;
-const HEADER_ONLY: Config = COMPUTE_HEADER | RETURN_RECORD;
-
-#[allow(unused)]
-struct Setup<'a, P: AsRef<Path>> {
-    path: P,
-    data: &'a [u8],
-    size: u64,
-    rep: u64,
-    compressed: bool,
-}
-
-fn measurment_variant<M: Measurement, P: AsRef<Path>>(s: Setup<P>) {
+fn run_bench<M: Measurement>(args: &Args) {
+    let path = &args.input;
+    let size = metadata(path).expect("Cannot get file metadata").len();
+    let mut input_file = FileInput::new(path).expect("Cannot open file");
+    let compressed = input_file.is_compressed().unwrap();
+    let data = if !args.no_baseline {
+        read(path).expect("Cannot open file")
+    } else {
+        Vec::new()
+    };
+    let data = data.as_slice();
+    let mut record_len = 0;
+    let mut dna_len = 0;
     let mut m = M::new();
-    let mut dna_len = 0usize;
-    let mut record_len = 0usize;
 
-    #[cfg(feature = "baselines")]
-    {
-        // Needletail
-        m.start();
-        for _ in 0..s.rep {
-            let mut reader = parse_fastx_reader(s.data).expect("invalid reader");
-            dna_len = 0usize;
-            while let Some(r) = reader.next() {
-                let record = r.expect("invalid record");
-                let clean_seq = record.seq();
-                dna_len += clean_seq.len();
-            }
-        }
-        m.show::<_>("Needletail", s.size, s.rep, dna_len);
-
-        m.start();
-        for _ in 0..s.rep {
-            let mut reader = parse_fastx_reader(s.data).expect("invalid reader");
-            dna_len = 0usize;
-            while let Some(r) = reader.next() {
-                let record = r.expect("invalid record");
-                dna_len += record.num_bases();
-            }
-        }
-        m.show::<_>("Needletail (dna_len)", s.size, s.rep, dna_len);
-
-        m.start();
-        for _ in 0..s.rep {
-            let mut reader = parse_fastx_reader(s.data).expect("invalid reader");
-            record_len = 0usize;
-            while let Some(r) = reader.next() {
-                let _ = r.expect("invalid record");
-                record_len += 1;
-            }
-        }
-        m.show::<_>("Needletail (record_len)", s.size, s.rep, record_len);
-
-        m.start();
-        for _ in 0..s.rep {
-            // let mut reader = fastx::Reader::new(data).expect("invalid reader"); // crashes on human genome
-            let mut reader = fastx::Reader::new_with_batch_size(s.data, 1).expect("invalid reader");
-            let mut record_set = reader.new_record_set();
-            dna_len = 0;
-            while record_set.fill(&mut reader).unwrap() {
-                for r in record_set.iter() {
-                    let record = r.expect("invalid record");
+    if !args.no_baseline {
+        if !args.no_slice {
+            m.start();
+            for _ in 0..args.repeat {
+                let mut reader = parse_fastx_reader(data).expect("Failed to parse slice");
+                dna_len = 0;
+                while let Some(r) = reader.next() {
+                    let record = r.expect("Invalid record");
                     let clean_seq = record.seq();
                     dna_len += clean_seq.len();
                 }
             }
+            let result = if args.show_len { Some(dna_len) } else { None };
+            m.show("Needletail string \t(reader)", size, args.repeat, result);
+
+            if !compressed {
+                m.start();
+                for _ in 0..args.repeat {
+                    // let mut reader = fastx::Reader::new(data).expect("Failed to parse slice"); // crashes on human genome
+                    let mut reader =
+                        fastx::Reader::new_with_batch_size(data, 1).expect("Failed to parse slice");
+                    let mut record_set = reader.new_record_set();
+                    dna_len = 0;
+                    while record_set.fill(&mut reader).unwrap() {
+                        for r in record_set.iter() {
+                            let record = r.expect("Invalid record");
+                            let clean_seq = record.seq();
+                            dna_len += clean_seq.len();
+                        }
+                    }
+                }
+                let result = if args.show_len { Some(dna_len) } else { None };
+                m.show("Paraseq string  \t(reader)", size, args.repeat, result);
+            }
         }
-        m.show("Paraseq", s.size, s.rep, dna_len);
+        if args.file {
+            m.start();
+            for _ in 0..args.repeat {
+                let mut reader = parse_fastx_file(path).expect("Failed to parse file");
+                dna_len = 0;
+                while let Some(r) = reader.next() {
+                    let record = r.expect("Invalid record");
+                    let clean_seq = record.seq();
+                    dna_len += clean_seq.len();
+                }
+            }
+            let result = if args.show_len { Some(dna_len) } else { None };
+            m.show("Needletail string \t(file)", size, args.repeat, result);
+
+            m.start();
+            for _ in 0..args.repeat {
+                // let mut reader = fastx::Reader::from_path_with_batch_size(path).expect("Failed to parse file"); // crashes on human genome
+                let mut reader = fastx::Reader::from_path_with_batch_size(path, 1)
+                    .expect("Failed to parse file");
+                let mut record_set = reader.new_record_set();
+                dna_len = 0;
+                while record_set.fill(&mut reader).unwrap() {
+                    for r in record_set.iter() {
+                        let record = r.expect("Invalid record");
+                        let clean_seq = record.seq();
+                        dna_len += clean_seq.len();
+                    }
+                }
+            }
+            let result = if args.show_len { Some(dna_len) } else { None };
+            m.show("Paraseq string  \t(file)", size, args.repeat, result);
+        }
     }
 
-    m.start();
-    for _ in 0..s.rep {
-        let mut parser = FastxParser::<DNA_STRING>::from_slice(s.data);
-        dna_len = 0;
-        while let Some(_) = parser.next() {
-            dna_len += parser.get_dna_string().len();
+    if !args.no_slice && !compressed {
+        m.start();
+        for _ in 0..args.repeat {
+            let parser = FastxParser::<MINIMAL>::from_slice(data);
+            record_len = 0;
+            for _ in parser {
+                record_len += 1;
+            }
         }
-    }
-    m.show("Helicase (DNA string)", s.size, s.rep, dna_len);
+        let result = if args.show_len {
+            Some(record_len)
+        } else {
+            None
+        };
+        m.show("Helicase #records \t(slice)", size, args.repeat, result);
 
-    m.start();
-    for _ in 0..s.rep {
-        let mut parser = FastxParser::<DNA_PACKED>::from_slice(s.data);
-        dna_len = 0;
-        while let Some(_) = parser.next() {
-            dna_len += parser.get_dna_packed().len();
+        m.start();
+        for _ in 0..args.repeat {
+            let mut parser = FastxParser::<DNA_LEN>::from_slice(data);
+            dna_len = 0;
+            parser.next();
+            dna_len += parser.get_dna_len();
         }
-    }
-    m.show("Helicase (DNA packed)", s.size, s.rep, dna_len);
+        let result = if args.show_len { Some(dna_len) } else { None };
+        m.show("Helicase #bases \t(slice)", size, args.repeat, result);
 
-    m.start();
-    for _ in 0..s.rep {
-        let mut parser = FastxParser::<DNA_COLUMNAR>::from_slice(s.data);
-        dna_len = 0;
-        while let Some(_) = parser.next() {
-            dna_len += parser.get_dna_columnar().len();
+        m.start();
+        for _ in 0..args.repeat {
+            let mut parser = FastxParser::<DNA_STRING>::from_slice(data);
+            dna_len = 0;
+            while let Some(_) = parser.next() {
+                dna_len += parser.get_dna_string().len();
+            }
         }
-    }
-    m.show("Helicase (DNA columnar)", s.size, s.rep, dna_len);
+        let result = if args.show_len { Some(dna_len) } else { None };
+        m.show("Helicase string \t(slice)", size, args.repeat, result);
 
-    m.start();
-    for _ in 0..s.rep {
-        let mut parser = FastxParser::<DNA_COUNT>::from_slice(s.data);
-        dna_len = 0;
-        parser.next();
-        dna_len += parser.get_dna_len();
-    }
-    m.show("Helicase (dna_len)", s.size, s.rep, dna_len);
-
-    m.start();
-    for _ in 0..s.rep {
-        let mut parser = FastxParser::<HEADER_ONLY>::from_slice(s.data);
-        record_len = 0;
-        while let Some(_) = parser.next() {
-            record_len += 1;
+        m.start();
+        for _ in 0..args.repeat {
+            let mut parser = FastxParser::<DNA_PACKED>::from_slice(data);
+            dna_len = 0;
+            while let Some(_) = parser.next() {
+                dna_len += parser.get_dna_packed().len();
+            }
         }
+        let result = if args.show_len { Some(dna_len) } else { None };
+        m.show("Helicase packed \t(slice)", size, args.repeat, result);
+
+        m.start();
+        for _ in 0..args.repeat {
+            let mut parser = FastxParser::<DNA_COLUMNAR>::from_slice(data);
+            dna_len = 0;
+            while let Some(_) = parser.next() {
+                dna_len += parser.get_dna_columnar().len();
+            }
+        }
+        let result = if args.show_len { Some(dna_len) } else { None };
+        m.show("Helicase columnar \t(slice)", size, args.repeat, result);
     }
-    m.show("Helicase (record_len only)", s.size, s.rep, record_len);
+    if args.file {
+        m.start();
+        for _ in 0..args.repeat {
+            let mut parser = FastxParser::<DNA_STRING>::from_file(path).expect("Cannot open file");
+            dna_len = 0;
+            while let Some(_) = parser.next() {
+                dna_len += parser.get_dna_string().len();
+            }
+        }
+        let result = if args.show_len { Some(dna_len) } else { None };
+        m.show("Helicase string \t(file)", size, args.repeat, result);
+
+        m.start();
+        for _ in 0..args.repeat {
+            let mut parser = FastxParser::<DNA_PACKED>::from_file(path).expect("Cannot open file");
+            dna_len = 0;
+            while let Some(_) = parser.next() {
+                dna_len += parser.get_dna_packed().len();
+            }
+        }
+        let result = if args.show_len { Some(dna_len) } else { None };
+        m.show("Helicase packed \t(file)", size, args.repeat, result);
+
+        m.start();
+        for _ in 0..args.repeat {
+            let mut parser =
+                FastxParser::<DNA_COLUMNAR>::from_file(path).expect("Cannot open file");
+            dna_len = 0;
+            while let Some(_) = parser.next() {
+                dna_len += parser.get_dna_columnar().len();
+            }
+        }
+        let result = if args.show_len { Some(dna_len) } else { None };
+        m.show("Helicase columnar \t(file)", size, args.repeat, result);
+    }
+    if args.mmap && !compressed {
+        m.start();
+        for _ in 0..args.repeat {
+            let mut parser =
+                FastxParser::<DNA_STRING>::from_file_mmap(path).expect("Cannot open file");
+            dna_len = 0;
+            while let Some(_) = parser.next() {
+                dna_len += parser.get_dna_string().len();
+            }
+        }
+        let result = if args.show_len { Some(dna_len) } else { None };
+        m.show("Helicase string \t(mmap)", size, args.repeat, result);
+
+        m.start();
+        for _ in 0..args.repeat {
+            let mut parser =
+                FastxParser::<DNA_PACKED>::from_file_mmap(path).expect("Cannot open file");
+            dna_len = 0;
+            while let Some(_) = parser.next() {
+                dna_len += parser.get_dna_packed().len();
+            }
+        }
+        let result = if args.show_len { Some(dna_len) } else { None };
+        m.show("Helicase packed \t(mmap)", size, args.repeat, result);
+
+        m.start();
+        for _ in 0..args.repeat {
+            let mut parser =
+                FastxParser::<DNA_COLUMNAR>::from_file_mmap(path).expect("Cannot open file");
+            dna_len = 0;
+            while let Some(_) = parser.next() {
+                dna_len += parser.get_dna_columnar().len();
+            }
+        }
+        let result = if args.show_len { Some(dna_len) } else { None };
+        m.show("Helicase columnar \t(mmap)", size, args.repeat, result);
+    }
 }
 
 fn main() {
-    let path = args().nth(1).expect("No input file given");
-    let content = read(&path).expect("Cannot open file");
-    let data = content.as_slice();
-    let size = data.len() as u64;
-    let mut input_file = FileInput::new(&path).expect("Cannot open file");
-    let compressed = input_file.is_compressed().unwrap();
-    let rep = 3;
-
-    let s = Setup {
-        path: &path,
-        data,
-        size,
-        compressed,
-        rep,
-    };
+    let args = Args::parse();
     #[cfg(target_os = "linux")]
     {
-        use linux_perf::PerfMeasurement;
-        measurment_variant::<PerfMeasurement, _>(s);
+        if args.no_perf {
+            use linux_perf::PerfMeasurement;
+            run_bench::<PerfMeasurement>(&args);
+        } else {
+            run_bench::<BaseTime>(&args);
+        }
     }
     #[cfg(not(target_os = "linux"))]
     {
-        measurment_variant::<BaseTime, _>(s);
+        run_bench::<BaseTime>(&args);
     }
 }

@@ -6,6 +6,7 @@ set -eu
 DATASETS_DIR="datasets"
 RESULTS_DIR="bench_results"
 
+rm -rf $RESULTS_DIR
 mkdir -p "$RESULTS_DIR"
 
 # Iterate over all files in datasets, skip checksum files
@@ -21,6 +22,6 @@ for dataset in "$DATASETS_DIR"/*; do
     echo "[BENCH] $filename -> $out"
 
     # Run the benchmark and save output
-    RUSTFLAGS="-C target-cpu=native" \
-    cargo r -r --quiet --bin bench -- "$dataset" > "$out"
+    RUSTFLAGS="-C target-cpu=native -Awarning" \
+    cargo r -r --quiet --bin bench -- "$dataset" > "$out" 2> "$out.err"
 done

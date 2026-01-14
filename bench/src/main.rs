@@ -282,7 +282,7 @@ fn main() {
     let args = Args::parse();
     #[cfg(target_os = "linux")]
     {
-        if args.no_perf {
+        if !args.no_perf {
             use linux_perf::PerfMeasurement;
             run_bench::<PerfMeasurement>(&args);
         } else {

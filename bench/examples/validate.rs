@@ -57,4 +57,5 @@ fn main() {
             return;
         }
     }
+    eprintln!("Identical results ✓")
 }

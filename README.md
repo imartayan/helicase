@@ -130,6 +130,8 @@ Note that the FASTQ files can easily be converted to FASTA using:
 RUSTFLAGS="-C target-cpu=native" cargo r -r --example fq_to_fa -- <file.fastq>
 ```
 
+More information in the [bench README](bench/README.md).
+
 ## Acknowledgements
 
 This project was initially started by [Loup Lobet](https://lplt.net/) during his internship with [Charles Paperman](https://paperman.name/).

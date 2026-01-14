@@ -75,4 +75,12 @@ pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
             };
         }
     }
+
+    FastqBitmask {
+        line_feeds,
+        is_dna,
+        two_bits,
+        high_bit,
+        low_bit,
+    }
 }

@@ -72,16 +72,15 @@ impl Measurement for BaseTime {
             "".normal()
         };
 
-        match result {
-            Some(r) => println!(
-                "{label}:\t{} {} GB/s{} (result: {})",
-                mean_str, stdev_str, unstable_str, r
-            ),
-            None => println!("{label}:\t{} {} GB/s{}", mean_str, stdev_str, unstable_str),
-        }
+        print!("{label}:\t{} {} GB/s{}", mean_str, stdev_str, unstable_str);
+        if let Some(r) = result {
+            print!("(result: {r})");
+        };
+        println!();
     }
 
     fn show_csv<T: Display>(&self, label: &str, size: u64, result: Option<T>) {
+        let label = label.split_whitespace().collect::<Vec<&str>>().join(" ");
         let stats = stat(&self.samples).expect("benchmark produced no samples");
 
         let bytes = size as f64;
@@ -90,16 +89,14 @@ impl Measurement for BaseTime {
         let throughput_mean = gb / stats.mean;
         let throughput_stdev = gb * stats.stdev / (stats.mean * stats.mean);
 
-        match result {
-            Some(r) => println!(
-                "{label},{:.6},{:.6},{:.3},{}",
-                throughput_mean, throughput_stdev, stats.cv, r
-            ),
-            None => println!(
-                "{label},{:.6},{:.6},{:.3}",
-                throughput_mean, throughput_stdev, stats.cv
-            ),
-        }
+        print!(
+            "{label},{:.6},{:.6},{:.3}",
+            throughput_mean, throughput_stdev, stats.cv
+        );
+        if let Some(r) = result {
+            print!(",{r}");
+        };
+        println!();
     }
 
     fn show_csv_header(&self, show_result: bool) {

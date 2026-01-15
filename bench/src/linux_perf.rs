@@ -190,9 +190,8 @@ impl Measurement for PerfMeasurement {
         println!("    {:>16} : {}", "branches/byte", bpb_str);
         println!("    {:>16} : {}", "‰ branch miss", branch_miss_str);
         println!("    {:>16} : {}", "branch misses", branch_misses_str);
-
         if let Some(r) = result {
-            println!("    {:>16} : {}", "result", r);
+            println!("    {:>16} : {r}", "result");
         }
     }
 
@@ -207,6 +206,8 @@ impl Measurement for PerfMeasurement {
     }
 
     fn show_csv<T: Display>(&self, label: &str, size: u64, result: Option<T>) {
+        let label = label.split_whitespace().collect::<Vec<&str>>().join(" ");
+
         // Convert counters to f64 once
         let cycles_f: Vec<f64> = self.cycles_val.iter().map(|&v| v as f64).collect();
         let instr_f: Vec<f64> = self.instructions_val.iter().map(|&v| v as f64).collect();
@@ -220,12 +221,8 @@ impl Measurement for PerfMeasurement {
         let branch_misses = stat(&branch_misses_f).expect("no branch-miss samples");
         let time = stat(&self.time).expect("no time samples");
 
-        let result_str = match result {
-            Some(v) => format!("{}", v),
-            None => format!(""),
-        };
-        println!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{}",
+        print!(
+            "{},{},{},{},{},{},{},{},{},{},{},{}",
             label,
             time.mean,
             time.stdev,
@@ -237,8 +234,11 @@ impl Measurement for PerfMeasurement {
             branches.stdev,
             branch_misses.mean,
             branch_misses.stdev,
-            size,
-            result_str
+            size
         );
+        if let Some(r) = result {
+            print!(",{r}");
+        };
+        println!();
     }
 }

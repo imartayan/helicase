@@ -7,7 +7,9 @@ Arguments:
   <INPUT>  Input file (FASTA/FASTQ)
 
 Options:
-  -r, --repeat <REPEAT>  Number of repetitions [default: 3]
+  -r, --repeat <REPEAT>  Number of repetitions [default: 10]
+  -c, --csv              Output in csv format
+  -H, --no-csv-header    Do not include csv header
   -P, --no-perf          Disable perf metrics (Linux only)
   -B, --no-baseline      Disable baseline (needletail & paraseq)
   -S, --no-slice         Disable slice bench
@@ -28,14 +30,14 @@ sysctl -w kernel.perf_event_paranoid=1
 
 ## Output validation
 
-If you'd like to verify that `helicase` produces the same output as `needletail`, a validation script is provided:
+If you'd like to verify that `helicase` produces the same output as [needletail](https://github.com/onecodex/needletail), a validation script is provided:
 ```sh
-RUSTFLAGS="-C target-cpu=native" cargo r -r --example validate -- [OPTIONS] <INPUT>
+RUSTFLAGS="-C target-cpu=native" cargo r -r --example validate -- <INPUT>
 ```
 
-## Minimizers benchmarks
+## Minimizers benchmark
 
-You can measure the performance gain of using `helicase` in `simd-minimizers` with:
+You can measure the performance gain of using `helicase` in [simd-minimizers](https://github.com/rust-seq/simd-minimizers) with:
 ```sh
-RUSTFLAGS="-C target-cpu=native" cargo r -r -F simd-minimizers --example simd_mini -- [OPTIONS] <INPUT>
+RUSTFLAGS="-C target-cpu=native" cargo r -r -F simd-minimizers --example simd_mini -- <INPUT>
 ```

@@ -22,6 +22,12 @@ struct Args {
     /// Number of repetitions
     #[arg(short, long, default_value_t = 10)]
     repeat: u64,
+    /// Output in csv format
+    #[arg(short = 'c', long)]
+    csv: bool,
+    /// Do not include csv header
+    #[arg(short = 'H', long)]
+    no_csv_header: bool,
     /// Disable perf metrics (Linux only)
     #[arg(short = 'P', long)]
     no_perf: bool,
@@ -32,20 +38,14 @@ struct Args {
     #[arg(short = 'S', long)]
     no_slice: bool,
     /// Enable (compressed) file bench
-    #[arg(short, long, default_value_t = false)]
+    #[arg(short, long)]
     file: bool,
     /// Enable mmap bench
-    #[arg(short, long, default_value_t = false)]
+    #[arg(short, long)]
     mmap: bool,
     /// Show result values (length, #records...)
-    #[arg(short = 'v', long, default_value_t = false)]
+    #[arg(short = 'v', long)]
     show_val: bool,
-    /// CSV output 
-    #[arg(short = 'c', long, default_value_t = false)]
-    csv: bool,
-    /// CSV Header output 
-    #[arg(short = 'c', long, default_value_t = true)]
-    csv_header: bool,
 }
 
 const MINIMAL: Config = ParserOptions::default()
@@ -82,8 +82,8 @@ fn run_bench<M: Measurement>(args: &Args) {
     let mut num_records = 0;
     let mut dna_len = 0;
     let mut m = M::new();
-    if args.csv && args.csv_header {
-        m.show_csv_header();
+    if args.csv && !args.no_csv_header {
+        m.show_csv_header(args.show_val);
     }
 
     if !args.no_baseline {

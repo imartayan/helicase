@@ -130,7 +130,6 @@ impl Measurement for PerfMeasurement {
         self.branch_misses.reset().unwrap();
     }
 
-
     fn show_human<T: Display>(&self, label: &str, size: u64, result: Option<T>) {
         let bytes = size as f64;
         let gb = bytes / 1e9;
@@ -168,14 +167,14 @@ impl Measurement for PerfMeasurement {
         let bpb_str = fmt_stat(&branches, 1.0 / bytes, threshold, None);
 
         let branch_miss_pct = Stat {
-            mean: branch_misses.mean/branches.mean,
+            mean: branch_misses.mean / branches.mean,
             stdev: 0.0,
             cv: branch_misses.cv,
         };
         let branch_miss_str = fmt_stat(&branch_miss_pct, 1000.0, threshold, Some("‰"));
 
         // Human-readable totals
-        let cycles_str = fmt_stat(&cycles, 1.0, threshold, None).to_string(); 
+        let cycles_str = fmt_stat(&cycles, 1.0, threshold, None).to_string();
         let instr_str = fmt_stat(&instr, 1.0, threshold, None).to_string();
         let branches_str = fmt_stat(&branches, 1.0, threshold, None).to_string();
         let branch_misses_str = fmt_stat(&branch_misses, 1.0, threshold, None).to_string();
@@ -196,8 +195,15 @@ impl Measurement for PerfMeasurement {
             println!("    {:>16} : {}", "result", r);
         }
     }
-    fn show_csv_header(&self) {
-        println!("label,time_mean,time_stdev,cycle_mean,cycle_stdev,instructions_mean,instructions_stdev,branches_mean,branches_stdev,branch_misses_mean, branch_misses_stdev,size,result");
+
+    fn show_csv_header(&self, show_result: bool) {
+        print!(
+            "label,time_mean,time_stdev,cycle_mean,cycle_stdev,instructions_mean,instructions_stdev,branches_mean,branches_stdev,branch_misses_mean, branch_misses_stdev,size"
+        );
+        if show_result {
+            print!(",result");
+        }
+        println!();
     }
 
     fn show_csv<T: Display>(&self, label: &str, size: u64, result: Option<T>) {
@@ -218,6 +224,21 @@ impl Measurement for PerfMeasurement {
             Some(v) => format!("{}", v),
             None => format!(""),
         };
-        println!("{},{},{},{},{},{},{},{},{},{},{},{},{}",label,time.mean,time.stdev, cycles.mean, cycles.stdev, instr.mean, instr.stdev,branches.mean,branches.stdev,branch_misses.mean,branch_misses.stdev,size,result_str);
+        println!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            label,
+            time.mean,
+            time.stdev,
+            cycles.mean,
+            cycles.stdev,
+            instr.mean,
+            instr.stdev,
+            branches.mean,
+            branches.stdev,
+            branch_misses.mean,
+            branch_misses.stdev,
+            size,
+            result_str
+        );
     }
 }

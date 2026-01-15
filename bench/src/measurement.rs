@@ -8,7 +8,7 @@ pub trait Measurement {
     fn new() -> Self;
     fn start(&mut self);
     fn tick(&mut self);
-    fn show<T: Display>(&self, label: &str, size: u64, result: Option<T>, csv: bool){
+    fn show<T: Display>(&self, label: &str, size: u64, result: Option<T>, csv: bool) {
         if csv {
             self.show_csv::<T>(label, size, result);
         } else {
@@ -17,7 +17,7 @@ pub trait Measurement {
     }
     fn show_human<T: Display>(&self, label: &str, size: u64, result: Option<T>);
     fn show_csv<T: Display>(&self, label: &str, size: u64, result: Option<T>);
-    fn show_csv_header(&self);
+    fn show_csv_header(&self, show_result: bool);
 }
 
 pub struct BaseTime {
@@ -80,7 +80,8 @@ impl Measurement for BaseTime {
             None => println!("{label}:\t{} {} GB/s{}", mean_str, stdev_str, unstable_str),
         }
     }
-   fn show_csv<T: Display>(&self, label: &str, size: u64, result: Option<T>) {
+
+    fn show_csv<T: Display>(&self, label: &str, size: u64, result: Option<T>) {
         let stats = stat(&self.samples).expect("benchmark produced no samples");
 
         let bytes = size as f64;
@@ -90,15 +91,22 @@ impl Measurement for BaseTime {
         let throughput_stdev = gb * stats.stdev / (stats.mean * stats.mean);
 
         match result {
-            Some(r) => println!("{label},{:.6},{:.6},{:.3},{}", 
+            Some(r) => println!(
+                "{label},{:.6},{:.6},{:.3},{}",
                 throughput_mean, throughput_stdev, stats.cv, r
             ),
-            None => println!("{label},{:.6},{:.6},{:.3}", 
+            None => println!(
+                "{label},{:.6},{:.6},{:.3}",
                 throughput_mean, throughput_stdev, stats.cv
             ),
         }
     }
-    fn show_csv_header(&self){
-        println!("label,mean,stdev,cv,result");
+
+    fn show_csv_header(&self, show_result: bool) {
+        print!("label,mean,stdev,cv");
+        if show_result {
+            print!(",result");
+        }
+        println!();
     }
 }

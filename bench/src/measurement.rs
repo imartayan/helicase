@@ -74,7 +74,7 @@ impl Measurement for BaseTime {
 
         print!("{label}:\t{} {} GB/s{}", mean_str, stdev_str, unstable_str);
         if let Some(r) = result {
-            print!("(result: {r})");
+            print!(" (result: {r})");
         };
         println!();
     }

@@ -1,5 +1,4 @@
 use colored::*;
-
 use perf_event::events::Hardware;
 use perf_event::{Builder, Counter};
 use std::fmt::Display;
@@ -52,26 +51,22 @@ pub struct PerfMeasurement {
 
 impl Measurement for PerfMeasurement {
     fn new() -> Self {
-        let mut cycles = Builder::new()
-            .kind(Hardware::CPU_CYCLES)
+        let mut cycles = Builder::new(Hardware::CPU_CYCLES)
             .build()
             .expect("failed to create perf counter for cycles");
         cycles.disable().unwrap();
 
-        let mut instructions = Builder::new()
-            .kind(Hardware::INSTRUCTIONS)
+        let mut instructions = Builder::new(Hardware::INSTRUCTIONS)
             .build()
             .expect("failed to create perf counter for instructions");
         instructions.disable().unwrap();
 
-        let mut branches = Builder::new()
-            .kind(Hardware::BRANCH_INSTRUCTIONS)
+        let mut branches = Builder::new(Hardware::BRANCH_INSTRUCTIONS)
             .build()
             .expect("failed to create perf counter for branches");
         branches.disable().unwrap();
 
-        let mut branch_misses = Builder::new()
-            .kind(Hardware::BRANCH_MISSES)
+        let mut branch_misses = Builder::new(Hardware::BRANCH_MISSES)
             .build()
             .expect("failed to create perf counter for branch misses");
         branch_misses.disable().unwrap();

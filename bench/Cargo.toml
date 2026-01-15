@@ -19,7 +19,7 @@ paraseq = { version = "0.4", default-features = false, features = ["niffler"] }
 simd-minimizers = { version = "2.2", features = ["scalar"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-perf-event = "0.4.8"
+perf-event2 = "0.7"
 
 [features]
 simd-minimizers = ["helicase/packed-seq", "dep:simd-minimizers"]

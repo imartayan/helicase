@@ -4,10 +4,9 @@ set -eu
 
 ./datasets.sh
 DATASETS_DIR="datasets"
-RESULTS_DIR="bench_results"
+RESULT="benchs.csv"
 
-rm -rf $RESULTS_DIR
-mkdir -p "$RESULTS_DIR"
+flags=""
 
 # Iterate over all files in datasets, skip checksum files
 for dataset in "$DATASETS_DIR"/*; do
@@ -17,11 +16,11 @@ for dataset in "$DATASETS_DIR"/*; do
 
     # Extract filename
     filename=$(basename "$dataset")
-    out="$RESULTS_DIR/${filename}.bench"
 
-    echo "[BENCH] $filename -> $out"
+    echo "[BENCH] $filename -> $RESULT"
 
     # Run the benchmark and save output
-    RUSTFLAGS="-C target-cpu=native -Awarning" \
-    cargo r -r --quiet --bin bench -- "$dataset" > "$out" 2> "$out.err"
+    RUSTFLAGS="-C target-cpu=native" \
+    cargo r -r --quiet --bin bench -- "$dataset" -c $flags >> "$RESULT"
+    flags="-H"
 done

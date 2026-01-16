@@ -2,10 +2,11 @@ use colored::Colorize;
 use std::fmt::Display;
 use std::time::Instant;
 
+use crate::hardware_info::*;
 use crate::stats::stat;
 
 pub trait Measurement {
-    fn new() -> Self;
+    fn new(filename: &str) -> Self;
     fn start(&mut self);
     fn tick(&mut self);
     fn show<T: Display>(&self, label: &str, size: u64, result: Option<T>, csv: bool) {
@@ -23,13 +24,15 @@ pub trait Measurement {
 pub struct BaseTime {
     samples: Vec<f64>,
     start: Option<Instant>,
+    filename: String,
 }
 
 impl Measurement for BaseTime {
-    fn new() -> Self {
+    fn new(filename: &str) -> Self {
         Self {
             samples: Vec::new(),
             start: None,
+            filename: filename.to_string(),
         }
     }
 
@@ -89,9 +92,17 @@ impl Measurement for BaseTime {
         let throughput_mean = gb / stats.mean;
         let throughput_stdev = gb * stats.stdev / (stats.mean * stats.mean);
 
+        let cpuinfo = get_hardware_info();
+
         print!(
-            "{label},{:.6},{:.6},{:.3}",
-            throughput_mean, throughput_stdev, stats.cv
+            "{label},{:.6},{:.6},{:.3},{},{},{},{}",
+            throughput_mean,
+            throughput_stdev,
+            stats.cv,
+            self.filename,
+            cpuinfo.brand,
+            cpuinfo.vendor_id,
+            cpuinfo.vector_tech
         );
         if let Some(r) = result {
             print!(",{r}");
@@ -100,7 +111,7 @@ impl Measurement for BaseTime {
     }
 
     fn show_csv_header(&self, show_result: bool) {
-        print!("label,mean,stdev,cv");
+        print!("label,mean,stdev,cv,filename,cpu_brand,cpu_vendor,vector_ISA");
         if show_result {
             print!(",result");
         }

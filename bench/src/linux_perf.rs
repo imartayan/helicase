@@ -4,6 +4,7 @@ use perf_event::{Builder, Counter};
 use std::fmt::Display;
 use std::time::Instant;
 
+use crate::hardware_info::*;
 use crate::measurement::Measurement;
 use crate::stats::*;
 
@@ -35,6 +36,7 @@ fn fmt_stat(stat: &Stat, scale: f64, threshold: f64, unit: Option<&str>) -> colo
 }
 
 pub struct PerfMeasurement {
+    filename: String,
     start: Option<Instant>,
     cycles: Counter,
     instructions: Counter,
@@ -50,7 +52,7 @@ pub struct PerfMeasurement {
 }
 
 impl Measurement for PerfMeasurement {
-    fn new() -> Self {
+    fn new(filename: &str) -> Self {
         let mut cycles = Builder::new(Hardware::CPU_CYCLES)
             .build()
             .expect("failed to create perf counter for cycles");
@@ -72,6 +74,7 @@ impl Measurement for PerfMeasurement {
         branch_misses.disable().unwrap();
 
         Self {
+            filename: filename.to_string(),
             start: None,
             cycles,
             instructions,
@@ -192,7 +195,7 @@ impl Measurement for PerfMeasurement {
 
     fn show_csv_header(&self, show_result: bool) {
         print!(
-            "label,time_mean,time_stdev,cycle_mean,cycle_stdev,instructions_mean,instructions_stdev,branches_mean,branches_stdev,branch_misses_mean, branch_misses_stdev,size"
+            "label,time_mean,time_stdev,cycle_mean,cycle_stdev,instructions_mean,instructions_stdev,branches_mean,branches_stdev,branch_misses_mean, branch_misses_stdev,size,filename,cpu_brand,cpu_vendor,vector_ISA"
         );
         if show_result {
             print!(",result");
@@ -215,9 +218,10 @@ impl Measurement for PerfMeasurement {
         let branches = stat(&branches_f).expect("no branch samples");
         let branch_misses = stat(&branch_misses_f).expect("no branch-miss samples");
         let time = stat(&self.time).expect("no time samples");
+        let cpuinfo = get_hardware_info();
 
         print!(
-            "{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             label,
             time.mean,
             time.stdev,
@@ -229,7 +233,11 @@ impl Measurement for PerfMeasurement {
             branches.stdev,
             branch_misses.mean,
             branch_misses.stdev,
-            size
+            size,
+            self.filename,
+            cpuinfo.brand,
+            cpuinfo.vendor_id,
+            cpuinfo.vector_tech,
         );
         if let Some(r) = result {
             print!(",{r}");

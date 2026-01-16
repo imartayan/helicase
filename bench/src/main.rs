@@ -1,3 +1,4 @@
+mod hardware_info;
 #[cfg(target_os = "linux")]
 mod linux_perf;
 mod measurement;
@@ -81,7 +82,7 @@ fn run_bench<M: Measurement>(args: &Args) {
     let data = data.as_slice();
     let mut num_records = 0;
     let mut dna_len = 0;
-    let mut m = M::new();
+    let mut m = M::new(path);
     if args.csv && !args.no_csv_header {
         m.show_csv_header(args.show_val);
     }

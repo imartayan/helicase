@@ -17,6 +17,7 @@ niffler = { version = "3.0", default-features = false, features = [
 ] }
 paraseq = { version = "0.4", default-features = false, features = ["niffler"] }
 simd-minimizers = { version = "2.2", features = ["scalar"], optional = true }
+sysinfo = "0.37.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 perf-event2 = "0.7"

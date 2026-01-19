@@ -1,0 +1,202 @@
+#![allow(clippy::missing_transmute_annotations)]
+
+use crate::config::{advanced::*, *};
+use crate::lexer::*;
+use core::arch::x86_64::*;
+use core::mem::transmute;
+
+const GREATER_THAN: __m128i = unsafe { transmute([b'>'; 16]) };
+const LINE_FEED: __m128i = unsafe { transmute([b'\n'; 16]) };
+const LUT_ACTG: __m128i = unsafe { transmute(*b"A_C_T_G_________") };
+
+#[inline(always)]
+pub fn extract_fasta_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastaBitmask {
+    unsafe {
+        let ptr = buf.as_ptr() as *const __m128i;
+        let v_buf1 = _mm_loadu_si128(ptr);
+        let v_buf2 = _mm_loadu_si128(ptr.add(1));
+        let v_buf3 = _mm_loadu_si128(ptr.add(2));
+        let v_buf4 = _mm_loadu_si128(ptr.add(3));
+
+        let open_bracket = u8_mask(v_buf1, v_buf2, v_buf3, v_buf4, GREATER_THAN);
+        let line_feeds = u8_mask(v_buf1, v_buf2, v_buf3, v_buf4, LINE_FEED);
+
+        let mut is_dna = !0;
+        let mut two_bits = 0;
+        let mut high_bit = 0;
+        let mut low_bit = 0;
+
+        let (mm_hi_1, mm_lo_1, mm_hi_2, mm_lo_2, mm_hi_3, mm_lo_3, mm_hi_4, mm_lo_4) =
+            if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR | COMPUTE_DNA_PACKED) {
+                (
+                    _mm_movemask_epi8(_mm_slli_epi16(v_buf1, 5)) as u16 as u64,
+                    _mm_movemask_epi8(_mm_slli_epi16(v_buf1, 6)) as u16 as u64,
+                    _mm_movemask_epi8(_mm_slli_epi16(v_buf2, 5)) as u16 as u64,
+                    _mm_movemask_epi8(_mm_slli_epi16(v_buf2, 6)) as u16 as u64,
+                    _mm_movemask_epi8(_mm_slli_epi16(v_buf3, 5)) as u16 as u64,
+                    _mm_movemask_epi8(_mm_slli_epi16(v_buf3, 6)) as u16 as u64,
+                    _mm_movemask_epi8(_mm_slli_epi16(v_buf4, 5)) as u16 as u64,
+                    _mm_movemask_epi8(_mm_slli_epi16(v_buf4, 6)) as u16 as u64,
+                )
+            } else {
+                (0, 0, 0, 0, 0, 0, 0, 0)
+            };
+
+        if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
+            high_bit = mm_hi_1 | (mm_hi_2 << 16) | (mm_hi_3 << 32) | (mm_hi_4 << 48);
+            low_bit = mm_lo_1 | (mm_lo_2 << 16) | (mm_lo_3 << 32) | (mm_lo_4 << 48);
+        }
+
+        if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
+            // Combine pairs of 16-bit masks into 32-bit values for pdep
+            let mm_hi_12 = mm_hi_1 | (mm_hi_2 << 16);
+            let mm_lo_12 = mm_lo_1 | (mm_lo_2 << 16);
+            let mm_hi_34 = mm_hi_3 | (mm_hi_4 << 16);
+            let mm_lo_34 = mm_lo_3 | (mm_lo_4 << 16);
+
+            let mm_1 =
+                _pdep_u64(mm_hi_12, 0xAAAAAAAAAAAAAAAA) | _pdep_u64(mm_lo_12, 0x5555555555555555);
+            let mm_2 =
+                _pdep_u64(mm_hi_34, 0xAAAAAAAAAAAAAAAA) | _pdep_u64(mm_lo_34, 0x5555555555555555);
+            two_bits = (mm_1 as u128) | ((mm_2 as u128) << 64);
+        }
+
+        if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
+            let mask_two_bits = _mm_set1_epi8(0b110i8);
+            let mask_upper = _mm_set1_epi8(0b11011111u8 as i8);
+
+            is_dna = movemask_64(
+                _mm_cmpeq_epi8(
+                    _mm_shuffle_epi8(LUT_ACTG, _mm_and_si128(v_buf1, mask_two_bits)),
+                    _mm_and_si128(v_buf1, mask_upper),
+                ),
+                _mm_cmpeq_epi8(
+                    _mm_shuffle_epi8(LUT_ACTG, _mm_and_si128(v_buf2, mask_two_bits)),
+                    _mm_and_si128(v_buf2, mask_upper),
+                ),
+                _mm_cmpeq_epi8(
+                    _mm_shuffle_epi8(LUT_ACTG, _mm_and_si128(v_buf3, mask_two_bits)),
+                    _mm_and_si128(v_buf3, mask_upper),
+                ),
+                _mm_cmpeq_epi8(
+                    _mm_shuffle_epi8(LUT_ACTG, _mm_and_si128(v_buf4, mask_two_bits)),
+                    _mm_and_si128(v_buf4, mask_upper),
+                ),
+            );
+        }
+
+        FastaBitmask {
+            open_bracket,
+            line_feeds,
+            is_dna,
+            two_bits,
+            high_bit,
+            low_bit,
+        }
+    }
+}
+
+#[inline(always)]
+pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
+    unsafe {
+        let ptr = buf.as_ptr() as *const __m128i;
+        let v_buf1 = _mm_loadu_si128(ptr);
+        let v_buf2 = _mm_loadu_si128(ptr.add(1));
+        let v_buf3 = _mm_loadu_si128(ptr.add(2));
+        let v_buf4 = _mm_loadu_si128(ptr.add(3));
+
+        let line_feeds = u8_mask(v_buf1, v_buf2, v_buf3, v_buf4, LINE_FEED);
+
+        let mut is_dna = !0;
+        let mut two_bits = 0;
+        let mut high_bit = 0;
+        let mut low_bit = 0;
+
+        let (mm_hi_1, mm_lo_1, mm_hi_2, mm_lo_2, mm_hi_3, mm_lo_3, mm_hi_4, mm_lo_4) =
+            if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR | COMPUTE_DNA_PACKED) {
+                (
+                    _mm_movemask_epi8(_mm_slli_epi16(v_buf1, 5)) as u16 as u64,
+                    _mm_movemask_epi8(_mm_slli_epi16(v_buf1, 6)) as u16 as u64,
+                    _mm_movemask_epi8(_mm_slli_epi16(v_buf2, 5)) as u16 as u64,
+                    _mm_movemask_epi8(_mm_slli_epi16(v_buf2, 6)) as u16 as u64,
+                    _mm_movemask_epi8(_mm_slli_epi16(v_buf3, 5)) as u16 as u64,
+                    _mm_movemask_epi8(_mm_slli_epi16(v_buf3, 6)) as u16 as u64,
+                    _mm_movemask_epi8(_mm_slli_epi16(v_buf4, 5)) as u16 as u64,
+                    _mm_movemask_epi8(_mm_slli_epi16(v_buf4, 6)) as u16 as u64,
+                )
+            } else {
+                (0, 0, 0, 0, 0, 0, 0, 0)
+            };
+
+        if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
+            high_bit = mm_hi_1 | (mm_hi_2 << 16) | (mm_hi_3 << 32) | (mm_hi_4 << 48);
+            low_bit = mm_lo_1 | (mm_lo_2 << 16) | (mm_lo_3 << 32) | (mm_lo_4 << 48);
+        }
+
+        if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
+            let mm_hi_12 = mm_hi_1 | (mm_hi_2 << 16);
+            let mm_lo_12 = mm_lo_1 | (mm_lo_2 << 16);
+            let mm_hi_34 = mm_hi_3 | (mm_hi_4 << 16);
+            let mm_lo_34 = mm_lo_3 | (mm_lo_4 << 16);
+
+            let mm_1 =
+                _pdep_u64(mm_hi_12, 0xAAAAAAAAAAAAAAAA) | _pdep_u64(mm_lo_12, 0x5555555555555555);
+            let mm_2 =
+                _pdep_u64(mm_hi_34, 0xAAAAAAAAAAAAAAAA) | _pdep_u64(mm_lo_34, 0x5555555555555555);
+            two_bits = (mm_1 as u128) | ((mm_2 as u128) << 64);
+        }
+
+        if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
+            let mask_two_bits = _mm_set1_epi8(0b110i8);
+            let mask_upper = _mm_set1_epi8(0b11011111u8 as i8);
+
+            is_dna = movemask_64(
+                _mm_cmpeq_epi8(
+                    _mm_shuffle_epi8(LUT_ACTG, _mm_and_si128(v_buf1, mask_two_bits)),
+                    _mm_and_si128(v_buf1, mask_upper),
+                ),
+                _mm_cmpeq_epi8(
+                    _mm_shuffle_epi8(LUT_ACTG, _mm_and_si128(v_buf2, mask_two_bits)),
+                    _mm_and_si128(v_buf2, mask_upper),
+                ),
+                _mm_cmpeq_epi8(
+                    _mm_shuffle_epi8(LUT_ACTG, _mm_and_si128(v_buf3, mask_two_bits)),
+                    _mm_and_si128(v_buf3, mask_upper),
+                ),
+                _mm_cmpeq_epi8(
+                    _mm_shuffle_epi8(LUT_ACTG, _mm_and_si128(v_buf4, mask_two_bits)),
+                    _mm_and_si128(v_buf4, mask_upper),
+                ),
+            );
+        }
+
+        FastqBitmask {
+            line_feeds,
+            is_dna,
+            two_bits,
+            high_bit,
+            low_bit,
+        }
+    }
+}
+
+#[inline(always)]
+fn movemask_64(v1: __m128i, v2: __m128i, v3: __m128i, v4: __m128i) -> u64 {
+    unsafe {
+        (_mm_movemask_epi8(v1) as u16 as u64)
+            | ((_mm_movemask_epi8(v2) as u16 as u64) << 16)
+            | ((_mm_movemask_epi8(v3) as u16 as u64) << 32)
+            | ((_mm_movemask_epi8(v4) as u16 as u64) << 48)
+    }
+}
+
+#[inline(always)]
+pub fn u8_mask(v1: __m128i, v2: __m128i, v3: __m128i, v4: __m128i, v_c: __m128i) -> u64 {
+    unsafe {
+        let a = _mm_movemask_epi8(_mm_cmpeq_epi8(v1, v_c)) as u16 as u64;
+        let b = _mm_movemask_epi8(_mm_cmpeq_epi8(v2, v_c)) as u16 as u64;
+        let c = _mm_movemask_epi8(_mm_cmpeq_epi8(v3, v_c)) as u16 as u64;
+        let d = _mm_movemask_epi8(_mm_cmpeq_epi8(v4, v_c)) as u16 as u64;
+        a | (b << 16) | (c << 32) | (d << 48)
+    }
+}

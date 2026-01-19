@@ -50,20 +50,17 @@ pub fn extract_fasta_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastaBitmask {
         }
 
         if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
+            let mask_two_bits = _mm256_set1_epi8(0b110i8);
+            let mask_upper = _mm256_set1_epi8(0b11011111u8 as i8);
+
             is_dna = movemask_64(
                 _mm256_cmpeq_epi8(
-                    _mm256_shuffle_epi8(
-                        LUT_ACTG,
-                        _mm256_and_si256(v_buf1, _mm256_set1_epi8(0b110i8)),
-                    ),
-                    _mm256_and_si256(v_buf1, _mm256_set1_epi8(0b11011111u8 as i8)),
+                    _mm256_shuffle_epi8(LUT_ACTG, _mm256_and_si256(v_buf1, mask_two_bits)),
+                    _mm256_and_si256(v_buf1, mask_upper),
                 ),
                 _mm256_cmpeq_epi8(
-                    _mm256_shuffle_epi8(
-                        LUT_ACTG,
-                        _mm256_and_si256(v_buf2, _mm256_set1_epi8(0b110i8)),
-                    ),
-                    _mm256_and_si256(v_buf2, _mm256_set1_epi8(0b11011111u8 as i8)),
+                    _mm256_shuffle_epi8(LUT_ACTG, _mm256_and_si256(v_buf2, mask_two_bits)),
+                    _mm256_and_si256(v_buf2, mask_upper),
                 ),
             );
         }
@@ -119,20 +116,17 @@ pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
         }
 
         if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
+            let mask_two_bits = _mm256_set1_epi8(0b110i8);
+            let mask_upper = _mm256_set1_epi8(0b11011111u8 as i8);
+
             is_dna = movemask_64(
                 _mm256_cmpeq_epi8(
-                    _mm256_shuffle_epi8(
-                        LUT_ACTG,
-                        _mm256_and_si256(v_buf1, _mm256_set1_epi8(0b110i8)),
-                    ),
-                    _mm256_and_si256(v_buf1, _mm256_set1_epi8(0b11011111u8 as i8)),
+                    _mm256_shuffle_epi8(LUT_ACTG, _mm256_and_si256(v_buf1, mask_two_bits)),
+                    _mm256_and_si256(v_buf1, mask_upper),
                 ),
                 _mm256_cmpeq_epi8(
-                    _mm256_shuffle_epi8(
-                        LUT_ACTG,
-                        _mm256_and_si256(v_buf2, _mm256_set1_epi8(0b110i8)),
-                    ),
-                    _mm256_and_si256(v_buf2, _mm256_set1_epi8(0b11011111u8 as i8)),
+                    _mm256_shuffle_epi8(LUT_ACTG, _mm256_and_si256(v_buf2, mask_two_bits)),
+                    _mm256_and_si256(v_buf2, mask_upper),
                 ),
             );
         }

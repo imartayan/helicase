@@ -26,9 +26,25 @@ pub fn extract_fasta_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastaBitmask {
         let mut high_bit = 0;
         let mut low_bit = 0;
 
-        let (mm_hi_1, mm_lo_1, mm_hi_2, mm_lo_2, mm_hi_3, mm_lo_3, mm_hi_4, mm_lo_4) =
-            if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR | COMPUTE_DNA_PACKED) {
-                (
+        if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
+            let (mm_hi_1, mm_lo_1, mm_hi_2, mm_lo_2, mm_hi_3, mm_lo_3, mm_hi_4, mm_lo_4) = (
+                _mm_movemask_epi8(_mm_slli_epi16(v_buf1, 5)) as u16 as u64,
+                _mm_movemask_epi8(_mm_slli_epi16(v_buf1, 6)) as u16 as u64,
+                _mm_movemask_epi8(_mm_slli_epi16(v_buf2, 5)) as u16 as u64,
+                _mm_movemask_epi8(_mm_slli_epi16(v_buf2, 6)) as u16 as u64,
+                _mm_movemask_epi8(_mm_slli_epi16(v_buf3, 5)) as u16 as u64,
+                _mm_movemask_epi8(_mm_slli_epi16(v_buf3, 6)) as u16 as u64,
+                _mm_movemask_epi8(_mm_slli_epi16(v_buf4, 5)) as u16 as u64,
+                _mm_movemask_epi8(_mm_slli_epi16(v_buf4, 6)) as u16 as u64,
+            );
+            high_bit = mm_hi_1 | (mm_hi_2 << 16) | (mm_hi_3 << 32) | (mm_hi_4 << 48);
+            low_bit = mm_lo_1 | (mm_lo_2 << 16) | (mm_lo_3 << 32) | (mm_lo_4 << 48);
+        }
+
+        if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
+            #[cfg(all(target_feature = "bmi2", not(feature = "no-pdep")))]
+            {
+                let (mm_hi_1, mm_lo_1, mm_hi_2, mm_lo_2, mm_hi_3, mm_lo_3, mm_hi_4, mm_lo_4) = (
                     _mm_movemask_epi8(_mm_slli_epi16(v_buf1, 5)) as u16 as u64,
                     _mm_movemask_epi8(_mm_slli_epi16(v_buf1, 6)) as u16 as u64,
                     _mm_movemask_epi8(_mm_slli_epi16(v_buf2, 5)) as u16 as u64,
@@ -37,28 +53,48 @@ pub fn extract_fasta_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastaBitmask {
                     _mm_movemask_epi8(_mm_slli_epi16(v_buf3, 6)) as u16 as u64,
                     _mm_movemask_epi8(_mm_slli_epi16(v_buf4, 5)) as u16 as u64,
                     _mm_movemask_epi8(_mm_slli_epi16(v_buf4, 6)) as u16 as u64,
-                )
-            } else {
-                (0, 0, 0, 0, 0, 0, 0, 0)
-            };
-
-        if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
-            high_bit = mm_hi_1 | (mm_hi_2 << 16) | (mm_hi_3 << 32) | (mm_hi_4 << 48);
-            low_bit = mm_lo_1 | (mm_lo_2 << 16) | (mm_lo_3 << 32) | (mm_lo_4 << 48);
-        }
-
-        if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
-            // Combine pairs of 16-bit masks into 32-bit values for pdep
-            let mm_hi_12 = mm_hi_1 | (mm_hi_2 << 16);
-            let mm_lo_12 = mm_lo_1 | (mm_lo_2 << 16);
-            let mm_hi_34 = mm_hi_3 | (mm_hi_4 << 16);
-            let mm_lo_34 = mm_lo_3 | (mm_lo_4 << 16);
-
-            let mm_1 =
-                _pdep_u64(mm_hi_12, 0xAAAAAAAAAAAAAAAA) | _pdep_u64(mm_lo_12, 0x5555555555555555);
-            let mm_2 =
-                _pdep_u64(mm_hi_34, 0xAAAAAAAAAAAAAAAA) | _pdep_u64(mm_lo_34, 0x5555555555555555);
-            two_bits = (mm_1 as u128) | ((mm_2 as u128) << 64);
+                );
+                let mm_hi_12 = mm_hi_1 | (mm_hi_2 << 16);
+                let mm_lo_12 = mm_lo_1 | (mm_lo_2 << 16);
+                let mm_hi_34 = mm_hi_3 | (mm_hi_4 << 16);
+                let mm_lo_34 = mm_lo_3 | (mm_lo_4 << 16);
+                let mm_1 = _pdep_u64(mm_hi_12, 0xAAAAAAAAAAAAAAAA)
+                    | _pdep_u64(mm_lo_12, 0x5555555555555555);
+                let mm_2 = _pdep_u64(mm_hi_34, 0xAAAAAAAAAAAAAAAA)
+                    | _pdep_u64(mm_lo_34, 0x5555555555555555);
+                two_bits = (mm_1 as u128) | ((mm_2 as u128) << 64);
+            }
+            #[cfg(any(not(target_feature = "bmi2"), feature = "no-pdep"))]
+            {
+                // Adapted from https://github.com/Daniel-Liu-c0deb0t/cute-nucleotides/commit/007164bce68f671188fa5c607982fbd306112cb3
+                let (hi_1, lo_1, hi_2, lo_2, hi_3, lo_3, hi_4, lo_4) = (
+                    _mm_slli_epi16(v_buf1, 5),
+                    _mm_slli_epi16(v_buf1, 6),
+                    _mm_slli_epi16(v_buf2, 5),
+                    _mm_slli_epi16(v_buf2, 6),
+                    _mm_slli_epi16(v_buf3, 5),
+                    _mm_slli_epi16(v_buf3, 6),
+                    _mm_slli_epi16(v_buf4, 5),
+                    _mm_slli_epi16(v_buf4, 6),
+                );
+                let (mm_hi_1, mm_lo_1, mm_hi_2, mm_lo_2, mm_hi_3, mm_lo_3, mm_hi_4, mm_lo_4) = (
+                    _mm_movemask_epi8(_mm_unpackhi_epi8(lo_1, hi_1)) as u32 as u64,
+                    _mm_movemask_epi8(_mm_unpacklo_epi8(lo_1, hi_1)) as u32 as u64,
+                    _mm_movemask_epi8(_mm_unpackhi_epi8(lo_2, hi_2)) as u32 as u64,
+                    _mm_movemask_epi8(_mm_unpacklo_epi8(lo_2, hi_2)) as u32 as u64,
+                    _mm_movemask_epi8(_mm_unpackhi_epi8(lo_3, hi_3)) as u32 as u64,
+                    _mm_movemask_epi8(_mm_unpacklo_epi8(lo_3, hi_3)) as u32 as u64,
+                    _mm_movemask_epi8(_mm_unpackhi_epi8(lo_4, hi_4)) as u32 as u64,
+                    _mm_movemask_epi8(_mm_unpacklo_epi8(lo_4, hi_4)) as u32 as u64,
+                );
+                let mm_hi_12 = mm_hi_1 | (mm_hi_2 << 16);
+                let mm_lo_12 = mm_lo_1 | (mm_lo_2 << 16);
+                let mm_hi_34 = mm_hi_3 | (mm_hi_4 << 16);
+                let mm_lo_34 = mm_lo_3 | (mm_lo_4 << 16);
+                let mm_1 = (mm_hi_12 << 32) | mm_lo_12;
+                let mm_2 = (mm_hi_34 << 32) | mm_lo_34;
+                two_bits = (mm_1 as u128) | ((mm_2 as u128) << 64);
+            }
         }
 
         if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
@@ -112,9 +148,25 @@ pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
         let mut high_bit = 0;
         let mut low_bit = 0;
 
-        let (mm_hi_1, mm_lo_1, mm_hi_2, mm_lo_2, mm_hi_3, mm_lo_3, mm_hi_4, mm_lo_4) =
-            if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR | COMPUTE_DNA_PACKED) {
-                (
+        if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
+            let (mm_hi_1, mm_lo_1, mm_hi_2, mm_lo_2, mm_hi_3, mm_lo_3, mm_hi_4, mm_lo_4) = (
+                _mm_movemask_epi8(_mm_slli_epi16(v_buf1, 5)) as u16 as u64,
+                _mm_movemask_epi8(_mm_slli_epi16(v_buf1, 6)) as u16 as u64,
+                _mm_movemask_epi8(_mm_slli_epi16(v_buf2, 5)) as u16 as u64,
+                _mm_movemask_epi8(_mm_slli_epi16(v_buf2, 6)) as u16 as u64,
+                _mm_movemask_epi8(_mm_slli_epi16(v_buf3, 5)) as u16 as u64,
+                _mm_movemask_epi8(_mm_slli_epi16(v_buf3, 6)) as u16 as u64,
+                _mm_movemask_epi8(_mm_slli_epi16(v_buf4, 5)) as u16 as u64,
+                _mm_movemask_epi8(_mm_slli_epi16(v_buf4, 6)) as u16 as u64,
+            );
+            high_bit = mm_hi_1 | (mm_hi_2 << 16) | (mm_hi_3 << 32) | (mm_hi_4 << 48);
+            low_bit = mm_lo_1 | (mm_lo_2 << 16) | (mm_lo_3 << 32) | (mm_lo_4 << 48);
+        }
+
+        if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
+            #[cfg(all(target_feature = "bmi2", not(feature = "no-pdep")))]
+            {
+                let (mm_hi_1, mm_lo_1, mm_hi_2, mm_lo_2, mm_hi_3, mm_lo_3, mm_hi_4, mm_lo_4) = (
                     _mm_movemask_epi8(_mm_slli_epi16(v_buf1, 5)) as u16 as u64,
                     _mm_movemask_epi8(_mm_slli_epi16(v_buf1, 6)) as u16 as u64,
                     _mm_movemask_epi8(_mm_slli_epi16(v_buf2, 5)) as u16 as u64,
@@ -123,27 +175,48 @@ pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
                     _mm_movemask_epi8(_mm_slli_epi16(v_buf3, 6)) as u16 as u64,
                     _mm_movemask_epi8(_mm_slli_epi16(v_buf4, 5)) as u16 as u64,
                     _mm_movemask_epi8(_mm_slli_epi16(v_buf4, 6)) as u16 as u64,
-                )
-            } else {
-                (0, 0, 0, 0, 0, 0, 0, 0)
-            };
-
-        if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
-            high_bit = mm_hi_1 | (mm_hi_2 << 16) | (mm_hi_3 << 32) | (mm_hi_4 << 48);
-            low_bit = mm_lo_1 | (mm_lo_2 << 16) | (mm_lo_3 << 32) | (mm_lo_4 << 48);
-        }
-
-        if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
-            let mm_hi_12 = mm_hi_1 | (mm_hi_2 << 16);
-            let mm_lo_12 = mm_lo_1 | (mm_lo_2 << 16);
-            let mm_hi_34 = mm_hi_3 | (mm_hi_4 << 16);
-            let mm_lo_34 = mm_lo_3 | (mm_lo_4 << 16);
-
-            let mm_1 =
-                _pdep_u64(mm_hi_12, 0xAAAAAAAAAAAAAAAA) | _pdep_u64(mm_lo_12, 0x5555555555555555);
-            let mm_2 =
-                _pdep_u64(mm_hi_34, 0xAAAAAAAAAAAAAAAA) | _pdep_u64(mm_lo_34, 0x5555555555555555);
-            two_bits = (mm_1 as u128) | ((mm_2 as u128) << 64);
+                );
+                let mm_hi_12 = mm_hi_1 | (mm_hi_2 << 16);
+                let mm_lo_12 = mm_lo_1 | (mm_lo_2 << 16);
+                let mm_hi_34 = mm_hi_3 | (mm_hi_4 << 16);
+                let mm_lo_34 = mm_lo_3 | (mm_lo_4 << 16);
+                let mm_1 = _pdep_u64(mm_hi_12, 0xAAAAAAAAAAAAAAAA)
+                    | _pdep_u64(mm_lo_12, 0x5555555555555555);
+                let mm_2 = _pdep_u64(mm_hi_34, 0xAAAAAAAAAAAAAAAA)
+                    | _pdep_u64(mm_lo_34, 0x5555555555555555);
+                two_bits = (mm_1 as u128) | ((mm_2 as u128) << 64);
+            }
+            #[cfg(any(not(target_feature = "bmi2"), feature = "no-pdep"))]
+            {
+                // Adapted from https://github.com/Daniel-Liu-c0deb0t/cute-nucleotides/commit/007164bce68f671188fa5c607982fbd306112cb3
+                let (hi_1, lo_1, hi_2, lo_2, hi_3, lo_3, hi_4, lo_4) = (
+                    _mm_slli_epi16(v_buf1, 5),
+                    _mm_slli_epi16(v_buf1, 6),
+                    _mm_slli_epi16(v_buf2, 5),
+                    _mm_slli_epi16(v_buf2, 6),
+                    _mm_slli_epi16(v_buf3, 5),
+                    _mm_slli_epi16(v_buf3, 6),
+                    _mm_slli_epi16(v_buf4, 5),
+                    _mm_slli_epi16(v_buf4, 6),
+                );
+                let (mm_hi_1, mm_lo_1, mm_hi_2, mm_lo_2, mm_hi_3, mm_lo_3, mm_hi_4, mm_lo_4) = (
+                    _mm_movemask_epi8(_mm_unpackhi_epi8(lo_1, hi_1)) as u32 as u64,
+                    _mm_movemask_epi8(_mm_unpacklo_epi8(lo_1, hi_1)) as u32 as u64,
+                    _mm_movemask_epi8(_mm_unpackhi_epi8(lo_2, hi_2)) as u32 as u64,
+                    _mm_movemask_epi8(_mm_unpacklo_epi8(lo_2, hi_2)) as u32 as u64,
+                    _mm_movemask_epi8(_mm_unpackhi_epi8(lo_3, hi_3)) as u32 as u64,
+                    _mm_movemask_epi8(_mm_unpacklo_epi8(lo_3, hi_3)) as u32 as u64,
+                    _mm_movemask_epi8(_mm_unpackhi_epi8(lo_4, hi_4)) as u32 as u64,
+                    _mm_movemask_epi8(_mm_unpacklo_epi8(lo_4, hi_4)) as u32 as u64,
+                );
+                let mm_hi_12 = mm_hi_1 | (mm_hi_2 << 16);
+                let mm_lo_12 = mm_lo_1 | (mm_lo_2 << 16);
+                let mm_hi_34 = mm_hi_3 | (mm_hi_4 << 16);
+                let mm_lo_34 = mm_lo_3 | (mm_lo_4 << 16);
+                let mm_1 = (mm_hi_12 << 32) | mm_lo_12;
+                let mm_2 = (mm_hi_34 << 32) | mm_lo_34;
+                two_bits = (mm_1 as u128) | ((mm_2 as u128) << 64);
+            }
         }
 
         if flag_is_set(CONFIG, SPLIT_NON_ACTG) {

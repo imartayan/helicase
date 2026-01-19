@@ -20,37 +20,7 @@ pub fn extract_fasta_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastaBitmask {
         let open_bracket = movemask_64(map_8x16x4(v, |v| vceqq_u8(v, GREATER_THAN)));
         let line_feeds = movemask_64(map_8x16x4(v, |v| vceqq_u8(v, LINE_FEED)));
 
-        let mut is_dna = !0;
-        let mut two_bits = 0;
-        let mut high_bit = 0;
-        let mut low_bit = 0;
-
-        let shift_5 = if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR | COMPUTE_DNA_PACKED) {
-            map_8x16x4(v, |v| vshlq_n_u8::<5>(v))
-        } else {
-            v
-        };
-
-        if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
-            let shift_6 = map_8x16x4(v, |v| vshlq_n_u8::<6>(v));
-            high_bit = movemask_64(shift_5);
-            low_bit = movemask_64(shift_6);
-        }
-
-        if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
-            let bitpacked = vsriq_n_u8(
-                vsriq_n_u8(shift_5.3, shift_5.2, 2),
-                vsriq_n_u8(shift_5.1, shift_5.0, 2),
-                4,
-            );
-            two_bits = transmute(bitpacked);
-        }
-
-        if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
-            let lookup = map_8x16x4(v, |v| vqtbl1q_u8(LUT_ACTG, vandq_u8(v, TWO_BITS)));
-            let uppercase = map_8x16x4(v, |v| vandq_u8(v, UPPERCASE));
-            is_dna = movemask_64(map_two_8x16x4(lookup, uppercase, |v1, v2| vceqq_u8(v1, v2)));
-        }
+        let (is_dna, two_bits, high_bit, low_bit) = bitpack_dna::<CONFIG>(v);
 
         FastaBitmask {
             open_bracket,
@@ -71,6 +41,21 @@ pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
 
         let line_feeds = movemask_64(map_8x16x4(v, |v| vceqq_u8(v, LINE_FEED)));
 
+        let (is_dna, two_bits, high_bit, low_bit) = bitpack_dna::<CONFIG>(v);
+
+        FastqBitmask {
+            line_feeds,
+            is_dna,
+            two_bits,
+            high_bit,
+            low_bit,
+        }
+    }
+}
+
+#[inline(always)]
+fn bitpack_dna<const CONFIG: Config>(v: uint8x16x4_t) -> (u64, u128, u64, u64) {
+    unsafe {
         let mut is_dna = !0;
         let mut two_bits = 0;
         let mut high_bit = 0;
@@ -103,13 +88,7 @@ pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
             is_dna = movemask_64(map_two_8x16x4(lookup, uppercase, |v1, v2| vceqq_u8(v1, v2)));
         }
 
-        FastqBitmask {
-            line_feeds,
-            is_dna,
-            two_bits,
-            high_bit,
-            low_bit,
-        }
+        (is_dna, two_bits, high_bit, low_bit)
     }
 }
 

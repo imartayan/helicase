@@ -13,83 +13,13 @@ const LUT_ACTG: __m256i = unsafe { transmute(*b"A_C_T_G_________A_C_T_G_________
 pub fn extract_fasta_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastaBitmask {
     unsafe {
         let ptr = buf.as_ptr() as *const __m256i;
-        let v_buf1 = _mm256_loadu_si256(ptr);
-        let v_buf2 = _mm256_loadu_si256(ptr.add(1));
+        let v1 = _mm256_loadu_si256(ptr);
+        let v2 = _mm256_loadu_si256(ptr.add(1));
 
-        let open_bracket = u8_mask(v_buf1, v_buf2, GREATER_THAN);
-        let line_feeds = u8_mask(v_buf1, v_buf2, LINE_FEED);
+        let open_bracket = u8_mask(v1, v2, GREATER_THAN);
+        let line_feeds = u8_mask(v1, v2, LINE_FEED);
 
-        let mut is_dna = !0;
-        let mut two_bits = 0;
-        let mut high_bit = 0;
-        let mut low_bit = 0;
-
-        if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
-            let (mm_hi_1, mm_lo_1, mm_hi_2, mm_lo_2) = (
-                _mm256_movemask_epi8(_mm256_slli_epi16(v_buf1, 5)) as u32 as u64,
-                _mm256_movemask_epi8(_mm256_slli_epi16(v_buf1, 6)) as u32 as u64,
-                _mm256_movemask_epi8(_mm256_slli_epi16(v_buf2, 5)) as u32 as u64,
-                _mm256_movemask_epi8(_mm256_slli_epi16(v_buf2, 6)) as u32 as u64,
-            );
-            high_bit = mm_hi_1 | (mm_hi_2 << 32);
-            low_bit = mm_lo_1 | (mm_lo_2 << 32);
-        }
-
-        if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
-            #[cfg(all(target_feature = "bmi2", not(feature = "no-pdep")))]
-            {
-                let (mm_hi_1, mm_lo_1, mm_hi_2, mm_lo_2) = (
-                    _mm256_movemask_epi8(_mm256_slli_epi16(v_buf1, 5)) as u32 as u64,
-                    _mm256_movemask_epi8(_mm256_slli_epi16(v_buf1, 6)) as u32 as u64,
-                    _mm256_movemask_epi8(_mm256_slli_epi16(v_buf2, 5)) as u32 as u64,
-                    _mm256_movemask_epi8(_mm256_slli_epi16(v_buf2, 6)) as u32 as u64,
-                );
-                let mm_1 =
-                    _pdep_u64(mm_hi_1, 0xAAAAAAAAAAAAAAAA) | _pdep_u64(mm_lo_1, 0x5555555555555555);
-                let mm_2 =
-                    _pdep_u64(mm_hi_2, 0xAAAAAAAAAAAAAAAA) | _pdep_u64(mm_lo_2, 0x5555555555555555);
-                two_bits = (mm_1 as u128) | ((mm_2 as u128) << 64);
-            }
-            #[cfg(any(not(target_feature = "bmi2"), feature = "no-pdep"))]
-            {
-                // Adapted from https://github.com/Daniel-Liu-c0deb0t/cute-nucleotides/commit/007164bce68f671188fa5c607982fbd306112cb3
-                let (iv1, iv2) = (
-                    _mm256_permute4x64_epi64(v_buf1, 0xD8),
-                    _mm256_permute4x64_epi64(v_buf2, 0xD8),
-                );
-                let (hi_1, lo_1, hi_2, lo_2) = (
-                    _mm256_slli_epi16(iv1, 5),
-                    _mm256_slli_epi16(iv1, 6),
-                    _mm256_slli_epi16(iv2, 5),
-                    _mm256_slli_epi16(iv2, 6),
-                );
-                let (mm_hi_1, mm_lo_1, mm_hi_2, mm_lo_2) = (
-                    _mm256_movemask_epi8(_mm256_unpackhi_epi8(lo_1, hi_1)) as u32 as u64,
-                    _mm256_movemask_epi8(_mm256_unpacklo_epi8(lo_1, hi_1)) as u32 as u64,
-                    _mm256_movemask_epi8(_mm256_unpackhi_epi8(lo_2, hi_2)) as u32 as u64,
-                    _mm256_movemask_epi8(_mm256_unpacklo_epi8(lo_2, hi_2)) as u32 as u64,
-                );
-                let mm_1 = (mm_hi_1 << 32) | mm_lo_1;
-                let mm_2 = (mm_hi_2 << 32) | mm_lo_2;
-                two_bits = (mm_1 as u128) | ((mm_2 as u128) << 64);
-            }
-        }
-
-        if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
-            let mask_two_bits = _mm256_set1_epi8(0b110i8);
-            let mask_upper = _mm256_set1_epi8(0b11011111u8 as i8);
-
-            is_dna = movemask_64(
-                _mm256_cmpeq_epi8(
-                    _mm256_shuffle_epi8(LUT_ACTG, _mm256_and_si256(v_buf1, mask_two_bits)),
-                    _mm256_and_si256(v_buf1, mask_upper),
-                ),
-                _mm256_cmpeq_epi8(
-                    _mm256_shuffle_epi8(LUT_ACTG, _mm256_and_si256(v_buf2, mask_two_bits)),
-                    _mm256_and_si256(v_buf2, mask_upper),
-                ),
-            );
-        }
+        let (is_dna, two_bits, high_bit, low_bit) = bitpack_dna::<CONFIG>(v1, v2);
 
         FastaBitmask {
             open_bracket,
@@ -106,11 +36,26 @@ pub fn extract_fasta_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastaBitmask {
 pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
     unsafe {
         let ptr = buf.as_ptr() as *const __m256i;
-        let v_buf1 = _mm256_loadu_si256(ptr);
-        let v_buf2 = _mm256_loadu_si256(ptr.add(1));
+        let v1 = _mm256_loadu_si256(ptr);
+        let v2 = _mm256_loadu_si256(ptr.add(1));
 
-        let line_feeds = u8_mask(v_buf1, v_buf2, LINE_FEED);
+        let line_feeds = u8_mask(v1, v2, LINE_FEED);
 
+        let (is_dna, two_bits, high_bit, low_bit) = bitpack_dna::<CONFIG>(v1, v2);
+
+        FastqBitmask {
+            line_feeds,
+            is_dna,
+            two_bits,
+            high_bit,
+            low_bit,
+        }
+    }
+}
+
+#[inline(always)]
+fn bitpack_dna<const CONFIG: Config>(v1: __m256i, v2: __m256i) -> (u64, u128, u64, u64) {
+    unsafe {
         let mut is_dna = !0;
         let mut two_bits = 0;
         let mut high_bit = 0;
@@ -118,10 +63,10 @@ pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
 
         if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
             let (mm_hi_1, mm_lo_1, mm_hi_2, mm_lo_2) = (
-                _mm256_movemask_epi8(_mm256_slli_epi16(v_buf1, 5)) as u32 as u64,
-                _mm256_movemask_epi8(_mm256_slli_epi16(v_buf1, 6)) as u32 as u64,
-                _mm256_movemask_epi8(_mm256_slli_epi16(v_buf2, 5)) as u32 as u64,
-                _mm256_movemask_epi8(_mm256_slli_epi16(v_buf2, 6)) as u32 as u64,
+                _mm256_movemask_epi8(_mm256_slli_epi16(v1, 5)) as u32 as u64,
+                _mm256_movemask_epi8(_mm256_slli_epi16(v1, 6)) as u32 as u64,
+                _mm256_movemask_epi8(_mm256_slli_epi16(v2, 5)) as u32 as u64,
+                _mm256_movemask_epi8(_mm256_slli_epi16(v2, 6)) as u32 as u64,
             );
             high_bit = mm_hi_1 | (mm_hi_2 << 32);
             low_bit = mm_lo_1 | (mm_lo_2 << 32);
@@ -131,10 +76,10 @@ pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
             #[cfg(all(target_feature = "bmi2", not(feature = "no-pdep")))]
             {
                 let (mm_hi_1, mm_lo_1, mm_hi_2, mm_lo_2) = (
-                    _mm256_movemask_epi8(_mm256_slli_epi16(v_buf1, 5)) as u32 as u64,
-                    _mm256_movemask_epi8(_mm256_slli_epi16(v_buf1, 6)) as u32 as u64,
-                    _mm256_movemask_epi8(_mm256_slli_epi16(v_buf2, 5)) as u32 as u64,
-                    _mm256_movemask_epi8(_mm256_slli_epi16(v_buf2, 6)) as u32 as u64,
+                    _mm256_movemask_epi8(_mm256_slli_epi16(v1, 5)) as u32 as u64,
+                    _mm256_movemask_epi8(_mm256_slli_epi16(v1, 6)) as u32 as u64,
+                    _mm256_movemask_epi8(_mm256_slli_epi16(v2, 5)) as u32 as u64,
+                    _mm256_movemask_epi8(_mm256_slli_epi16(v2, 6)) as u32 as u64,
                 );
                 let mm_1 =
                     _pdep_u64(mm_hi_1, 0xAAAAAAAAAAAAAAAA) | _pdep_u64(mm_lo_1, 0x5555555555555555);
@@ -146,8 +91,8 @@ pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
             {
                 // Adapted from https://github.com/Daniel-Liu-c0deb0t/cute-nucleotides/commit/007164bce68f671188fa5c607982fbd306112cb3
                 let (iv1, iv2) = (
-                    _mm256_permute4x64_epi64(v_buf1, 0xD8),
-                    _mm256_permute4x64_epi64(v_buf2, 0xD8),
+                    _mm256_permute4x64_epi64(v1, 0xD8),
+                    _mm256_permute4x64_epi64(v2, 0xD8),
                 );
                 let (hi_1, lo_1, hi_2, lo_2) = (
                     _mm256_slli_epi16(iv1, 5),
@@ -173,23 +118,17 @@ pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
 
             is_dna = movemask_64(
                 _mm256_cmpeq_epi8(
-                    _mm256_shuffle_epi8(LUT_ACTG, _mm256_and_si256(v_buf1, mask_two_bits)),
-                    _mm256_and_si256(v_buf1, mask_upper),
+                    _mm256_shuffle_epi8(LUT_ACTG, _mm256_and_si256(v1, mask_two_bits)),
+                    _mm256_and_si256(v1, mask_upper),
                 ),
                 _mm256_cmpeq_epi8(
-                    _mm256_shuffle_epi8(LUT_ACTG, _mm256_and_si256(v_buf2, mask_two_bits)),
-                    _mm256_and_si256(v_buf2, mask_upper),
+                    _mm256_shuffle_epi8(LUT_ACTG, _mm256_and_si256(v2, mask_two_bits)),
+                    _mm256_and_si256(v2, mask_upper),
                 ),
             );
         }
 
-        FastqBitmask {
-            line_feeds,
-            is_dna,
-            two_bits,
-            high_bit,
-            low_bit,
-        }
+        (is_dna, two_bits, high_bit, low_bit)
     }
 }
 
@@ -201,11 +140,11 @@ fn movemask_64(v1: __m256i, v2: __m256i) -> u64 {
 }
 
 #[inline(always)]
-pub fn u8_mask(v_buf: __m256i, v_buf2: __m256i, v_c: __m256i) -> u64 {
+pub fn u8_mask(v1: __m256i, v2: __m256i, vc: __m256i) -> u64 {
     unsafe {
-        let cmp_c = _mm256_cmpeq_epi8(v_buf, v_c);
-        let cmp_c2 = _mm256_cmpeq_epi8(v_buf2, v_c);
-        let a = _mm256_movemask_epi8(cmp_c) as u32 as u64;
+        let cmp_c1 = _mm256_cmpeq_epi8(v1, vc);
+        let cmp_c2 = _mm256_cmpeq_epi8(v2, vc);
+        let a = _mm256_movemask_epi8(cmp_c1) as u32 as u64;
         let b = _mm256_movemask_epi8(cmp_c2) as u32 as u64;
         a | (b << 32)
     }

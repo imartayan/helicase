@@ -122,21 +122,17 @@ fn bitpack_dna<const CONFIG: Config>(
                     _mm_slli_epi16(v4, 6),
                 );
                 let (mm_hi_1, mm_lo_1, mm_hi_2, mm_lo_2, mm_hi_3, mm_lo_3, mm_hi_4, mm_lo_4) = (
-                    _mm_movemask_epi8(_mm_unpackhi_epi8(lo_1, hi_1)) as u32 as u64,
-                    _mm_movemask_epi8(_mm_unpacklo_epi8(lo_1, hi_1)) as u32 as u64,
-                    _mm_movemask_epi8(_mm_unpackhi_epi8(lo_2, hi_2)) as u32 as u64,
-                    _mm_movemask_epi8(_mm_unpacklo_epi8(lo_2, hi_2)) as u32 as u64,
-                    _mm_movemask_epi8(_mm_unpackhi_epi8(lo_3, hi_3)) as u32 as u64,
-                    _mm_movemask_epi8(_mm_unpacklo_epi8(lo_3, hi_3)) as u32 as u64,
-                    _mm_movemask_epi8(_mm_unpackhi_epi8(lo_4, hi_4)) as u32 as u64,
-                    _mm_movemask_epi8(_mm_unpacklo_epi8(lo_4, hi_4)) as u32 as u64,
+                    _mm_movemask_epi8(_mm_unpackhi_epi8(lo_1, hi_1)) as u16 as u64,
+                    _mm_movemask_epi8(_mm_unpacklo_epi8(lo_1, hi_1)) as u16 as u64,
+                    _mm_movemask_epi8(_mm_unpackhi_epi8(lo_2, hi_2)) as u16 as u64,
+                    _mm_movemask_epi8(_mm_unpacklo_epi8(lo_2, hi_2)) as u16 as u64,
+                    _mm_movemask_epi8(_mm_unpackhi_epi8(lo_3, hi_3)) as u16 as u64,
+                    _mm_movemask_epi8(_mm_unpacklo_epi8(lo_3, hi_3)) as u16 as u64,
+                    _mm_movemask_epi8(_mm_unpackhi_epi8(lo_4, hi_4)) as u16 as u64,
+                    _mm_movemask_epi8(_mm_unpacklo_epi8(lo_4, hi_4)) as u16 as u64,
                 );
-                let mm_hi_12 = mm_hi_1 | (mm_hi_2 << 16);
-                let mm_lo_12 = mm_lo_1 | (mm_lo_2 << 16);
-                let mm_hi_34 = mm_hi_3 | (mm_hi_4 << 16);
-                let mm_lo_34 = mm_lo_3 | (mm_lo_4 << 16);
-                let mm_1 = (mm_hi_12 << 32) | mm_lo_12;
-                let mm_2 = (mm_hi_34 << 32) | mm_lo_34;
+                let mm_1 = mm_lo_1 | (mm_hi_1 << 16) | (mm_lo_2 << 32) | (mm_hi_2 << 48);
+                let mm_2 = mm_lo_3 | (mm_hi_3 << 16) | (mm_lo_4 << 32) | (mm_hi_4 << 48);
                 two_bits = (mm_1 as u128) | ((mm_2 as u128) << 64);
             }
         }

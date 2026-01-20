@@ -12,6 +12,7 @@ pub use fastq::*;
 pub use fastx::*;
 pub use traits::*;
 
+#[derive(Debug)]
 pub enum Format {
     Fasta,
     Fastq,

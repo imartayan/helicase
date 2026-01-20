@@ -89,6 +89,13 @@ impl ParserOptions {
         Self(self.0 & !COMPUTE_QUALITY)
     }
 
+    /// Compute the DNA length 
+    #[inline(always)]
+    pub const fn compute_dna_len(self) -> Self {
+        Self(self.0 | COMPUTE_DNA_LEN)
+    }
+
+
     /// Disable the computation of DNA.
     #[inline(always)]
     pub const fn ignore_dna(self) -> Self {

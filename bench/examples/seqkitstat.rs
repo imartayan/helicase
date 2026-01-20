@@ -3,6 +3,8 @@ use helicase::*;
 use std::cmp::{max, min};
 use std::path::PathBuf;
 
+use rayon::prelude::*;
+
 fn human_readable(n: f64) -> String {
     if n < 1_000.0 {
         format!("{:.2}", n)
@@ -38,8 +40,11 @@ fn print_table(table: &[Vec<String>]) {
     }
 }
 
-const MINIMAL: Config = ParserOptions::default().ignore_headers().ignore_dna().compute_dna_len().config();
-
+const MINIMAL: Config = ParserOptions::default()
+    .ignore_headers()
+    .ignore_dna()
+    .compute_dna_len()
+    .config();
 
 fn main() {
     let mut table: Vec<Vec<String>> = vec![];
@@ -54,48 +59,51 @@ fn main() {
         "max_len".to_string(),
     ];
     table.push(row);
-    for arg in std::env::args().skip(1) {
-        let path = PathBuf::from(&arg);
-        if path.exists() {
-            let mut parser =
-                FastxParser::<MINIMAL>::from_file_mmap(&path).expect("Cannot open file");
-            let mut min_size = usize::MAX;
-            let mut max_size = 0;
-            let mut total_size = 0;
-            let mut record_nb = 0;
-            let format = parser.format();
-            while parser.next().is_some() {
-                record_nb += 1;
-                let dna_len = parser.get_dna_len();
-                total_size += dna_len;
-                min_size = min(min_size, dna_len);
-                max_size = max(max_size, dna_len);
+    let paths: Vec<_> = std::env::args().skip(1).collect();
+    let mut rows: Vec<_> = paths
+        .par_iter()
+        .map(|arg| {
+            let path = PathBuf::from(&arg);
+            if path.exists() {
+                let mut parser =
+                    FastxParser::<MINIMAL>::from_file(&path).expect("Cannot open file");
+                let mut min_size = usize::MAX;
+                let mut max_size = 0;
+                let mut total_size = 0;
+                let mut record_nb = 0;
+                let format = parser.format();
+                while parser.next().is_some() {
+                    record_nb += 1;
+                    let dna_len = parser.get_dna_len();
+                    total_size += dna_len;
+                    min_size = min(min_size, dna_len);
+                    max_size = max(max_size, dna_len);
+                }
+                let avg = (total_size as f64) / (record_nb as f64);
+                vec![
+                    format!("{}", path.display()),
+                    format!("{:?}", format),
+                    "?".to_string(),
+                    human_readable(record_nb as f64),
+                    human_readable(total_size as f64),
+                    human_readable(min_size as f64),
+                    human_readable(avg),
+                    human_readable(max_size as f64),
+                ]
+            } else {
+                vec![
+                    format!("{}", path.display()),
+                    format!("{}", "ERR"),
+                    "".to_string(),
+                    "".to_string(),
+                    "".to_string(),
+                    "".to_string(),
+                    "".to_string(),
+                    "".to_string(),
+                ]
             }
-            let avg = (total_size as f64) / (record_nb as f64);
-            let row = vec![
-                format!("{}", path.display()),
-                format!("{:?}", format),
-                "?".to_string(),
-                human_readable(record_nb as f64),
-                human_readable(total_size as f64),
-                human_readable(min_size as f64),
-                human_readable(avg),
-                human_readable(max_size as f64),
-            ];
-            table.push(row);
-        } else {
-            let row = vec![
-                format!("{}", path.display()),
-                format!("{}", "ERR" ),
-                "".to_string(),
-                "".to_string(),
-                "".to_string(),
-                "".to_string(),
-                "".to_string(),
-                "".to_string(),
-            ];
-            table.push(row);
-        }
-    }
+        })
+        .collect();
+    table.append(&mut rows);
     print_table(&table);
 }

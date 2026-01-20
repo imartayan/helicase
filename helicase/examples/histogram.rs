@@ -25,7 +25,7 @@ fn main() {
         let (high_bits, hi) = cdna.high_bits();
         let (low_bits, lo) = cdna.low_bits();
         let rem = cdna.len() % 64;
-        for (&hi, &lo) in high_bits.into_iter().zip(low_bits) {
+        for (&hi, &lo) in high_bits.iter().zip(low_bits) {
             num_a += (!hi & !lo).count_ones() as usize;
             num_c += (!hi & lo).count_ones() as usize;
             num_t += (hi & !lo).count_ones() as usize;

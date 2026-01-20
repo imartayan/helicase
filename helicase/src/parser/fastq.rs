@@ -6,6 +6,7 @@ use crate::lexer::*;
 
 use core::mem::swap;
 use core::ops::Range;
+use std::io;
 
 /// A parser for the [FASTQ format](https://en.wikipedia.org/wiki/FASTQ_format).
 pub struct FastqParser<'a, const CONFIG: Config, I: InputData<'a>> {
@@ -59,8 +60,12 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
 impl<'a, const CONFIG: Config, I: InputData<'a>> FromInputData<'a, I>
     for FastqParser<'a, CONFIG, I>
 {
-    fn from_input(input: I) -> Self {
-        Self::from_lexer(FastqLexer::from_input(input))
+    fn from_input(input: I) -> io::Result<Self> {
+        let lexer = FastqLexer::from_input(input)?;
+        if lexer.input.first_byte() != b'@' {
+            return Err(io::Error::other("Invalid record start, expected '@'"));
+        }
+        Ok(Self::from_lexer(lexer))
     }
 }
 
@@ -554,7 +559,7 @@ mod tests {
 
     #[test]
     fn test_header() {
-        let mut f = FastqParser::<CONFIG_HEADER, _>::from_slice(FASTQ);
+        let mut f = FastqParser::<CONFIG_HEADER, _>::from_slice(FASTQ).unwrap();
         let mut res = Vec::new();
         let mut c = 0;
         while let Some(_) = f.next() {
@@ -569,7 +574,7 @@ mod tests {
 
     #[test]
     fn test_quality() {
-        let mut f = FastqParser::<CONFIG_QUALITY, _>::from_slice(FASTQ);
+        let mut f = FastqParser::<CONFIG_QUALITY, _>::from_slice(FASTQ).unwrap();
         let mut res = Vec::new();
         let mut c = 0;
         while let Some(_) = f.next() {
@@ -584,7 +589,7 @@ mod tests {
 
     #[test]
     fn test_dna_string() {
-        let mut f = FastqParser::<CONFIG_STRING, _>::from_slice(FASTQ);
+        let mut f = FastqParser::<CONFIG_STRING, _>::from_slice(FASTQ).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(String::from_utf8(f.get_dna_string_owned()).unwrap());
@@ -594,7 +599,7 @@ mod tests {
             vec!["TTTCTtaAAAAAGAAAAACAAN", "CTCTTANNAAACAAAnAGCTTT", "CCAC"]
         );
 
-        let mut f = FastqParser::<CONFIG_STRING_ACTG, _>::from_slice(FASTQ);
+        let mut f = FastqParser::<CONFIG_STRING_ACTG, _>::from_slice(FASTQ).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(String::from_utf8(f.get_dna_string_owned()).unwrap());
@@ -610,7 +615,7 @@ mod tests {
             ]
         );
 
-        let mut f = FastqParser::<CONFIG_STRING_ACTG_MERGE, _>::from_slice(FASTQ);
+        let mut f = FastqParser::<CONFIG_STRING_ACTG_MERGE, _>::from_slice(FASTQ).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(String::from_utf8(f.get_dna_string_owned()).unwrap());
@@ -623,7 +628,7 @@ mod tests {
 
     #[test]
     fn test_dna_columnar() {
-        let mut f = FastqParser::<CONFIG_COLUMNAR, _>::from_slice(FASTQ);
+        let mut f = FastqParser::<CONFIG_COLUMNAR, _>::from_slice(FASTQ).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(format!("{}", f.get_dna_columnar_owned()));
@@ -639,7 +644,7 @@ mod tests {
             ]
         );
 
-        let mut f = FastqParser::<CONFIG_COLUMNAR_MERGE, _>::from_slice(FASTQ);
+        let mut f = FastqParser::<CONFIG_COLUMNAR_MERGE, _>::from_slice(FASTQ).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(format!("{}", f.get_dna_columnar_owned()));
@@ -652,7 +657,7 @@ mod tests {
 
     #[test]
     fn test_dna_packed() {
-        let mut f = FastqParser::<CONFIG_PACKED, _>::from_slice(FASTQ);
+        let mut f = FastqParser::<CONFIG_PACKED, _>::from_slice(FASTQ).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(format!("{}", f.get_dna_packed_owned()));
@@ -668,7 +673,7 @@ mod tests {
             ]
         );
 
-        let mut f = FastqParser::<CONFIG_PACKED_MERGE, _>::from_slice(FASTQ);
+        let mut f = FastqParser::<CONFIG_PACKED_MERGE, _>::from_slice(FASTQ).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(format!("{}", f.get_dna_packed_owned()));

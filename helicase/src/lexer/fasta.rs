@@ -6,6 +6,7 @@ use crate::simd::extract_fasta_bitmask;
 
 use core::fmt;
 use core::marker::PhantomData;
+use std::io;
 
 pub(crate) struct FastaBitmask {
     pub open_bracket: u64,
@@ -38,12 +39,12 @@ pub struct FastaLexer<'a, const CONFIG: Config, I: InputData<'a>> {
 impl<'a, const CONFIG: Config, I: InputData<'a>> FromInputData<'a, I>
     for FastaLexer<'a, CONFIG, I>
 {
-    fn from_input(input: I) -> Self {
-        Self {
+    fn from_input(input: I) -> io::Result<Self> {
+        Ok(Self {
             input,
             carry: Carry::new(false),
             _phantom: PhantomData,
-        }
+        })
     }
 }
 
@@ -116,6 +117,7 @@ mod tests {
     #[inline]
     fn parse_and_format(fasta: &str) -> String {
         let f = FastaLexer::<CONFIG_COLUMNAR, _>::from_slice(fasta.as_bytes())
+            .unwrap()
             .next()
             .unwrap();
         format!("{f}")

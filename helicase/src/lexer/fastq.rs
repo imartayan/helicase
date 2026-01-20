@@ -4,6 +4,7 @@ use crate::input::*;
 use crate::simd::extract_fastq_bitmask;
 
 use core::marker::PhantomData;
+use std::io;
 
 pub(crate) struct FastqBitmask {
     pub line_feeds: u64,
@@ -33,11 +34,11 @@ pub struct FastqLexer<'a, const CONFIG: Config, I: InputData<'a>> {
 impl<'a, const CONFIG: Config, I: InputData<'a>> FromInputData<'a, I>
     for FastqLexer<'a, CONFIG, I>
 {
-    fn from_input(input: I) -> Self {
-        Self {
+    fn from_input(input: I) -> io::Result<Self> {
+        Ok(Self {
             input,
             _phantom: PhantomData,
-        }
+        })
     }
 }
 

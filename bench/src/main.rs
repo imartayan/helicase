@@ -179,7 +179,7 @@ fn run_bench<M: Measurement>(args: &Args) {
     if !args.no_slice && !compressed {
         m.start();
         for _ in 0..args.repeat {
-            let parser = FastxParser::<MINIMAL>::from_slice(data);
+            let parser = FastxParser::<MINIMAL>::from_slice(data).unwrap();
             num_records = 0;
             for _ in parser {
                 num_records += 1;
@@ -195,7 +195,7 @@ fn run_bench<M: Measurement>(args: &Args) {
 
         m.start();
         for _ in 0..args.repeat {
-            let mut parser = FastxParser::<DNA_LEN>::from_slice(data);
+            let mut parser = FastxParser::<DNA_LEN>::from_slice(data).unwrap();
             dna_len = 0;
             parser.next();
             dna_len += parser.get_dna_len();
@@ -206,7 +206,7 @@ fn run_bench<M: Measurement>(args: &Args) {
 
         m.start();
         for _ in 0..args.repeat {
-            let mut parser = FastxParser::<DNA_STRING>::from_slice(data);
+            let mut parser = FastxParser::<DNA_STRING>::from_slice(data).unwrap();
             dna_len = 0;
             while let Some(_) = parser.next() {
                 dna_len += parser.get_dna_string().len();
@@ -218,7 +218,7 @@ fn run_bench<M: Measurement>(args: &Args) {
 
         m.start();
         for _ in 0..args.repeat {
-            let mut parser = FastxParser::<DNA_PACKED>::from_slice(data);
+            let mut parser = FastxParser::<DNA_PACKED>::from_slice(data).unwrap();
             dna_len = 0;
             while let Some(_) = parser.next() {
                 dna_len += parser.get_dna_packed().len();
@@ -230,7 +230,7 @@ fn run_bench<M: Measurement>(args: &Args) {
 
         m.start();
         for _ in 0..args.repeat {
-            let mut parser = FastxParser::<DNA_COLUMNAR>::from_slice(data);
+            let mut parser = FastxParser::<DNA_COLUMNAR>::from_slice(data).unwrap();
             dna_len = 0;
             while let Some(_) = parser.next() {
                 dna_len += parser.get_dna_columnar().len();

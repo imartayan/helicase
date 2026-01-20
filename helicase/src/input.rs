@@ -69,7 +69,7 @@ pub trait InputData<'a>: Iterator<Item = &'a [u8]> {
 
 pub trait FromInputData<'a, I: InputData<'a>>: Sized {
     /// Build the struct from a type implementing [`InputData`].
-    fn from_input(input: I) -> Self;
+    fn from_input(input: I) -> io::Result<Self>;
 }
 
 /// Slice input.
@@ -154,7 +154,7 @@ pub trait FromSlice<'a>: FromInputData<'a, SliceInput<'a>> {
     /// Build the struct from a slice.
     /// It supports parallel processing, but not transparent decompression.
     #[inline(always)]
-    fn from_slice(data: &'a [u8]) -> Self {
+    fn from_slice(data: &'a [u8]) -> io::Result<Self> {
         Self::from_input(SliceInput::new(data))
     }
 }
@@ -226,7 +226,7 @@ pub trait FromMmap<'a>: FromInputData<'a, MmapInput<'a>> {
     /// It supports parallel processing, but not transparent decompression.
     #[inline(always)]
     fn from_file_mmap<P: AsRef<Path>>(path: P) -> io::Result<Self> {
-        Ok(Self::from_input(MmapInput::new(path)?))
+        Self::from_input(MmapInput::new(path)?)
     }
 }
 
@@ -293,7 +293,7 @@ pub trait FromRamFile: FromInputData<'static, RamFileInput> {
     /// It supports parallel processing, but not transparent decompression.
     #[inline(always)]
     fn from_file_in_ram<P: AsRef<Path>>(path: P) -> io::Result<Self> {
-        Ok(Self::from_input(RamFileInput::new(path)?))
+        Self::from_input(RamFileInput::new(path)?)
     }
 }
 
@@ -429,7 +429,7 @@ pub trait FromReader<'a, R: Read + Send + 'a>: FromInputData<'a, ReaderInput<'a,
     /// Build the struct from a reader.
     /// It supports transparent decompression, but not parallel processing.
     #[inline(always)]
-    fn from_reader(reader: R) -> Self {
+    fn from_reader(reader: R) -> io::Result<Self> {
         Self::from_input(ReaderInput::new(reader))
     }
 }
@@ -503,7 +503,7 @@ pub trait FromFile: FromInputData<'static, FileInput> {
     /// It supports transparent decompression, but not parallel processing.
     #[inline(always)]
     fn from_file<P: AsRef<Path>>(path: P) -> io::Result<Self> {
-        Ok(Self::from_input(FileInput::new(path)?))
+        Self::from_input(FileInput::new(path)?)
     }
 }
 
@@ -576,7 +576,7 @@ pub trait FromStdin: FromInputData<'static, StdinInput> {
     /// Build the struct from stdin.
     /// It supports transparent decompression, but not parallel processing.
     #[inline(always)]
-    fn from_stdin() -> Self {
+    fn from_stdin() -> io::Result<Self> {
         Self::from_input(StdinInput::new())
     }
 }

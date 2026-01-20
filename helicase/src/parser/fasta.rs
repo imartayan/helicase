@@ -6,6 +6,7 @@ use crate::lexer::*;
 
 use core::mem::swap;
 use core::ops::Range;
+use std::io;
 
 enum State {
     Start,
@@ -66,8 +67,12 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
 impl<'a, const CONFIG: Config, I: InputData<'a>> FromInputData<'a, I>
     for FastaParser<'a, CONFIG, I>
 {
-    fn from_input(input: I) -> Self {
-        Self::from_lexer(FastaLexer::from_input(input))
+    fn from_input(input: I) -> io::Result<Self> {
+        let lexer = FastaLexer::from_input(input)?;
+        if lexer.input.first_byte() != b'>' {
+            return Err(io::Error::other("Invalid record start, expected '>'"));
+        }
+        Ok(Self::from_lexer(lexer))
     }
 }
 
@@ -532,7 +537,7 @@ mod tests {
 
     #[test]
     fn test_header() {
-        let mut f = FastaParser::<CONFIG_HEADER, _>::from_slice(FASTA);
+        let mut f = FastaParser::<CONFIG_HEADER, _>::from_slice(FASTA).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(String::from_utf8(f.get_header_owned()).unwrap());
@@ -542,7 +547,7 @@ mod tests {
 
     #[test]
     fn test_dna_string() {
-        let mut f = FastaParser::<CONFIG_STRING, _>::from_slice(FASTA);
+        let mut f = FastaParser::<CONFIG_STRING, _>::from_slice(FASTA).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(String::from_utf8(f.get_dna_string_owned()).unwrap());
@@ -553,7 +558,7 @@ mod tests {
         );
         println!();
 
-        let mut f = FastaParser::<CONFIG_STRING_ACTG, _>::from_slice(FASTA);
+        let mut f = FastaParser::<CONFIG_STRING_ACTG, _>::from_slice(FASTA).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(String::from_utf8(f.get_dna_string_owned()).unwrap());
@@ -569,7 +574,7 @@ mod tests {
             ]
         );
 
-        let mut f = FastaParser::<CONFIG_STRING_ACTG_MERGE, _>::from_slice(FASTA);
+        let mut f = FastaParser::<CONFIG_STRING_ACTG_MERGE, _>::from_slice(FASTA).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(String::from_utf8(f.get_dna_string_owned()).unwrap());
@@ -582,7 +587,7 @@ mod tests {
 
     #[test]
     fn test_dna_columnar() {
-        let mut f = FastaParser::<CONFIG_COLUMNAR, _>::from_slice(FASTA);
+        let mut f = FastaParser::<CONFIG_COLUMNAR, _>::from_slice(FASTA).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(format!("{}", f.get_dna_columnar_owned()));
@@ -598,7 +603,7 @@ mod tests {
             ]
         );
 
-        let mut f = FastaParser::<CONFIG_COLUMNAR_MERGE, _>::from_slice(FASTA);
+        let mut f = FastaParser::<CONFIG_COLUMNAR_MERGE, _>::from_slice(FASTA).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(format!("{}", f.get_dna_columnar_owned()));
@@ -611,7 +616,7 @@ mod tests {
 
     #[test]
     fn test_dna_packed() {
-        let mut f = FastaParser::<CONFIG_PACKED, _>::from_slice(FASTA);
+        let mut f = FastaParser::<CONFIG_PACKED, _>::from_slice(FASTA).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(format!("{}", f.get_dna_packed_owned()));
@@ -627,7 +632,7 @@ mod tests {
             ]
         );
 
-        let mut f = FastaParser::<CONFIG_PACKED_MERGE, _>::from_slice(FASTA);
+        let mut f = FastaParser::<CONFIG_PACKED_MERGE, _>::from_slice(FASTA).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(format!("{}", f.get_dna_packed_owned()));

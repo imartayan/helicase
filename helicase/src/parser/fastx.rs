@@ -2,6 +2,7 @@ use super::*;
 use crate::config::*;
 use crate::dna_format::*;
 use crate::input::*;
+use std::io;
 
 /// A wrapper for [`FastaParser`] / [`FastqParser`] detecting the format at runtime.
 pub struct FastxParser<'a, const CONFIG: Config>(Box<dyn ParserIter + 'a>);
@@ -9,11 +10,13 @@ pub struct FastxParser<'a, const CONFIG: Config>(Box<dyn ParserIter + 'a>);
 impl<'a, const CONFIG: Config, I: InputData<'a> + 'a> FromInputData<'a, I>
     for FastxParser<'a, CONFIG>
 {
-    fn from_input(input: I) -> Self {
+    fn from_input(input: I) -> io::Result<Self> {
         match input.first_byte() {
-            b'>' => Self(Box::new(FastaParser::<CONFIG, I>::from_input(input))),
-            b'@' => Self(Box::new(FastqParser::<CONFIG, I>::from_input(input))),
-            _ => panic!("Unknow input format"),
+            b'>' => Ok(Self(Box::new(FastaParser::<CONFIG, I>::from_input(input)?))),
+            b'@' => Ok(Self(Box::new(FastqParser::<CONFIG, I>::from_input(input)?))),
+            _ => Err(io::Error::other(
+                "Invalid record start, expected '>' or '@'",
+            )),
         }
     }
 }

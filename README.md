@@ -8,9 +8,14 @@ It is designed for three main goals: being highly configurable, handling non-ACT
 
 ## Requirements
 
-This library requires AVX2 or NEON instruction sets, make sure to enable `target-cpu=native` when using it:
+This library requires AVX2, SSE3 or NEON instruction sets, make sure to enable `target-cpu=native` when using it:
 ``` sh
 RUSTFLAGS="-C target-cpu=native" cargo run --release
+```
+
+Note: if your CPU has a bad support for the [PDEP instruction](https://en.wikipedia.org/wiki/X86_Bit_manipulation_instruction_set#Parallel_bit_deposit_and_extract) (e.g. AMD CPUs prior to 2020), it is recommended to use the `no-pdep` [feature](#crate-features):
+``` sh
+RUSTFLAGS="-C target-cpu=native" cargo run --release -F no-pdep
 ```
 
 ## Usage
@@ -114,6 +119,12 @@ This library supports transparent file decompression using [deko](https://github
 The [PackedDNA format](#bitpacked-dna-formats) is compatible with [packed-seq](https://github.com/rust-seq/packed-seq) and can be converted when the `packed-seq` feature is enabled (disabled by default).
 
 This can be useful for [hashing *k*-mers](https://github.com/rust-seq/seq-hash) or [computing minimizers & syncmers](https://github.com/rust-seq/simd-minimizers).
+
+### No PDEP
+
+By default, this library uses [PDEP](https://en.wikipedia.org/wiki/X86_Bit_manipulation_instruction_set#Parallel_bit_deposit_and_extract) to compute the [PackedDNA format](#bitpacked-dna-formats).
+However, this instruction can be very slow on some CPUs (especially AMD CPUs prior to 2020).
+If you want an efficient implementation for these CPUs, we recommend using the `no-pdep` feature.
 
 ## Benchmarks
 

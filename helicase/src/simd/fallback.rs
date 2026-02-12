@@ -12,6 +12,9 @@ pub fn extract_fasta_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastaBitmask {
     let mut two_bits = 0;
     let mut high_bit = 0;
     let mut low_bit = 0;
+    let mut mask_actg = 0;
+    let mut mask_non_actg = 0;
+    let mut mask_n = 0;
 
     for (i, &x) in buf.iter().enumerate().take(64) {
         let bit = 1 << i;
@@ -27,12 +30,21 @@ pub fn extract_fasta_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastaBitmask {
             two_bits |= ((x & 0b110) as u128) << (2 * i).wrapping_sub(1);
         }
 
-        if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
-            is_dna |= if (x & UPPERCASE) == LUT_ACTG[(x & 0b110) as usize] {
+        if flag_is_set(CONFIG, SPLIT_NON_ACTG | COMPUTE_MASK_NON_ACTG) {
+            mask_actg |= if (x & UPPERCASE) == LUT_ACTG[(x & 0b110) as usize] {
                 bit
             } else {
                 0
             };
+            if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
+                is_dna = mask_actg;
+            }
+            if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
+                mask_non_actg = !mask_actg;
+            }
+            if flag_is_set(CONFIG, COMPUTE_MASK_N) {
+                mask_n |= if x == b'N' { bit } else { 0 };
+            }
         }
     }
 
@@ -43,6 +55,8 @@ pub fn extract_fasta_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastaBitmask {
         two_bits,
         high_bit,
         low_bit,
+        mask_non_actg,
+        mask_n,
     }
 }
 
@@ -53,6 +67,9 @@ pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
     let mut two_bits = 0;
     let mut high_bit = 0;
     let mut low_bit = 0;
+    let mut mask_actg = 0;
+    let mut mask_non_actg = 0;
+    let mut mask_n = 0;
 
     for (i, &x) in buf.iter().enumerate().take(64) {
         let bit = 1 << i;
@@ -67,12 +84,21 @@ pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
             two_bits |= ((x & 0b110) as u128) << (2 * i).wrapping_sub(1);
         }
 
-        if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
-            is_dna |= if (x & UPPERCASE) == LUT_ACTG[(x & 0b110) as usize] {
+        if flag_is_set(CONFIG, SPLIT_NON_ACTG | COMPUTE_MASK_NON_ACTG) {
+            mask_actg |= if (x & UPPERCASE) == LUT_ACTG[(x & 0b110) as usize] {
                 bit
             } else {
                 0
             };
+            if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
+                is_dna = mask_actg;
+            }
+            if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
+                mask_non_actg = !mask_actg;
+            }
+            if flag_is_set(CONFIG, COMPUTE_MASK_N) {
+                mask_n |= if x == b'N' { bit } else { 0 };
+            }
         }
     }
 
@@ -82,5 +108,7 @@ pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
         two_bits,
         high_bit,
         low_bit,
+        mask_non_actg,
+        mask_n,
     }
 }

@@ -88,6 +88,26 @@ impl<'a, const CONFIG: Config> Parser for FastxParser<'a, CONFIG> {
     }
 
     #[inline(always)]
+    fn get_mask_non_actg(&self) -> &BitMask {
+        self.0.get_mask_non_actg()
+    }
+
+    #[inline(always)]
+    fn get_mask_non_actg_owned(&mut self) -> BitMask {
+        self.0.get_mask_non_actg_owned()
+    }
+
+    #[inline(always)]
+    fn get_mask_n(&self) -> &BitMask {
+        self.0.get_mask_n()
+    }
+
+    #[inline(always)]
+    fn get_mask_n_owned(&mut self) -> BitMask {
+        self.0.get_mask_n_owned()
+    }
+
+    #[inline(always)]
     fn get_dna_len(&self) -> usize {
         self.0.get_dna_len()
     }

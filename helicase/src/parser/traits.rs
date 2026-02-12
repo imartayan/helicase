@@ -61,6 +61,20 @@ pub trait Parser {
         self.get_dna_packed_owned().into_packed_seq_vec()
     }
 
+    /// Get a reference to the bitmask marking non-ACTG bases.
+    fn get_mask_non_actg(&self) -> &BitMask;
+
+    /// Get an owned version of the bitmask marking non-ACTG bases.
+    /// This will trigger a new allocation.
+    fn get_mask_non_actg_owned(&mut self) -> BitMask;
+
+    /// Get a reference to the bitmask marking non-ACTG bases.
+    fn get_mask_n(&self) -> &BitMask;
+
+    /// Get an owned version of the bitmask marking non-ACTG bases.
+    /// This will trigger a new allocation.
+    fn get_mask_n_owned(&mut self) -> BitMask;
+
     /// Get the length of the current sequence.
     fn get_dna_len(&self) -> usize;
 

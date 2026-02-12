@@ -12,6 +12,8 @@ pub(crate) struct FastqBitmask {
     pub two_bits: u128,
     pub high_bit: u64,
     pub low_bit: u64,
+    pub mask_non_actg: u64,
+    pub mask_n: u64,
 }
 
 #[derive(Default)]
@@ -22,6 +24,8 @@ pub struct FastqChunk {
     pub two_bits: u128,
     pub high_bit: u64,
     pub low_bit: u64,
+    pub mask_non_actg: u64,
+    pub mask_n: u64,
 }
 
 impl Chunk for FastqChunk {}
@@ -65,6 +69,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqLexer<'a, CON
                 two_bits: mask.two_bits,
                 high_bit: mask.high_bit,
                 low_bit: mask.low_bit,
+                mask_non_actg: mask.mask_non_actg & !mask.line_feeds,
+                mask_n: mask.mask_n,
             }
         })
     }

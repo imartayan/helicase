@@ -32,6 +32,8 @@ pub struct FastaParser<'a, const CONFIG: Config, I: InputData<'a>> {
     cur_dna_string: Vec<u8>,
     cur_dna_columnar: ColumnarDNA,
     cur_dna_packed: PackedDNA,
+    cur_mask_non_actg: BitMask,
+    cur_mask_n: BitMask,
     dna_len: usize,
 }
 
@@ -59,6 +61,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             cur_dna_string: Vec::new(),
             cur_dna_columnar: ColumnarDNA::new(),
             cur_dna_packed: PackedDNA::new(),
+            cur_mask_non_actg: BitMask::new(),
+            cur_mask_n: BitMask::new(),
             dna_len: 0,
         }
     }
@@ -100,6 +104,12 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastaParser<'a, CONF
         }
         if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
             self.cur_dna_packed.clear();
+        }
+        if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
+            self.cur_mask_non_actg.clear();
+        }
+        if flag_is_set(CONFIG, COMPUTE_MASK_N) {
+            self.cur_mask_n.clear();
         }
         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
             self.dna_len = 0;
@@ -197,6 +207,42 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastaParser<'a, CONF
         }
         let mut res = PackedDNA::with_capacity(self.cur_dna_packed.capacity());
         swap(&mut res, &mut self.cur_dna_packed);
+        res
+    }
+
+    #[inline(always)]
+    fn get_mask_non_actg(&self) -> &BitMask {
+        if flag_is_not_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
+            panic!("Parser config error: mask_non_actg is not enabled")
+        }
+        &self.cur_mask_non_actg
+    }
+
+    #[inline(always)]
+    fn get_mask_non_actg_owned(&mut self) -> BitMask {
+        if flag_is_not_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
+            panic!("Parser config error: mask_non_actg is not enabled")
+        }
+        let mut res = BitMask::with_capacity(self.cur_mask_non_actg.capacity());
+        swap(&mut res, &mut self.cur_mask_non_actg);
+        res
+    }
+
+    #[inline(always)]
+    fn get_mask_n(&self) -> &BitMask {
+        if flag_is_not_set(CONFIG, COMPUTE_MASK_N) {
+            panic!("Parser config error: mask_n is not enabled")
+        }
+        &self.cur_mask_n
+    }
+
+    #[inline(always)]
+    fn get_mask_n_owned(&mut self) -> BitMask {
+        if flag_is_not_set(CONFIG, COMPUTE_MASK_N) {
+            panic!("Parser config error: mask_n is not enabled")
+        }
+        let mut res = BitMask::with_capacity(self.cur_mask_n.capacity());
+        swap(&mut res, &mut self.cur_mask_n);
         res
     }
 
@@ -331,6 +377,18 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
                     128 - 2 * self.pos_in_block,
                 );
             }
+            if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
+                self.cur_mask_non_actg.append(
+                    self.block.mask_non_actg >> self.pos_in_block,
+                    64 - self.pos_in_block,
+                );
+            }
+            if flag_is_set(CONFIG, COMPUTE_MASK_N) {
+                self.cur_mask_n.append(
+                    self.block.mask_n >> self.pos_in_block,
+                    64 - self.pos_in_block,
+                );
+            }
             if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
                 self.dna_len += self.block.len - self.pos_in_block;
             }
@@ -362,6 +420,18 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             self.cur_dna_packed.append(
                 self.block.two_bits >> (2 * first_pos),
                 2 * (self.pos_in_block - first_pos),
+            );
+        }
+        if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
+            self.cur_mask_non_actg.append(
+                self.block.mask_non_actg >> first_pos,
+                self.pos_in_block - first_pos,
+            );
+        }
+        if flag_is_set(CONFIG, COMPUTE_MASK_N) {
+            self.cur_mask_n.append(
+                self.block.mask_n >> first_pos,
+                self.pos_in_block - first_pos,
             );
         }
         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {

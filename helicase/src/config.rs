@@ -31,13 +31,8 @@ pub mod advanced {
     pub const RETURN_DNA_CHUNK: Config = 1 << 8;
     pub const MERGE_DNA_CHUNKS: Config = 1 << 9;
     pub const MERGE_RECORDS: Config = 1 << 10;
-    // pub const RETURN_START_HEADER: Config = 1 << 6;
-    // pub const RETURN_END_HEADER: Config = 1 << 7;
-    // pub const RETURN_START_DNA_CHUNK: Config = 1 << 8;
-    // pub const RETURN_END_DNA_CHUNK: Config = 1 << 9;
-    // pub const RETURN_START_QUALITY: Config = 1 << 10;
-    // pub const RETURN_END_QUALITY: Config = 1 << 11;
-    // pub const RETURN_END_RECORD: Config = 1 << 12;
+    pub const COMPUTE_MASK_NON_ACTG: Config = 1 << 11;
+    pub const COMPUTE_MASK_N: Config = 1 << 12;
 }
 
 use advanced::*;
@@ -111,33 +106,44 @@ impl ParserOptions {
     /// Set the DNA format to bytes (default).
     #[inline(always)]
     pub const fn dna_string(self) -> Self {
-        Self(
-            (self.0
-                & !(COMPUTE_DNA_COLUMNAR | COMPUTE_DNA_PACKED | SPLIT_NON_ACTG | RETURN_DNA_CHUNK))
-                | COMPUTE_DNA_STRING,
-        )
+        self.ignore_dna().and_dna_string()
+    }
+
+    /// Also compute DNA as bytes.
+    #[inline(always)]
+    pub const fn and_dna_string(self) -> Self {
+        Self(self.0 | COMPUTE_DNA_STRING)
     }
 
     /// Set the DNA format to [`PackedDNA`](crate::dna_format::PackedDNA).
     #[inline(always)]
     pub const fn dna_packed(self) -> Self {
-        Self(
-            (self.0 & !(COMPUTE_DNA_STRING | COMPUTE_DNA_COLUMNAR))
-                | COMPUTE_DNA_PACKED
-                | SPLIT_NON_ACTG
-                | RETURN_DNA_CHUNK,
-        )
+        self.ignore_dna().and_dna_packed()
+    }
+
+    /// Also compute DNA as [`PackedDNA`](crate::dna_format::PackedDNA).
+    #[inline(always)]
+    pub const fn and_dna_packed(self) -> Self {
+        Self(self.0 | COMPUTE_DNA_PACKED | SPLIT_NON_ACTG | RETURN_DNA_CHUNK)
     }
 
     /// Set the DNA format to [`ColumnarDNA`](crate::dna_format::ColumnarDNA).
     #[inline(always)]
     pub const fn dna_columnar(self) -> Self {
-        Self(
-            (self.0 & !(COMPUTE_DNA_STRING | COMPUTE_DNA_PACKED))
-                | COMPUTE_DNA_COLUMNAR
-                | SPLIT_NON_ACTG
-                | RETURN_DNA_CHUNK,
-        )
+        self.ignore_dna().and_dna_columnar()
+    }
+
+    /// Also compute DNA as [`ColumnarDNA`](crate::dna_format::ColumnarDNA).
+    #[inline(always)]
+    pub const fn and_dna_columnar(self) -> Self {
+        Self(self.0 | COMPUTE_DNA_COLUMNAR | SPLIT_NON_ACTG | RETURN_DNA_CHUNK)
+    }
+
+    /// Compute a mask indicating non-ACTG bases.
+    /// This is only relevant when using [`keep_non_actg`](#method.keep_non_actg).
+    #[inline(always)]
+    pub const fn compute_mask_non_actg(self) -> Self {
+        Self(self.0 | COMPUTE_MASK_NON_ACTG)
     }
 
     /// Keep the non-ACTG bases in the sequence, even it their encoding is lossy.

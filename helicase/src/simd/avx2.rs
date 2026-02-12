@@ -7,6 +7,7 @@ use core::mem::transmute;
 
 const GREATER_THAN: __m256i = unsafe { transmute([b'>'; 32]) };
 const LINE_FEED: __m256i = unsafe { transmute([b'\n'; 32]) };
+const ASCII_N: __m256i = unsafe { transmute([b'N'; 32]) };
 const LUT_ACTG: __m256i = unsafe { transmute(*b"A_C_T_G_________A_C_T_G_________") };
 
 #[inline(always)]
@@ -19,7 +20,8 @@ pub fn extract_fasta_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastaBitmask {
         let open_bracket = u8_mask(v1, v2, GREATER_THAN);
         let line_feeds = u8_mask(v1, v2, LINE_FEED);
 
-        let (is_dna, two_bits, high_bit, low_bit) = bitpack_dna::<CONFIG>(v1, v2);
+        let (is_dna, two_bits, high_bit, low_bit, mask_non_actg, mask_n) =
+            bitpack_dna::<CONFIG>(v1, v2);
 
         FastaBitmask {
             open_bracket,
@@ -28,6 +30,8 @@ pub fn extract_fasta_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastaBitmask {
             two_bits,
             high_bit,
             low_bit,
+            mask_non_actg,
+            mask_n,
         }
     }
 }
@@ -41,7 +45,8 @@ pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
 
         let line_feeds = u8_mask(v1, v2, LINE_FEED);
 
-        let (is_dna, two_bits, high_bit, low_bit) = bitpack_dna::<CONFIG>(v1, v2);
+        let (is_dna, two_bits, high_bit, low_bit, mask_non_actg, mask_n) =
+            bitpack_dna::<CONFIG>(v1, v2);
 
         FastqBitmask {
             line_feeds,
@@ -49,17 +54,21 @@ pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
             two_bits,
             high_bit,
             low_bit,
+            mask_non_actg,
+            mask_n,
         }
     }
 }
 
 #[inline(always)]
-fn bitpack_dna<const CONFIG: Config>(v1: __m256i, v2: __m256i) -> (u64, u128, u64, u64) {
+fn bitpack_dna<const CONFIG: Config>(v1: __m256i, v2: __m256i) -> (u64, u128, u64, u64, u64, u64) {
     unsafe {
         let mut is_dna = !0;
         let mut two_bits = 0;
         let mut high_bit = 0;
         let mut low_bit = 0;
+        let mut mask_non_actg = 0;
+        let mut mask_n = 0;
 
         if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
             let (mm_hi_1, mm_lo_1, mm_hi_2, mm_lo_2) = (
@@ -112,23 +121,34 @@ fn bitpack_dna<const CONFIG: Config>(v1: __m256i, v2: __m256i) -> (u64, u128, u6
             }
         }
 
-        if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
+        if flag_is_set(CONFIG, SPLIT_NON_ACTG | COMPUTE_MASK_NON_ACTG) {
             let mask_two_bits = _mm256_set1_epi8(0b110i8);
             let mask_upper = _mm256_set1_epi8(0b11011111u8 as i8);
+            let uv1 = _mm256_and_si256(v1, mask_upper);
+            let uv2 = _mm256_and_si256(v2, mask_upper);
 
-            is_dna = movemask_64(
+            let mask_actg = movemask_64(
                 _mm256_cmpeq_epi8(
                     _mm256_shuffle_epi8(LUT_ACTG, _mm256_and_si256(v1, mask_two_bits)),
-                    _mm256_and_si256(v1, mask_upper),
+                    uv1,
                 ),
                 _mm256_cmpeq_epi8(
                     _mm256_shuffle_epi8(LUT_ACTG, _mm256_and_si256(v2, mask_two_bits)),
-                    _mm256_and_si256(v2, mask_upper),
+                    uv2,
                 ),
             );
+            if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
+                is_dna = mask_actg;
+            }
+            if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
+                mask_non_actg = !mask_actg;
+            }
+            if flag_is_set(CONFIG, COMPUTE_MASK_N) {
+                mask_n = u8_mask(v1, v2, ASCII_N);
+            }
         }
 
-        (is_dna, two_bits, high_bit, low_bit)
+        (is_dna, two_bits, high_bit, low_bit, mask_non_actg, mask_n)
     }
 }
 

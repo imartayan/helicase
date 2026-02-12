@@ -7,6 +7,7 @@ use core::mem::transmute;
 
 const GREATER_THAN: __m128i = unsafe { transmute([b'>'; 16]) };
 const LINE_FEED: __m128i = unsafe { transmute([b'\n'; 16]) };
+const ASCII_N: __m128i = unsafe { transmute([b'N'; 16]) };
 const LUT_ACTG: __m128i = unsafe { transmute(*b"A_C_T_G_________") };
 
 #[inline(always)]
@@ -21,7 +22,8 @@ pub fn extract_fasta_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastaBitmask {
         let open_bracket = u8_mask(v1, v2, v3, v4, GREATER_THAN);
         let line_feeds = u8_mask(v1, v2, v3, v4, LINE_FEED);
 
-        let (is_dna, two_bits, high_bit, low_bit) = bitpack_dna::<CONFIG>(v1, v2, v3, v4);
+        let (is_dna, two_bits, high_bit, low_bit, mask_non_actg, mask_n) =
+            bitpack_dna::<CONFIG>(v1, v2, v3, v4);
 
         FastaBitmask {
             open_bracket,
@@ -30,6 +32,8 @@ pub fn extract_fasta_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastaBitmask {
             two_bits,
             high_bit,
             low_bit,
+            mask_non_actg,
+            mask_n,
         }
     }
 }
@@ -45,7 +49,8 @@ pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
 
         let line_feeds = u8_mask(v1, v2, v3, v4, LINE_FEED);
 
-        let (is_dna, two_bits, high_bit, low_bit) = bitpack_dna::<CONFIG>(v1, v2, v3, v4);
+        let (is_dna, two_bits, high_bit, low_bit, mask_non_actg, mask_n) =
+            bitpack_dna::<CONFIG>(v1, v2, v3, v4);
 
         FastqBitmask {
             line_feeds,
@@ -53,6 +58,8 @@ pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
             two_bits,
             high_bit,
             low_bit,
+            mask_non_actg,
+            mask_n,
         }
     }
 }
@@ -63,12 +70,14 @@ fn bitpack_dna<const CONFIG: Config>(
     v2: __m128i,
     v3: __m128i,
     v4: __m128i,
-) -> (u64, u128, u64, u64) {
+) -> (u64, u128, u64, u64, u64, u64) {
     unsafe {
         let mut is_dna = !0;
         let mut two_bits = 0;
         let mut high_bit = 0;
         let mut low_bit = 0;
+        let mut mask_non_actg = 0;
+        let mut mask_n = 0;
 
         if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
             let (mm_hi_1, mm_lo_1, mm_hi_2, mm_lo_2, mm_hi_3, mm_lo_3, mm_hi_4, mm_lo_4) = (
@@ -137,31 +146,44 @@ fn bitpack_dna<const CONFIG: Config>(
             }
         }
 
-        if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
+        if flag_is_set(CONFIG, SPLIT_NON_ACTG | COMPUTE_MASK_NON_ACTG) {
             let mask_two_bits = _mm_set1_epi8(0b110i8);
             let mask_upper = _mm_set1_epi8(0b11011111u8 as i8);
+            let uv1 = _mm_and_si128(v1, mask_upper);
+            let uv2 = _mm_and_si128(v2, mask_upper);
+            let uv3 = _mm_and_si128(v3, mask_upper);
+            let uv4 = _mm_and_si128(v4, mask_upper);
 
-            is_dna = movemask_64(
+            let mask_actg = movemask_64(
                 _mm_cmpeq_epi8(
                     _mm_shuffle_epi8(LUT_ACTG, _mm_and_si128(v1, mask_two_bits)),
-                    _mm_and_si128(v1, mask_upper),
+                    uv1,
                 ),
                 _mm_cmpeq_epi8(
                     _mm_shuffle_epi8(LUT_ACTG, _mm_and_si128(v2, mask_two_bits)),
-                    _mm_and_si128(v2, mask_upper),
+                    uv2,
                 ),
                 _mm_cmpeq_epi8(
                     _mm_shuffle_epi8(LUT_ACTG, _mm_and_si128(v3, mask_two_bits)),
-                    _mm_and_si128(v3, mask_upper),
+                    uv3,
                 ),
                 _mm_cmpeq_epi8(
                     _mm_shuffle_epi8(LUT_ACTG, _mm_and_si128(v4, mask_two_bits)),
-                    _mm_and_si128(v4, mask_upper),
+                    uv4,
                 ),
             );
+            if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
+                is_dna = mask_actg;
+            }
+            if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
+                mask_non_actg = !mask_actg;
+            }
+            if flag_is_set(CONFIG, COMPUTE_MASK_N) {
+                mask_n = u8_mask(uv1, uv2, uv3, uv4, ASCII_N);
+            }
         }
 
-        (is_dna, two_bits, high_bit, low_bit)
+        (is_dna, two_bits, high_bit, low_bit, mask_non_actg, mask_n)
     }
 }
 

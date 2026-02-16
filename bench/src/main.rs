@@ -74,11 +74,7 @@ fn run_bench<M: Measurement>(args: &Args) {
     let size = metadata(path).expect("Cannot get file metadata").len();
     let mut input_file = FileInput::new(path).expect("Cannot open file");
     let compressed = input_file.is_compressed().unwrap();
-    let data = if !args.no_baseline {
-        read(path).expect("Cannot open file")
-    } else {
-        Vec::new()
-    };
+    let data = read(path).expect("Cannot open file");
     let data = data.as_slice();
     let mut num_records = 0;
     let mut dna_len = 0;

@@ -5,6 +5,16 @@ const BITS_PER_BP: usize = 1;
 const BITS_PER_BLOCK: usize = T::BITS as usize;
 const BP_PER_BLOCK: usize = BITS_PER_BLOCK / BITS_PER_BP;
 
+fn convert_ascii_to_columns(ch: u8) -> (T, T) {
+    match ch {
+        b'A' | b'a' => (0, 0),
+        b'C' | b'c' => (0, 1),
+        b'G' | b'g' => (1, 1),
+        b'T' | b't' => (1, 0),
+        _ => panic!("Invalid nucleotide: {}", ch as char),
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct ColumnarDNA {
     high_bits: Vec<T>,
@@ -123,13 +133,7 @@ impl ColumnarDNA {
     #[allow(dead_code)]
     fn push_ascii(&mut self, s: &[u8]) {
         for &ch in s {
-            let (cur_hi, cur_lo) = match ch {
-                b'A' | b'a' => (0, 0),
-                b'C' | b'c' => (0, 1),
-                b'G' | b'g' => (1, 1),
-                b'T' | b't' => (1, 0),
-                _ => panic!("Invalid nucleotide: {}", ch as char),
-            };
+            let (cur_hi, cur_lo) = convert_ascii_to_columns(ch);
             self.append(cur_hi, cur_lo, 1);
         }
     }

@@ -2,6 +2,7 @@ mod carrying_add;
 pub mod config;
 pub mod dna_format;
 pub mod input;
+//pub mod kmer;
 pub mod lexer;
 pub mod parser;
 

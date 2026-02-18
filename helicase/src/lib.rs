@@ -12,6 +12,7 @@ pub use config::{Config, ParserOptions};
 pub use kmer::*;
 pub use kmer_collection::*;
 pub use parser::{FastaParser, FastqParser, FastxParser, HelicaseParser};
+pub use kmer::extract::*;
 
 #[cfg(target_feature = "avx2")]
 pub(crate) mod simd {

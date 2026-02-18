@@ -128,6 +128,104 @@ impl<const K: usize, B: BitStorage> TryFrom<&[u8; K]> for Mer<K, B> {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct MerSlice<'a, const K: usize, B: BitStorage>(
+    pub &'a [BitString<B, K>],
+    pub &'a [BitString<B, K>],
+);
+
+impl<'a, const K: usize, B: BitStorage> MerSlice<'a, K, B> {
+    pub fn get(&self, i: usize) -> Mer<K, B> {
+        Mer::<K, B>(self.0[i], self.1[i])
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = Mer<K, B>> + '_ {
+        self.0
+            .iter()
+            .zip(self.1.iter())
+            .map(|(u, v)| Mer::<K, B>(*u, *v))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct MerChunk<const K: usize, B: BitStorage>(
+    pub Vec<BitString<B, K>>,
+    pub Vec<BitString<B, K>>,
+);
+
+impl<const K: usize, B: BitStorage> Default for MerChunk<K, B> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const K: usize, T: BitStorage> MerChunk<K, T> {
+    pub fn new() -> Self {
+        Self(vec![], vec![])
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self(
+            Vec::<_>::with_capacity(capacity),
+            Vec::<_>::with_capacity(capacity),
+        )
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn as_slice(&self) -> MerSlice<'_, K, T> {
+        MerSlice::<K, T>(&self.0, &self.1)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = Mer<K, T>> + '_ {
+        self.0
+            .iter()
+            .zip(self.1.iter())
+            .map(|(u, v)| Mer::<K, T>(*u, *v))
+    }
+
+    pub fn get(&self, i: usize) -> Mer<K, T> {
+        self.as_slice().get(i)
+    }
+
+    pub fn append(&mut self, other: &mut Self) {
+        self.0.append(&mut other.0);
+        self.1.append(&mut other.1);
+        debug_assert_eq!(self.0.len(), self.1.len());
+    }
+
+    pub fn push(&mut self, el: Mer<K, T>) {
+        self.0.push(el.0);
+        self.1.push(el.1);
+    }
+}
+
+impl<const K: usize, B: BitStorage> TryFrom<&[u8]> for MerChunk<K, B> {
+    type Error = String;
+    #[inline(always)]
+    fn try_from(seq: &[u8]) -> Result<Self, Self::Error> {
+        if seq.len() < K {
+            return Ok(MerChunk::new());
+        }
+        let mut mers = MerChunk::<K, B>::with_capacity(seq.len() - K + 1);
+        // check bound are already done, so the following is safe
+        let first_chunk: &[u8; K] = &seq[0..K].try_into().unwrap();
+        let mut mer: Mer<K, B> = first_chunk.try_into()?;
+        mers.push(mer);
+        for ch in &seq[K..] {
+            mer = mer.append_right_ascii(*ch)?;
+            mers.push(mer)
+        }
+        Ok(mers)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -15,7 +15,7 @@ pub trait Kmer: Sized + Ord + Copy {
     fn rc(&self) -> Self {
         self.reverse().complement()
     }
-    fn to_string(&self) -> String;
+    fn to_string(self) -> String;
 
     /// Return a kmer whatever is the content. Usefull for starting iterating
     fn some_kmer() -> Self;
@@ -41,7 +41,7 @@ impl<const K: usize, B: BitStorage> Mer<K, B> {
         )
     }
 
-    fn into_nucleotids(&self) -> impl Iterator<Item = Mer<1, B>> {
+    fn nucleotids(&self) -> impl Iterator<Item = Mer<1, B>> {
         (0..K).map(|i| Mer::<1, B>(self.0.get_bitstring::<1>(i), self.1.get_bitstring::<1>(i)))
     }
 }
@@ -52,7 +52,7 @@ impl<B: BitStorage> Mer<1, B> {
     const G: Self = Self(Self::ONE, Self::ONE);
     const T: Self = Self(Self::ONE, Self::ZERO);
 
-    fn to_ascii(&self) -> u8 {
+    fn to_ascii(self) -> u8 {
         match (self.0.get(0), self.1.get(0)) {
             (false, false) => b'A',
             (false, true) => b'C',
@@ -99,10 +99,10 @@ impl<const K: usize, B: BitStorage> Kmer for Mer<K, B> {
     }
 
     #[inline(always)]
-    fn to_string(&self) -> String {
+    fn to_string(self) -> String {
         // unsafe unchecked utf8 is safe here because we produce only ascii symbols
         unsafe {
-            String::from_utf8_unchecked(self.into_nucleotids().map(|nuc| nuc.to_ascii()).collect())
+            String::from_utf8_unchecked(self.nucleotids().map(|nuc| nuc.to_ascii()).collect())
         }
     }
 
@@ -170,6 +170,11 @@ impl<const K: usize, T: BitStorage> MerChunk<K, T> {
     pub fn len(&self) -> usize {
         self.0.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub fn as_slice(&self) -> MerSlice<'_, K, T> {
         MerSlice::<K, T>(&self.0, &self.1)
     }
@@ -217,18 +222,9 @@ impl<const K: usize, B: BitStorage> TryFrom<&[u8]> for MerChunk<K, B> {
     }
 }
 
-//pub fn kmer_from_slice_fastx<const K: usize, B: BitStorage>(data: &[u8]) -> MerChunk<K, B> {
-//    let parser = FastxParser::<MINIMAL>::from_slice(data).unwrap();
-//    // HERE
-//}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    type B5 = Mer<5, u8>;
-    type B8 = Mer<8, u8>;
-    type B16 = Mer<16, u16>;
 
     #[test]
     fn test_mer_from_ascii() {
@@ -271,9 +267,9 @@ mod tests {
     }
 
     #[test]
-    fn test_mer_into_nucleotids() {
+    fn test_mer_nucleotids() {
         let mer: Mer<4, u8> = Mer::<4, u8>::some_kmer();
-        let count = mer.into_nucleotids().count();
+        let count = mer.nucleotids().count();
         assert_eq!(count, 4);
     }
 

@@ -87,13 +87,14 @@ pub struct BitString<T: BitStorage, const K: usize> {
 }
 
 impl<T: BitStorage, const K: usize> BitString<T, K> {
-    const ASSERT_K_POSITIVE: () = assert!(K > 0, "BitString K must be > 0");
     pub const ONE: Self = BitString { value: T::ONE };
     pub const ZERO: Self = BitString { value: T::ZERO };
 
     /// Construct new BitString, applying K-bit mask
     #[inline]
     pub fn new(value: T) -> Self {
+        assert!(K > 0, "BitString K must be > 0");
+        assert!(K < T::bit_width());
         BitString {
             value: value.and(&T::mask::<K>()),
         }
@@ -223,7 +224,6 @@ mod tests {
     type B8 = BitString<u8, 8>;
     type B16 = BitString<u16, 16>;
     type B64 = BitString<u64, 64>;
-    type B128 = BitString<u128, 128>;
 
     #[test]
     fn test_masking() {
@@ -248,16 +248,16 @@ mod tests {
         assert_eq!(*b_left.raw(), expected_left);
 
         let b_right = b.push_right::<1>(&(0.into()));
-        let expected_right = (b.raw() >> 1) | (0 << (5 - 1));
+        let expected_right = b.raw() >> 1;
         assert_eq!(*b_right.raw(), expected_right);
     }
 
     #[test]
     fn test_get_set() {
         let b: B5 = BitString::new(0b10101);
-        assert_eq!(b.get(0), true);
-        assert_eq!(b.get(1), false);
-        assert_eq!(b.get(2), true);
+        assert!(b.get(0));
+        assert!(!b.get(1));
+        assert!(b.get(2));
 
         let b2 = b.set(1, true);
         assert_eq!(*b2.raw(), 0b10111);
@@ -323,7 +323,7 @@ mod tests {
         assert_eq!(*b_right.raw(), expected);
 
         let b_right = b.push_right::<1>(&(0.into()));
-        let expected = (b.raw() >> 1);
+        let expected = b.raw() >> 1;
         assert_eq!(*b_right.raw(), expected);
 
         let rev = b.reverse();

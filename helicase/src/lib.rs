@@ -3,11 +3,14 @@ pub mod config;
 pub mod dna_format;
 pub mod input;
 pub mod kmer;
+pub mod kmer_collection;
 pub mod lexer;
 pub mod parser;
 
+pub use crate::input::*;
 pub use config::{Config, ParserOptions};
-pub use kmer::extract::*;
+pub use kmer::*;
+pub use kmer_collection::*;
 pub use parser::{Event, FastaParser, FastqParser, FastxParser, Parser};
 
 #[cfg(target_feature = "avx2")]

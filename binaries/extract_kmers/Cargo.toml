@@ -1,0 +1,13 @@
+[package]
+name = "extract_kmer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+helicase = { path = "../../helicase" }
+clap = { version = "4.5", features = ["derive"] }
+colored = "3.0"
+niffler = { version = "3.0", default-features = false, features = [
+    "gz",
+    "zstd",
+] }

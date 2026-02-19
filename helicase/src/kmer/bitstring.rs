@@ -93,8 +93,13 @@ impl<T: BitStorage, const K: usize> BitString<T, K> {
     /// Construct new BitString, applying K-bit mask
     #[inline]
     pub fn new(value: T) -> Self {
-        assert!(K > 0, "BitString K must be > 0");
-        assert!(K < T::bit_width());
+        debug_assert!(K > 0, "BitString K must be > 0");
+        debug_assert!(
+            K <= T::bit_width(),
+            "K should be smallel than the bitwidth ({}>{})",
+            K,
+            T::bit_width()
+        );
         BitString {
             value: value.and(&T::mask::<K>()),
         }

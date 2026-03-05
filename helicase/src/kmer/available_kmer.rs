@@ -1,25 +1,37 @@
-//use crate::annotation::ConditionD;
-use crate::kmer::*;
-use crate::kmer::{gen_kmer};
-use eyre::{eyre, Report, Result};
 use paste::paste;
-use std::any::Any;
-use std::fmt;
+
+#[macro_export]
+macro_rules! gen_dispatch {
+    ($([($($k:expr),*) $t:ty])*) => {
+        #[macro_export]
+        macro_rules! dispatch_k {
+            ($kval:expr, |$K:ident, $T:ident| $body:expr) => {
+                match $kval {
+                    $(
+                        $(
+                            $k => {
+                                const $K: usize = $k;
+                                type $T = $t;
+                                $body
+                            }
+                        ),*
+                    ),*,
+                    _ => panic!("unsupported k value: {}", $kval),
+                }
+            };
+        }
+    };
+}
 
 // Record available macro to dispatch and panic if not available.
 // Generate a dispatch_k macro that select the appropriate data store.
 macro_rules! valid_k_t_pairs {
     ($([($($k:expr),*) $t:ty])*) => {
         paste!{
-            gen_kmer!{$([($($k),*) $t])* }
-            gen_sealed_shard!{ $([($($k),*) $t])* }
-            gen_loose_build_shard!{ $([($($k),*) $t])* }
-            gen_loose_build_view!{ $([($($k),*) $t])* }
-
+            gen_dispatch! { $([($($k),*) $t])* }
         }
     };
 }
-
 
 // Define the valid mapping from k-mer lengths to types
 valid_k_t_pairs! {

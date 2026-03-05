@@ -11,3 +11,8 @@ niffler = { version = "3.0", default-features = false, features = [
     "gz",
     "zstd",
 ] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt", "time"] }
+arrow = "58.0.0"
+parquet = "58.0.0"
+tracing-indicatif = "0.3.14"

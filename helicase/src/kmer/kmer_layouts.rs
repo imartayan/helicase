@@ -21,12 +21,12 @@ pub trait Kmer: Sized + Ord + Copy {
     fn some_kmer() -> Self;
 }
 
-#[derive(Eq, PartialEq, PartialOrd, Ord, Copy, Clone, Debug)]
+#[derive(Eq, PartialEq, PartialOrd, Ord, Copy, Clone, Debug, Hash)]
 pub struct Mer<const K: usize, B: BitStorage>(pub BitString<B, K>, pub BitString<B, K>);
 impl<const K: usize, B: BitStorage> Mer<K, B> {
     const ZERO: BitString<B, K> = BitString::<B, K>::ZERO;
     const ONE: BitString<B, K> = BitString::<B, K>::ONE;
-
+    #[inline(always)]
     fn push_left<const L: usize>(&self, other: &Mer<L, B>) -> Self {
         Self(
             self.0.push_left::<_>(&other.0),
@@ -34,6 +34,7 @@ impl<const K: usize, B: BitStorage> Mer<K, B> {
         )
     }
 
+    #[inline(always)]
     fn push_right<const L: usize>(&self, other: &Mer<L, B>) -> Self {
         Self(
             self.0.push_right::<_>(&other.0),
@@ -61,6 +62,7 @@ impl<B: BitStorage> Mer<1, B> {
         }
     }
 
+    #[inline(always)]
     fn from_ascii(ch: u8) -> Result<Self, String> {
         match ch {
             b'A' | b'a' => Ok(Self::A),
@@ -73,11 +75,13 @@ impl<B: BitStorage> Mer<1, B> {
 }
 
 impl<const K: usize, B: BitStorage> Kmer for Mer<K, B> {
+    #[inline(always)]
     fn append_left_ascii(&self, x: u8) -> Result<Self, String> {
         let nuc = Mer::<1, B>::from_ascii(x)?;
         Ok(self.push_left::<_>(&nuc))
     }
 
+    #[inline(always)]
     fn append_right_ascii(&self, x: u8) -> Result<Self, String> {
         let nuc = Mer::<1, B>::from_ascii(x)?;
         Ok(self.push_right::<_>(&nuc))

@@ -13,6 +13,8 @@ flate2 = { version = "1.1", features = ["zlib-rs"], optional = true }
 memmap2 = "0.9"
 packed-seq = { version = "4.4", default-features = false, optional = true }
 paraseq = { version = "0.4", default-features = false, optional = true }
+paste = "1.0.15"
+tracing = "0.1.44"
 
 [features]
 default = ["gz", "zstd"]

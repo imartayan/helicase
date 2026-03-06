@@ -1,5 +1,10 @@
+mod arrow_types;
+use arrow_types::ArrowDispatch;
 mod parquet_writer;
 use parquet_writer::*;
+
+mod arrow_writer;
+use arrow_writer::*;
 
 use clap::Parser as ClapParser;
 use helicase::*;
@@ -41,6 +46,9 @@ struct Args {
     /// dump to parquet
     #[arg(long)]
     parquet_path: Option<String>,
+    /// dump to arrow file
+    #[arg(long)]
+    arrow_path: Option<String>,
 }
 
 fn main_dispatched<const K: usize, T: ArrowDispatch>(args: &Args) {
@@ -60,8 +68,8 @@ fn main_dispatched<const K: usize, T: ArrowDispatch>(args: &Args) {
             use std::hash::RandomState;
             info!("Building hset of kmers");
             let mut hash_set: HashSet<_, RandomState> = HashSet::from_iter(kmers.iter());
-            chunk_process_from_fastx_slice::<K, T>(&data, |mer_slice| {
-                hash_set.extend(mer_slice.iter());
+            chunk_process_from_fastx_slice::<K, T>(&data, |mer_chunk| {
+                hash_set.extend(mer_chunk.iter());
                 Ok(())
             })
             .unwrap();
@@ -70,7 +78,10 @@ fn main_dispatched<const K: usize, T: ArrowDispatch>(args: &Args) {
             info!("Building the KmerChunk from the hashset");
         }
         if let Some(path) = &args.parquet_path {
-            mer_slice_to_parquet::<K, T>(path, &kmers.as_slice()).unwrap();
+            mer_chunk_to_parquet::<K, T>(path, &mut kmers).unwrap();
+        }
+        if let Some(path) = &args.arrow_path {
+            mer_chunk_to_arrow::<K, T>(path, &mut kmers).unwrap();
         }
         if args.print_kmer {
             for kmer in kmers.iter() {
@@ -80,6 +91,9 @@ fn main_dispatched<const K: usize, T: ArrowDispatch>(args: &Args) {
     } else {
         if let Some(path) = &args.parquet_path {
             fastx_slice_to_parquet::<K, T>(path, &data).unwrap();
+        }
+        if let Some(path) = &args.arrow_path {
+            fastx_slice_to_arrow::<K, T>(path, &data).unwrap();
         }
         if args.print_kmer {
             chunk_process_from_fastx_slice::<K, T>(&data, |mer_slice| {

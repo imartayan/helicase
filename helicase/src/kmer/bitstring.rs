@@ -83,6 +83,7 @@ impl_primitive_storage!(u8, u16, u32, u64, u128);
 
 /// Generic BitString wrapper
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[repr(transparent)]
 pub struct BitString<T: BitStorage, const K: usize> {
     pub value: T,
 }

@@ -48,9 +48,10 @@ fn main_dispatched<const K: usize, T: ArrowDispatch>(args: &Args) {
     let data = read(path).expect("Cannot open file");
     info!("Loading the data");
     if args.dedup {
-        let mut kmers = kmer_from_fastx_slice::<K, T>(&data).expect("invalid data");
-        info!("Computing {} kmers", kmers.len());
+        let mut kmers = MerChunk::<K, T>::new();
         if args.sort {
+            kmers = kmer_from_fastx_slice::<K, T>(&data).expect("invalid data");
+            info!("Computing {} kmers", kmers.len());
             info!("Sorting kmers");
             kmers.sort(true);
             info!("Got {} uniq kmers", kmers.len());
@@ -58,11 +59,18 @@ fn main_dispatched<const K: usize, T: ArrowDispatch>(args: &Args) {
             use std::collections::HashSet;
             use std::hash::RandomState;
             info!("Building hset of kmers");
-            let hash_set: HashSet<_, RandomState> = HashSet::from_iter(kmers.iter());
+            let mut hash_set: HashSet<_, RandomState> = HashSet::from_iter(kmers.iter());
+            chunk_process_from_fastx_slice::<K, T>(&data, |mer_slice| {
+                hash_set.extend(mer_slice.iter());
+                Ok(())
+            })
+            .unwrap();
             info!("Got {} uniq kmers", hash_set.len());
+            kmers.extend(hash_set);
+            info!("Building the KmerChunk from the hashset");
         }
         if let Some(path) = &args.parquet_path {
-            mer_slice_to_parquet::<K, T>(path, kmers.as_slice()).unwrap();
+            mer_slice_to_parquet::<K, T>(path, &kmers.as_slice()).unwrap();
         }
         if args.print_kmer {
             for kmer in kmers.iter() {
@@ -83,6 +91,7 @@ fn main_dispatched<const K: usize, T: ArrowDispatch>(args: &Args) {
             .unwrap();
         }
     }
+    info!("Done!");
 }
 
 fn main() {

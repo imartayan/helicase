@@ -37,8 +37,14 @@ struct Args {
     /// sort instead of using a hashset
     #[arg(short = 'h', long, default_value_t = false)]
     sort: bool,
-    /// slow printing kmers
+    /// par_sort instead of using a hashset
     #[arg(short = 'p', long, default_value_t = false)]
+    par_sort: bool,
+    /// threads number
+    #[arg(long, default_value_t = 4)]
+    thread_number: usize,
+    /// slow printing kmers
+    #[arg(long, default_value_t = false)]
     print_kmer: bool,
     /// log level (warn, info, debug)
     #[arg(long, default_value = "info")]
@@ -51,17 +57,21 @@ struct Args {
     arrow_path: Option<String>,
 }
 
-fn main_dispatched<const K: usize, T: ArrowDispatch>(args: &Args) {
+fn main_dispatched<const K: usize, T: ArrowDispatch + Send + 'static>(args: &Args) {
     let path = &args.input;
     let data = read(path).expect("Cannot open file");
     info!("Loading the data");
-    if args.dedup {
+    if args.dedup | args.sort | args.par_sort {
         let mut kmers = MerChunk::<K, T>::new();
-        if args.sort {
+        if args.sort | args.par_sort {
             kmers = kmer_from_fastx_slice::<K, T>(&data).expect("invalid data");
             info!("Computing {} kmers", kmers.len());
             info!("Sorting kmers");
-            kmers.sort(true);
+            if args.par_sort {
+                kmers = kmers.par_sort(8, true, args.thread_number);
+            } else {
+                kmers.sort(true);
+            }
             info!("Got {} uniq kmers", kmers.len());
         } else {
             use std::collections::HashSet;

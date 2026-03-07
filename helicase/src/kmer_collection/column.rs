@@ -1,7 +1,9 @@
 use crate::config::advanced::*;
 use crate::dna_format::ColumnarDNA;
 use crate::*;
+use std::cmp::min;
 use std::io;
+use std::thread;
 use tracing::info;
 
 #[derive(Clone, Debug)]
@@ -30,6 +32,12 @@ impl<'a, const K: usize, B: BitStorage> MerSlice<'a, K, B> {
             .iter()
             .zip(self.1.iter())
             .map(|(u, v)| Mer::<K, B>(*u, *v))
+    }
+
+    pub fn chunks(&self, size: usize) -> impl Iterator<Item = MerSlice<'_, K, B>> {
+        let high = self.0.chunks(size);
+        let low = self.1.chunks(size);
+        high.zip(low).map(|(h, l)| MerSlice::<K, B>(h, l))
     }
 }
 
@@ -136,6 +144,34 @@ impl<const K: usize, T: BitStorage> MerChunk<K, T> {
         }
         // THIS IS FOR LOUP
         todo!();
+    }
+
+    pub fn par_sort(self, significant_bits: u8, dedup: bool, mut thread_count: usize) -> Self
+    where
+        T: Send + 'static,
+    {
+        let bucket_nb = 1 << significant_bits;
+        thread_count = min(thread_count, bucket_nb);
+        let shift = 64 - significant_bits;
+        let mut buckets = vec![MerChunk::with_capacity(self.len() / bucket_nb); bucket_nb];
+        for kmer in self.iter() {
+            let buck_offset: usize = (kmer.hash() as usize) >> shift;
+            buckets[buck_offset].push(kmer);
+        }
+        thread::scope(|s| {
+            for chunk in buckets.chunks_mut(thread_count) {
+                s.spawn(move || {
+                    for merchunk in chunk {
+                        merchunk.sort(dedup);
+                    }
+                });
+            }
+        });
+        let mut chunks = MerChunk::new();
+        for mut buc in buckets {
+            chunks.append(&mut buc);
+        }
+        chunks
     }
 
     pub fn sort(&mut self, dedup: bool) {

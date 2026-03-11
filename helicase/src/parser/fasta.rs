@@ -600,6 +600,12 @@ mod tests {
         .dna_packed()
         .skip_non_actg()
         .config();
+    const CONFIG_PACKED_KEEP: Config = ParserOptions::default()
+        .ignore_headers()
+        .dna_string()
+        .and_dna_packed()
+        .keep_non_actg()
+        .config();
 
     static FASTA: &[u8] =
         b">head\nTTTCTtaAAAA\nAGAAAA\nACAAN\n\n>hhh\nCTCTTANNAAA\nCAAAnAGCTTT\n>A B C \nCCAC"
@@ -711,5 +717,37 @@ mod tests {
             res,
             vec!["TTTCTTAAAAAAGAAAAACAA", "CTCTTAAAACAAAAGCTTT", "CCAC",]
         );
+    }
+
+    #[test]
+    fn test_packed_matches_string_long_sequence() {
+        let seq = b"ACGT".repeat(40);
+        let fasta = [b">seq\n".as_ref(), seq.as_ref()].concat();
+        let mut f = FastaParser::<CONFIG_PACKED_KEEP, _>::from_slice(&fasta).unwrap();
+        while let Some(_) = f.next() {
+            let s = f.get_dna_string();
+            let p = f.get_dna_packed();
+            assert_eq!(p.len(), s.len(), "length mismatch");
+            for (i, base) in s.iter().enumerate() {
+                assert_eq!(
+                    p.get_char(i) as u8,
+                    base.to_ascii_uppercase(),
+                    "mismatch at base {i}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_packed_length_keep_non_actg_last_chunk_all_dna() {
+        let seq = b"A".repeat(194);
+        let fasta = [b">s\n".as_ref(), seq.as_ref()].concat();
+        assert_eq!(fasta.len() % 64, 197 % 64);
+        let mut f = FastaParser::<CONFIG_PACKED_KEEP, _>::from_slice(&fasta).unwrap();
+        while let Some(_) = f.next() {
+            let string_len = f.get_dna_string().len();
+            let packed_len = f.get_dna_packed().len();
+            assert_eq!(packed_len, string_len, "packed length mismatch");
+        }
     }
 }

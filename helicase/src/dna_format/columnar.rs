@@ -77,8 +77,16 @@ impl ColumnarDNA {
             self.cur_lo |= low << rem;
             self.high_bits.push(self.cur_hi);
             self.low_bits.push(self.cur_lo);
-            self.cur_hi = if rem > 0 { hi >> (BITS_PER_BLOCK - rem) } else { 0 };
-            self.cur_lo = if rem > 0 { lo >> (BITS_PER_BLOCK - rem) } else { 0 };
+            self.cur_hi = if rem > 0 {
+                hi >> (BITS_PER_BLOCK - rem)
+            } else {
+                0
+            };
+            self.cur_lo = if rem > 0 {
+                lo >> (BITS_PER_BLOCK - rem)
+            } else {
+                0
+            };
         } else {
             self.cur_hi |= hi << rem;
             self.cur_lo |= lo << rem;
@@ -259,5 +267,26 @@ mod tests {
         assert_eq!(v.len(), 65);
         assert_eq!(v.to_string(), seq);
         assert_eq!(v.high_bits.len(), 1); // one stored word now
+    }
+
+    #[test]
+    fn append_exact_64_bases_bulk() {
+        let mut v = ColumnarDNA::new();
+        v.append(!0u64, !0u64, 64); // 64 G
+        v.append(0u64, 0u64, 1); // 1 A
+
+        assert_eq!(v.len(), 65);
+        assert_eq!(v.high_bits.len(), 1);
+        assert_eq!(v.to_string(), "G".repeat(64) + "A");
+    }
+
+    #[test]
+    fn two_full_blocks_bulk_distinct() {
+        let mut v = ColumnarDNA::new();
+        v.append(!0u64, 0u64, 64); // 64 T
+        v.append(0u64, !0u64, 64); // 64 C
+
+        assert_eq!(v.len(), 128);
+        assert_eq!(v.to_string(), "T".repeat(64) + &"C".repeat(64));
     }
 }

@@ -418,25 +418,25 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                             self.cur_dna_columnar.append(
                                 self.block.high_bit >> self.pos_in_block,
                                 self.block.low_bit >> self.pos_in_block,
-                                64 - self.pos_in_block,
+                                self.block.len - self.pos_in_block,
                             );
                         }
                         if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
                             self.cur_dna_packed.append(
                                 self.block.two_bits >> (2 * self.pos_in_block),
-                                128 - 2 * self.pos_in_block,
+                                2 * (self.block.len - self.pos_in_block),
                             );
                         }
                         if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
                             self.cur_mask_non_actg.append(
                                 self.block.mask_non_actg >> self.pos_in_block,
-                                64 - self.pos_in_block,
+                                self.block.len - self.pos_in_block,
                             );
                         }
                         if flag_is_set(CONFIG, COMPUTE_MASK_N) {
                             self.cur_mask_n.append(
                                 self.block.mask_n >> self.pos_in_block,
-                                64 - self.pos_in_block,
+                                self.block.len - self.pos_in_block,
                             );
                         }
                         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {

@@ -75,7 +75,11 @@ impl PackedDNA {
             self.bits.reserve(1);
             unsafe { *self.bits.get_unchecked_mut(len - 1) = self.cur };
             unsafe { self.bits.set_len(len) };
-            self.cur = if rem > 0 { x >> (BITS_PER_BLOCK - rem) } else { 0 };
+            self.cur = if rem > 0 {
+                x >> (BITS_PER_BLOCK - rem)
+            } else {
+                0
+            };
         } else {
             self.cur |= x << rem;
         }
@@ -142,5 +146,116 @@ impl fmt::Display for PackedDNA {
             f.write_char(self.get_char(i))?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn encode(s: &str) -> (T, usize) {
+        let mut packed: T = 0;
+        for (i, &b) in s.as_bytes().iter().enumerate() {
+            let code: T = match b {
+                b'A' | b'a' => 0b00,
+                b'C' | b'c' => 0b01,
+                b'T' | b't' => 0b10,
+                b'G' | b'g' => 0b11,
+                _ => 0,
+            };
+            packed |= code << (2 * i);
+        }
+        (packed, s.len() * 2)
+    }
+
+    fn roundtrip(s: &str) -> String {
+        let mut dna = PackedDNA::new();
+        let (packed, num_bits) = encode(s);
+        dna.append(packed, num_bits);
+        format!("{dna}")
+    }
+
+    #[test]
+    fn append_full_block_at_boundary() {
+        let (a_packed, _) = encode(&"A".repeat(BP_PER_BLOCK)); // 64 A
+        let (g_packed, _) = encode(&"G".repeat(BP_PER_BLOCK)); // 64 G
+
+        let mut dna = PackedDNA::new();
+        dna.append(a_packed, BITS_PER_BLOCK);
+        dna.append(g_packed, BITS_PER_BLOCK);
+
+        assert_eq!(dna.len(), 2 * BP_PER_BLOCK);
+        for i in 0..BP_PER_BLOCK {
+            assert_eq!(dna.get(i), 0b00, "base {i} should be A");
+        }
+        for i in BP_PER_BLOCK..2 * BP_PER_BLOCK {
+            assert_eq!(dna.get(i), 0b11, "base {i} should be G");
+        }
+    }
+
+    #[test]
+    fn three_full_blocks_distinct() {
+        let (a, _) = encode(&"A".repeat(BP_PER_BLOCK));
+        let (c, _) = encode(&"C".repeat(BP_PER_BLOCK));
+        let (t, _) = encode(&"T".repeat(BP_PER_BLOCK));
+
+        let mut dna = PackedDNA::new();
+        dna.append(a, BITS_PER_BLOCK);
+        dna.append(c, BITS_PER_BLOCK);
+        dna.append(t, BITS_PER_BLOCK);
+
+        assert_eq!(dna.len(), 3 * BP_PER_BLOCK);
+        for i in 0..BP_PER_BLOCK {
+            assert_eq!(dna.get(i), 0b00, "base {i} A");
+        }
+        for i in BP_PER_BLOCK..2 * BP_PER_BLOCK {
+            assert_eq!(dna.get(i), 0b01, "base {i} C");
+        }
+        for i in 2 * BP_PER_BLOCK..3 * BP_PER_BLOCK {
+            assert_eq!(dna.get(i), 0b10, "base {i} T");
+        }
+    }
+
+    #[test]
+    fn partial_then_full_block() {
+        let partial = BP_PER_BLOCK - 6;
+        let (a_partial, a_bits) = encode(&"A".repeat(partial));
+        let (g_full, _) = encode(&"G".repeat(BP_PER_BLOCK));
+
+        let mut dna = PackedDNA::new();
+        dna.append(a_partial, a_bits);
+        dna.append(g_full, BITS_PER_BLOCK);
+
+        assert_eq!(dna.len(), partial + BP_PER_BLOCK);
+        for i in 0..partial {
+            assert_eq!(dna.get(i), 0b00, "base {i} A");
+        }
+        for i in partial..partial + BP_PER_BLOCK {
+            assert_eq!(dna.get(i), 0b11, "base {i} G");
+        }
+    }
+
+    #[test]
+    fn roundtrip_short() {
+        assert_eq!(roundtrip("ACGT"), "ACGT");
+    }
+
+    #[test]
+    fn roundtrip_exactly_one_block() {
+        let s = "ACGT".repeat(BP_PER_BLOCK / 4);
+        assert_eq!(s.len(), BP_PER_BLOCK);
+        assert_eq!(roundtrip(&s), s);
+    }
+
+    #[test]
+    fn roundtrip_two_full_blocks() {
+        let block = "ACGT".repeat(BP_PER_BLOCK / 4);
+        let mut dna = PackedDNA::new();
+        let (p, n) = encode(&block);
+        dna.append(p, n);
+        let (p, n) = encode(&block);
+        dna.append(p, n);
+        assert_eq!(dna.len(), 2 * BP_PER_BLOCK);
+        assert_eq!(format!("{dna}"), block.repeat(2));
     }
 }

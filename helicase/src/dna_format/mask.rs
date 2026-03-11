@@ -64,7 +64,11 @@ impl BitMask {
         if rem + size >= BITS_PER_BLOCK {
             self.cur |= x << rem;
             self.bits.push(self.cur);
-            self.cur = if rem > 0 { y >> (BITS_PER_BLOCK - rem) } else { 0 };
+            self.cur = if rem > 0 {
+                y >> (BITS_PER_BLOCK - rem)
+            } else {
+                0
+            };
         } else {
             self.cur |= y << rem;
         }
@@ -82,5 +86,52 @@ impl BitMask {
         } else {
             (self.cur >> (i % BP_PER_BLOCK)) & 1 != 0
         }
+    }
+
+    #[cfg(test)]
+    pub fn get_all(&self) -> Vec<bool> {
+        (0..self.len).map(|i| self.get(i)).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn append_exact_64_bits_bulk() {
+        let mut m = BitMask::new();
+        m.append(!0u64, 64); // 64 ones
+        m.append(0u64, 1); // 1 zero
+
+        assert_eq!(m.len(), 65);
+        assert_eq!(m.bits.len(), 1);
+        let got = m.get_all();
+        assert!(got[..64].iter().all(|&b| b));
+        assert!(!got[64]);
+    }
+
+    #[test]
+    fn two_full_blocks_bulk_distinct() {
+        let mut m = BitMask::new();
+        m.append(!0u64, 64); // 64 ones
+        m.append(0u64, 64); // 64 zeros
+
+        assert_eq!(m.len(), 128);
+        let got = m.get_all();
+        assert!(got[..64].iter().all(|&b| b));
+        assert!(got[64..].iter().all(|&b| !b));
+    }
+
+    #[test]
+    fn partial_then_full_block() {
+        let mut m = BitMask::new();
+        m.append(!0u64, 10); // 10 ones, rem becomes 10
+        m.append(0u64, 64); // 64 zeros crossing the boundary
+
+        assert_eq!(m.len(), 74);
+        let got = m.get_all();
+        assert!(got[..10].iter().all(|&b| b));
+        assert!(got[10..].iter().all(|&b| !b));
     }
 }

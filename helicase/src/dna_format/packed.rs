@@ -55,6 +55,7 @@ impl PackedDNA {
     #[inline(always)]
     pub fn clear(&mut self) {
         self.bits.clear();
+        self.cur = 0;
         self.num_bits = 0;
     }
 

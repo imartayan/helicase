@@ -59,16 +59,13 @@ impl BitMask {
         }
         let rem = self.len % BITS_PER_BLOCK;
         let mask = !0 >> (BITS_PER_BLOCK - size);
+        let shift_mask = ((rem > 0) as u64).wrapping_neg();
         self.len += size;
         let y = x & mask;
         if rem + size >= BITS_PER_BLOCK {
             self.cur |= x << rem;
             self.bits.push(self.cur);
-            self.cur = if rem > 0 {
-                y >> (BITS_PER_BLOCK - rem)
-            } else {
-                0
-            };
+            self.cur = y.wrapping_shr((BITS_PER_BLOCK - rem) as u32) & shift_mask;
         } else {
             self.cur |= y << rem;
         }

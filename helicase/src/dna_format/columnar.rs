@@ -79,6 +79,7 @@ impl ColumnarDNA {
         }
         let rem = self.len % BITS_PER_BLOCK;
         let mask = !0 >> (BITS_PER_BLOCK - size);
+        let shift_mask = ((rem > 0) as u64).wrapping_neg();
         self.len += size;
         let hi = high & mask;
         let lo = low & mask;
@@ -87,16 +88,8 @@ impl ColumnarDNA {
             self.cur_lo |= low << rem;
             self.high_bits.push(self.cur_hi);
             self.low_bits.push(self.cur_lo);
-            self.cur_hi = if rem > 0 {
-                hi >> (BITS_PER_BLOCK - rem)
-            } else {
-                0
-            };
-            self.cur_lo = if rem > 0 {
-                lo >> (BITS_PER_BLOCK - rem)
-            } else {
-                0
-            };
+            self.cur_hi = hi.wrapping_shr((BITS_PER_BLOCK - rem) as u32) & shift_mask;
+            self.cur_lo = lo.wrapping_shr((BITS_PER_BLOCK - rem) as u32) & shift_mask;
         } else {
             self.cur_hi |= hi << rem;
             self.cur_lo |= lo << rem;

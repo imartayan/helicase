@@ -64,7 +64,7 @@ impl BitMask {
         if rem + size >= BITS_PER_BLOCK {
             self.cur |= x << rem;
             self.bits.push(self.cur);
-            self.cur = y >> (BITS_PER_BLOCK - rem);
+            self.cur = if rem > 0 { y >> (BITS_PER_BLOCK - rem) } else { 0 };
         } else {
             self.cur |= y << rem;
         }

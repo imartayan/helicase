@@ -87,8 +87,8 @@ impl ColumnarDNA {
             self.cur_lo |= low << rem;
             self.high_bits.push(self.cur_hi);
             self.low_bits.push(self.cur_lo);
-            self.cur_hi = hi >> (BITS_PER_BLOCK - rem);
-            self.cur_lo = lo >> (BITS_PER_BLOCK - rem);
+            self.cur_hi = if rem > 0 { hi >> (BITS_PER_BLOCK - rem) } else { 0 };
+            self.cur_lo = if rem > 0 { lo >> (BITS_PER_BLOCK - rem) } else { 0 };
         } else {
             self.cur_hi |= hi << rem;
             self.cur_lo |= lo << rem;

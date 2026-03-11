@@ -75,7 +75,7 @@ impl PackedDNA {
             self.bits.reserve(1);
             unsafe { *self.bits.get_unchecked_mut(len - 1) = self.cur };
             unsafe { self.bits.set_len(len) };
-            self.cur = x >> (BITS_PER_BLOCK - rem);
+            self.cur = if rem > 0 { x >> (BITS_PER_BLOCK - rem) } else { 0 };
         } else {
             self.cur |= x << rem;
         }

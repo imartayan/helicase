@@ -71,15 +71,8 @@ impl PackedDNA {
         let x = packed & mask;
         if rem + num_bits >= BITS_PER_BLOCK {
             self.cur |= packed << rem;
-            let len = self.num_bits / BITS_PER_BLOCK;
-            self.bits.reserve(1);
-            unsafe { *self.bits.get_unchecked_mut(len - 1) = self.cur };
-            unsafe { self.bits.set_len(len) };
-            self.cur = if rem > 0 {
-                x >> (BITS_PER_BLOCK - rem)
-            } else {
-                0
-            };
+            self.bits.push(self.cur);
+            self.cur = x.checked_shr((BITS_PER_BLOCK - rem) as u32).unwrap_or(0);
         } else {
             self.cur |= x << rem;
         }

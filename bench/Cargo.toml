@@ -29,3 +29,7 @@ simd-minimizers = ["helicase/packed-seq", "dep:simd-minimizers"]
 [[example]]
 name = "simd_mini"
 required-features = ["simd-minimizers"]
+
+[[example]]
+name = "validate_packed"
+required-features = ["simd-minimizers"]

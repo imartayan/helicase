@@ -169,7 +169,6 @@ df_throughput = df_throughput.sort_values(by='dataset')
 # ---------------------------
 # Compute speedup relative to Needletail
 # ---------------------------
-breakpoint()
 df_pivot = df_throughput.pivot(index='dataset', columns='implementation', values='throughput')
 df_speedup = df_pivot.divide(df_pivot["Needletail (reader)"], axis=0)
 df_speedup = df_speedup.reset_index().melt(id_vars='dataset', var_name='implementation', value_name='speedup')

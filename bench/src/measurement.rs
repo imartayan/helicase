@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use crate::hardware_info::*;
 use crate::stats::stat;
+use helicase::PDEP_ACTIVATE;
 
 pub trait Measurement {
     fn new(filename: &str) -> Self;
@@ -95,14 +96,15 @@ impl Measurement for BaseTime {
         let cpuinfo = get_hardware_info();
 
         print!(
-            "{label},{:.6},{:.6},{:.3},{},{},{},{}",
+            "{label},{:.6},{:.6},{:.3},{},{},{},{},{}",
             throughput_mean,
             throughput_stdev,
             stats.cv,
             self.filename,
             cpuinfo.brand,
             cpuinfo.vendor_id,
-            cpuinfo.vector_tech
+            cpuinfo.vector_tech,
+            PDEP_ACTIVATE,
         );
         if let Some(r) = result {
             print!(",{r}");
@@ -111,7 +113,7 @@ impl Measurement for BaseTime {
     }
 
     fn show_csv_header(&self, show_result: bool) {
-        print!("label,mean,stdev,cv,filename,cpu_brand,cpu_vendor,vector_ISA");
+        print!("label,mean,stdev,cv,filename,cpu_brand,cpu_vendor,vector_ISA,pdep_activate");
         if show_result {
             print!(",result");
         }

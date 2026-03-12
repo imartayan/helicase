@@ -37,5 +37,5 @@ for dataset in "$DATASETS_DIR"/*; do
 
     # Run the benchmark and save output
     RUSTFLAGS="-C target-cpu=native" \
-    cargo r -r --quiet --feature-flag no-pdep --bin bench -- "$dataset" -c $flags >> "$RESULT_PDEP"
+    cargo r -r --quiet --features helicase/no-pdep --bin bench -- "$dataset" -c $flags >> "$RESULT"
 done

@@ -1,4 +1,5 @@
 use colored::*;
+use helicase::PDEP_ACTIVATE;
 use perf_event::events::Hardware;
 use perf_event::{Builder, Counter};
 use std::fmt::Display;
@@ -195,7 +196,7 @@ impl Measurement for PerfMeasurement {
 
     fn show_csv_header(&self, show_result: bool) {
         print!(
-            "label,time_mean,time_stdev,cycle_mean,cycle_stdev,instructions_mean,instructions_stdev,branches_mean,branches_stdev,branch_misses_mean, branch_misses_stdev,size,filename,cpu_brand,cpu_vendor,vector_ISA"
+            "label,time_mean,time_stdev,cycle_mean,cycle_stdev,instructions_mean,instructions_stdev,branches_mean,branches_stdev,branch_misses_mean,branch_misses_stdev,size,filename,cpu_brand,cpu_vendor,vector_ISA,pdep_activate"
         );
         if show_result {
             print!(",result");
@@ -221,7 +222,7 @@ impl Measurement for PerfMeasurement {
         let cpuinfo = get_hardware_info();
 
         print!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             label,
             time.mean,
             time.stdev,
@@ -238,6 +239,7 @@ impl Measurement for PerfMeasurement {
             cpuinfo.brand,
             cpuinfo.vendor_id,
             cpuinfo.vector_tech,
+            PDEP_ACTIVATE,
         );
         if let Some(r) = result {
             print!(",{r}");

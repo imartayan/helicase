@@ -43,3 +43,7 @@ pub(crate) mod simd {
     mod fallback;
     pub use fallback::*;
 }
+#[cfg(feature = "no-pdep")]
+pub const PDEP_ACTIVATE: bool = true;
+#[cfg(not(feature = "no-pdep"))]
+pub const PDEP_ACTIVATE: bool = false;

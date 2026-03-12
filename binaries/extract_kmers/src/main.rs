@@ -1,15 +1,19 @@
+mod timer;
+use timer::TraceTimer;
 mod arrow_types;
 use arrow_types::ArrowDispatch;
-mod parquet_writer;
-use parquet_writer::*;
+mod mmap_arrow_reader;
 
+//mod parquet_writer;
+//use parquet_writer::*;
+//
 mod arrow_writer;
 use arrow_writer::*;
 
 use clap::Parser as ClapParser;
 use helicase::*;
 use std::fs::read;
-use tracing::*;
+use tracing::{info, info_span};
 use tracing_subscriber::fmt::time::UtcTime;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -61,72 +65,81 @@ struct Args {
     /// log level (warn, info, debug)
     #[arg(long, default_value = "info")]
     log_level: String,
-    /// dump to parquet
-    #[arg(long)]
-    parquet_path: Option<String>,
-    /// dump to arrow file
+    /// will create a directory with arrow file fragment there
     #[arg(long)]
     arrow_path: Option<String>,
+    /// log bucket nb
+    #[arg(short = 'b', long, default_value_t = 8)]
+    bucket_log_nb: usize,
+    /// bucket capacity
+    #[arg(short='c', long, default_value_t=1<<20)]
+    capacity: usize,
 }
 
 fn main_dispatched<const K: usize, T: ArrowDispatch + Send + 'static>(args: &Args) {
     let path = &args.input;
     let data = read(path).expect("Cannot open file");
-    info!("Loading the data");
-    if args.dedup | args.sort | args.par_sort {
-        let mut kmers = MerChunk::<K, T>::new();
-        if args.sort | args.par_sort {
-            kmers = kmer_from_fastx_slice::<K, T>(&data).expect("invalid data");
-            info!("Computing {} kmers", kmers.len());
-            info!("Sorting kmers");
-            if args.par_sort {
-                kmers = kmers.par_sort(8, true, args.thread_number);
-            } else {
-                kmers.sort(true);
-            }
-            info!("Got {} uniq kmers", kmers.len());
-        } else {
-            use std::collections::HashSet;
-            use std::hash::RandomState;
-            info!("Building hset of kmers");
-            let mut hash_set: HashSet<_, RandomState> = HashSet::from_iter(kmers.iter());
-            chunk_process_from_fastx_slice::<K, T>(&data, |mer_chunk| {
-                hash_set.extend(mer_chunk.iter());
-                Ok(())
-            })
+    let _span = info_span!("main");
+    let _t = TraceTimer::new("main");
+    if let Some(path) = &args.arrow_path {
+        fastx_slice_to_arrow::<K, T>(&data, path, args.bucket_log_nb, args.capacity)
             .unwrap();
-            info!("Got {} uniq kmers", hash_set.len());
-            kmers.extend(hash_set);
-            info!("Building the KmerChunk from the hashset");
-        }
-        if let Some(path) = &args.parquet_path {
-            mer_chunk_to_parquet::<K, T>(path, &mut kmers).unwrap();
-        }
-        if let Some(path) = &args.arrow_path {
-            mer_chunk_to_arrow::<K, T>(path, &mut kmers).unwrap();
-        }
-        if args.print_kmer {
-            for kmer in kmers.iter() {
-                println!("{}", kmer.to_string());
-            }
-        }
-    } else {
-        if let Some(path) = &args.parquet_path {
-            fastx_slice_to_parquet::<K, T>(path, &data).unwrap();
-        }
-        if let Some(path) = &args.arrow_path {
-            fastx_slice_to_arrow::<K, T>(path, &data).unwrap();
-        }
-        if args.print_kmer {
-            chunk_process_from_fastx_slice::<K, T>(&data, |mer_slice| {
-                for kmer in mer_slice.iter() {
-                    println!("{}", kmer.to_string());
-                }
-                Ok(())
-            })
-            .unwrap();
-        }
     }
+    //if args.dedup | args.sort | args.par_sort {
+    //    let mut kmers = MerChunk::<K, T>::new();
+    //    if args.sort | args.par_sort {
+    //        kmers = kmer_from_fastx_slice::<K, T>(&data).expect("invalid data");
+    //        info!("Computing {} kmers", kmers.len());
+    //        info!("Sorting kmers");
+    //        if args.par_sort {
+    //            kmers = kmers.par_sort(8, true, args.thread_number);
+    //        } else {
+    //            kmers.sort(true);
+    //        }
+    //        info!("Got {} uniq kmers", kmers.len());
+    //    } else {
+    //        use std::collections::HashSet;
+    //        use std::hash::RandomState;
+    //        info!("Building hset of kmers");
+    //        let mut hash_set: HashSet<_, RandomState> = HashSet::from_iter(kmers.iter());
+    //        chunk_process_from_fastx_slice::<K, T>(&data, |mer_chunk| {
+    //            hash_set.extend(mer_chunk.iter());
+    //            Ok(())
+    //        })
+    //        .unwrap();
+    //        info!("Got {} uniq kmers", hash_set.len());
+    //        kmers.extend(hash_set);
+    //        info!("Building the KmerChunk from the hashset");
+    //    }
+    //    if let Some(path) = &args.parquet_path {
+    //        mer_chunk_to_parquet::<K, T>(path, &mut kmers).unwrap();
+    //    }
+    //    if let Some(path) = &args.arrow_path {
+    //        mer_chunk_to_arrow::<K, T>(path, &mut kmers).unwrap();
+    //    }
+    //    if args.print_kmer {
+    //        for kmer in kmers.iter() {
+    //            println!("{}", kmer.to_string());
+    //        }
+    //    }
+    //} else {
+    //    if let Some(path) = &args.parquet_path {
+    //        todo!();
+    //        //fastx_slice_to_parquet::<K, T>(path, &data).unwrap();
+    //    }
+    //    if let Some(path) = &args.arrow_path {
+    //        fastx_slice_to_arrow::<K, T>(path, &data).unwrap();
+    //    }
+    //    if args.print_kmer {
+    //        chunk_process_from_fastx_slice::<K, T>(&data, |mer_slice| {
+    //            for kmer in mer_slice.iter() {
+    //                println!("{}", kmer.to_string());
+    //            }
+    //            Ok(())
+    //        })
+    //        .unwrap();
+    //    }
+    //}
     info!("Done!");
 }
 

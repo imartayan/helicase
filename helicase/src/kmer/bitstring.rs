@@ -199,8 +199,11 @@ impl<T: BitStorage, const K: usize> BitString<T, K> {
 
     pub fn hash(&self) -> u64 {
         let mut x = self.value.fold_to_u64();
-        x ^= x.rotate_left((K / 2) as u32);
-        x ^= x.rotate_right((K / 3) as u32);
+        x ^= x.rotate_left((2 * K) as u32);
+        x ^= x.rotate_right((K * 3) as u32);
+        x ^= x.rotate_left((K * 7) as u32);
+        x ^= x.rotate_right((K * 11) as u32);
+        x = x.wrapping_mul(0x9E3779B97F4A7C15);
         x
     }
 }

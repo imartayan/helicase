@@ -409,12 +409,28 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
 
     #[inline(always)]
     fn make_room(&mut self, keep_from: usize) {
-        let shift = keep_from - self.offset;
-        if shift > 0 {
-            self.data.copy_within(shift..self.len, 0);
-            self.len -= shift;
-            self.pos -= shift;
-            self.offset = keep_from;
+        // Round the shift down to a 64-byte multiple so that `pos` (which is
+        // always a multiple of 64) stays aligned after the copy.  A non-aligned
+        // shift would leave `pos` non-aligned, causing `next()` to emit 0-length
+        // sentinel blocks at buffer boundaries and desynchronise the parser.
+        let shift = keep_from.saturating_sub(self.offset);
+        let aligned_shift = (shift / 64) * 64;
+        if aligned_shift > 0 {
+            self.data.copy_within(aligned_shift..self.len, 0);
+            self.len -= aligned_shift;
+            self.pos -= aligned_shift;
+            self.offset += aligned_shift;
+        } else {
+            // The shift is smaller than 64 bytes (or keep_from is already behind
+            // the buffer start).  Grow the buffer instead so there is room to
+            // refill without overwriting data we still need.
+            // Policy mirrors needletail: double until 8 MiB, then +8 MiB per step.
+            let new_size = if self.data.len() < 1 << 23 {
+                self.data.len() * 2
+            } else {
+                self.data.len() + (1 << 23)
+            };
+            self.data.resize(new_size, 0);
         }
         while self.len < self.data.len() {
             let n = self
@@ -516,6 +532,11 @@ impl InputData<'static> for FileInput {
     }
 
     #[inline(always)]
+    fn make_room(&mut self, keep_from: usize) {
+        self.reader.make_room(keep_from)
+    }
+
+    #[inline(always)]
     fn grow_buffer(&mut self, additional: usize) {
         self.reader.grow_buffer(additional)
     }
@@ -587,6 +608,11 @@ impl InputData<'static> for StdinInput {
     #[inline(always)]
     fn is_end_of_buffer(&self) -> bool {
         self.reader.is_end_of_buffer()
+    }
+
+    #[inline(always)]
+    fn make_room(&mut self, keep_from: usize) {
+        self.reader.make_room(keep_from)
     }
 
     #[inline(always)]

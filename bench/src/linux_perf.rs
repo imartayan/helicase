@@ -1,5 +1,5 @@
 use colored::*;
-use helicase::PDEP_ACTIVATE;
+use helicase::config::advanced::PDEP_ENABLED;
 use perf_event::events::Hardware;
 use perf_event::{Builder, Counter};
 use std::fmt::Display;
@@ -239,7 +239,7 @@ impl Measurement for PerfMeasurement {
             cpuinfo.brand,
             cpuinfo.vendor_id,
             cpuinfo.vector_tech,
-            PDEP_ACTIVATE,
+            PDEP_ENABLED,
         );
         if let Some(r) = result {
             print!(",{r}");

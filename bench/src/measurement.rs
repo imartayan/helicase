@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use crate::hardware_info::*;
 use crate::stats::stat;
-use helicase::PDEP_ACTIVATE;
+use helicase::config::advanced::PDEP_ENABLED;
 
 pub trait Measurement {
     fn new(filename: &str) -> Self;
@@ -104,7 +104,7 @@ impl Measurement for BaseTime {
             cpuinfo.brand,
             cpuinfo.vendor_id,
             cpuinfo.vector_tech,
-            PDEP_ACTIVATE,
+            PDEP_ENABLED,
         );
         if let Some(r) = result {
             print!(",{r}");

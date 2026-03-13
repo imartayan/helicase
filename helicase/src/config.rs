@@ -33,6 +33,11 @@ pub mod advanced {
     pub const MERGE_RECORDS: Config = 1 << 10;
     pub const COMPUTE_MASK_NON_ACTG: Config = 1 << 11;
     pub const COMPUTE_MASK_N: Config = 1 << 12;
+
+    #[cfg(all(target_feature = "bmi2", not(feature = "no-pdep")))]
+    pub const PDEP_ENABLED: bool = true;
+    #[cfg(any(not(target_feature = "bmi2"), feature = "no-pdep"))]
+    pub const PDEP_ENABLED: bool = false;
 }
 
 use advanced::*;

@@ -169,8 +169,15 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastqParser<'a, CONF
         if flag_is_not_set(CONFIG, COMPUTE_DNA_STRING) {
             panic!("Parser config error: dna_string is not enabled")
         }
-        if I::RANDOM_ACCESS && flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
-            &self.lexer.input.data()[self.dna_range.clone()]
+        if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
+            if I::RANDOM_ACCESS {
+                &self.lexer.input.data()[self.dna_range.clone()]
+            } else {
+                // Zero-copy: make_room guarantees DNA lives at buf[start-off..end-off].
+                let off = self.lexer.input.buffer_offset();
+                let buf = self.lexer.input.buffer();
+                &buf[self.dna_range.start - off..self.dna_range.end - off]
+            }
         } else {
             &self.cur_dna_string
         }
@@ -181,8 +188,14 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastqParser<'a, CONF
         if flag_is_not_set(CONFIG, COMPUTE_DNA_STRING) {
             panic!("Parser config error: dna_string is not enabled")
         }
-        if I::RANDOM_ACCESS && flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
-            self.lexer.input.data()[self.dna_range.clone()].to_vec()
+        if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
+            if I::RANDOM_ACCESS {
+                self.lexer.input.data()[self.dna_range.clone()].to_vec()
+            } else {
+                let off = self.lexer.input.buffer_offset();
+                self.lexer.input.buffer()[self.dna_range.start - off..self.dna_range.end - off]
+                    .to_vec()
+            }
         } else {
             let mut res = Vec::with_capacity(self.cur_dna_string.capacity());
             swap(&mut res, &mut self.cur_dna_string);
@@ -267,7 +280,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastqParser<'a, CONF
         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
             self.dna_len
         } else if flag_is_set(CONFIG, COMPUTE_DNA_STRING) {
-            if I::RANDOM_ACCESS && flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
+            if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
                 self.dna_range.len()
             } else {
                 self.cur_dna_string.len()
@@ -413,21 +426,15 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                             let dna_chunk = &self.lexer.input.current_block()[self.pos_in_block..];
                             self.cur_dna_string.extend_from_slice(dna_chunk);
                         }
-                        // For file-backed inputs: if the buffer is exhausted, copy DNA
-                        // accumulated so far in this buffer fill before it is overwritten.
+                        // For file-backed inputs: if the buffer is exhausted, shift DNA
+                        // to the front of the buffer and refill (growing if needed).
+                        // This keeps DNA alive in the buffer for zero-copy access later.
                         if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
                             && !I::RANDOM_ACCESS
                             && flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
                             && self.lexer.input.is_end_of_buffer()
                         {
-                            let buf = self.lexer.input.buffer();
-                            let off = self.lexer.input.buffer_offset();
-                            let start_in_buf = if self.cur_dna_string.is_empty() {
-                                self.dna_range.start - off
-                            } else {
-                                0
-                            };
-                            self.cur_dna_string.extend_from_slice(&buf[start_in_buf..]);
+                            self.lexer.input.make_room(self.dna_range.start);
                         }
                         if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
                             self.cur_dna_columnar.append(
@@ -515,28 +522,13 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                     {
                         self.dna_range.end = self.global_pos();
                     }
-                    // File-backed: finalize cur_dna_string with a single bulk copy
-                    // (common: DNA fits in one buffer fill) or append the trailing
-                    // chunk when a boundary crossing already populated the prefix.
                     if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
                         && !I::RANDOM_ACCESS
                         && flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
+                        && self.pos_in_block + 1 >= self.block.len
+                        && self.lexer.input.is_end_of_buffer()
                     {
-                        if self.cur_dna_string.is_empty() {
-                            // Common path: DNA never crossed a buffer boundary.
-                            // Single bulk copy from the buffer.
-                            let off = self.lexer.input.buffer_offset();
-                            let buf = self.lexer.input.buffer();
-                            self.cur_dna_string.extend_from_slice(
-                                &buf[self.dna_range.start - off..self.dna_range.end - off],
-                            );
-                        } else {
-                            // Boundary-crossing path: prefix already in cur_dna_string.
-                            // Append the final chunk from the current block.
-                            let chunk =
-                                &self.lexer.input.current_block()[first_pos..self.pos_in_block];
-                            self.cur_dna_string.extend_from_slice(chunk);
-                        }
+                        self.lexer.input.make_room(self.dna_range.start);
                     }
                     if flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
                         || ((1 << self.pos_in_block) & self.block.newline) != 0
@@ -551,6 +543,13 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                 2 => {
                     // PLUS
                     while self.block.newline == 0 {
+                        if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
+                            && !I::RANDOM_ACCESS
+                            && flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
+                            && self.lexer.input.is_end_of_buffer()
+                        {
+                            self.lexer.input.make_room(self.dna_range.start);
+                        }
                         self.block = match self.lexer.next() {
                             Some(b) => b,
                             None => {
@@ -562,6 +561,14 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         self.pos_in_block = 0;
                     }
                     self.pos_in_block = self.block.newline.trailing_zeros() as usize;
+                    if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
+                        && !I::RANDOM_ACCESS
+                        && flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
+                        && self.pos_in_block + 1 >= self.block.len
+                        && self.lexer.input.is_end_of_buffer()
+                    {
+                        self.lexer.input.make_room(self.dna_range.start);
+                    }
                     self.consume_newline();
                 }
                 3 => {
@@ -575,6 +582,13 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                             let quality_chunk =
                                 &self.lexer.input.current_block()[self.pos_in_block..];
                             self.cur_quality.extend_from_slice(quality_chunk);
+                        }
+                        if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
+                            && !I::RANDOM_ACCESS
+                            && flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
+                            && self.lexer.input.is_end_of_buffer()
+                        {
+                            self.lexer.input.make_room(self.dna_range.start);
                         }
                         self.block = match self.lexer.next() {
                             Some(b) => b,
@@ -601,6 +615,14 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         let quality_chunk =
                             &self.lexer.input.current_block()[first_pos..self.pos_in_block];
                         self.cur_quality.extend_from_slice(quality_chunk);
+                    }
+                    if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
+                        && !I::RANDOM_ACCESS
+                        && flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
+                        && self.pos_in_block + 1 >= self.block.len
+                        && self.lexer.input.is_end_of_buffer()
+                    {
+                        self.lexer.input.make_room(self.dna_range.start);
                     }
                     self.consume_newline();
                     if flag_is_set(CONFIG, RETURN_RECORD) {

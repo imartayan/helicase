@@ -394,7 +394,7 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
 
     #[inline(always)]
     fn buffer(&self) -> &[u8] {
-        &self.data
+        &self.data[..self.len]
     }
 
     #[inline(always)]

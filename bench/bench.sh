@@ -21,7 +21,7 @@ for dataset in "$DATASETS_DIR"/*; do
 
     # Run the benchmark and save output
     RUSTFLAGS="-C target-cpu=native" \
-    cargo r -r --quiet --bin bench -- "$dataset" -c $flags >> "$RESULT"
+    cargo r -r --quiet --bin bench -- "$dataset" -c -f -m $flags >> "$RESULT"
     flags="-H"
 done
 
@@ -37,5 +37,5 @@ for dataset in "$DATASETS_DIR"/*; do
 
     # Run the benchmark and save output
     RUSTFLAGS="-C target-cpu=native" \
-    cargo r -r --quiet --features helicase/no-pdep --bin bench -- "$dataset" -c $flags >> "$RESULT"
+    cargo r -r --quiet --features helicase/no-pdep --bin bench -- "$dataset" -c -f -m $flags >> "$RESULT"
 done

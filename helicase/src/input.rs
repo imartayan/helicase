@@ -43,6 +43,16 @@ pub trait InputData<'a>: Iterator<Item = &'a [u8]> {
     /// This is only relevant for reader-based implementations.
     fn is_end_of_buffer(&self) -> bool;
 
+    /// Shift buffered data starting at `keep_from` (absolute file offset) to
+    /// the beginning of the buffer, then refill the rest from the reader.
+    ///
+    /// After this call `buffer_offset() == keep_from` and `buffer()[0..]`
+    /// holds everything from `keep_from` onwards.
+    ///
+    /// This is only relevant for reader-based implementations.
+    #[inline(always)]
+    fn make_room(&mut self, _keep_from: usize) {}
+
     /// Grow buffer and load `additional` new bytes.
     ///
     /// This is only relevant for reader-based implementations.
@@ -394,7 +404,30 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
 
     #[inline(always)]
     fn is_end_of_buffer(&self) -> bool {
-        self.pos >= self.data.len()
+        self.pos >= self.len
+    }
+
+    #[inline(always)]
+    fn make_room(&mut self, keep_from: usize) {
+        let shift = keep_from - self.offset;
+        if shift > 0 {
+            self.data.copy_within(shift..self.len, 0);
+            self.len -= shift;
+            self.pos -= shift;
+            self.offset = keep_from;
+        }
+        while self.len < self.data.len() {
+            let n = self
+                .decoder
+                .read(&mut self.data[self.len..])
+                .expect("Error while reading data");
+            if n == 0 {
+                break;
+            }
+            self.len += n;
+        }
+        let padded = self.len.next_multiple_of(64);
+        self.data[self.len..padded].fill(0);
     }
 
     #[inline(always)]

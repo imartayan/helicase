@@ -389,18 +389,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
                     self.block.len - self.pos_in_block,
                 );
             }
-            if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
-                self.cur_mask_non_actg.append(
-                    self.block.mask_non_actg >> self.pos_in_block,
-                    64 - self.pos_in_block,
-                );
-            }
-            if flag_is_set(CONFIG, COMPUTE_MASK_N) {
-                self.cur_mask_n.append(
-                    self.block.mask_n >> self.pos_in_block,
-                    64 - self.pos_in_block,
-                );
-            }
             if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
                 self.dna_len += self.block.len - self.pos_in_block;
             }

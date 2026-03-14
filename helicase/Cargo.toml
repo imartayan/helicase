@@ -10,6 +10,7 @@ license = "MIT"
 [dependencies]
 deko = { version = "0.6", default-features = false }
 flate2 = { version = "1.1", features = ["zlib-rs"], optional = true }
+memchr = "2.8"
 memmap2 = "0.9"
 packed-seq = { version = "4.4", default-features = false, optional = true }
 paraseq = { version = "0.4", default-features = false, optional = true }

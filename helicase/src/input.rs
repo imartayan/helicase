@@ -348,16 +348,31 @@ impl<'a, R: Read + Send + 'a> Iterator for ReaderInput<'a, R> {
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         if self.pos >= self.len {
-            let n = self
-                .decoder
-                .read(&mut self.data)
-                .expect("Error while reading data");
-            if n == 0 {
-                return None;
-            }
+            // Save state so we can restore it on EOF, keeping the buffer valid for
+            // zero-copy callers (e.g. get_dna_string) that run after next() returns None.
+            let saved_offset = self.offset;
+            let saved_pos = self.pos;
+            let saved_len = self.len;
             self.offset += self.len;
             self.pos = 0;
-            self.len = n;
+            self.len = 0;
+            while self.len < self.data.len() {
+                let n = self
+                    .decoder
+                    .read(&mut self.data[self.len..])
+                    .expect("Error while reading data");
+                if n == 0 {
+                    break;
+                }
+                self.len += n;
+            }
+            if self.len == 0 {
+                // EOF: roll back so buffer() still returns the last valid window.
+                self.offset = saved_offset;
+                self.pos = saved_pos;
+                self.len = saved_len;
+                return None;
+            }
             let padded_len = self.len.next_multiple_of(64);
             self.data[self.len..padded_len].fill(0);
         }

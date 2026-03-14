@@ -7,7 +7,8 @@ use std::fs::File;
 use std::io::{self, Read, Stdin, stdin};
 use std::path::Path;
 
-const DEFAULT_BUFFER_SIZE: usize = 1 << 16;
+const BUFFER_DEFAULT_SIZE: usize = 1 << 17;
+const BUFFER_DOUBLE_UNTIL: usize = 1 << 24;
 
 pub trait InputData<'a>: Iterator<Item = &'a [u8]> {
     const RANDOM_ACCESS: bool;
@@ -324,7 +325,7 @@ pub struct ReaderInput<'a, R: Read + Send + 'a> {
 impl<'a, R: Read + Send + 'a> ReaderInput<'a, R> {
     pub fn new(reader: R) -> Self {
         let mut decoder = AnyDecoder::new(reader);
-        let mut data = vec![0; DEFAULT_BUFFER_SIZE];
+        let mut data = vec![0; BUFFER_DEFAULT_SIZE];
         let len = decoder
             .read(&mut data[..64])
             .expect("Error while reading data");
@@ -425,10 +426,10 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
             // the buffer start).  Grow the buffer instead so there is room to
             // refill without overwriting data we still need.
             // Policy mirrors needletail: double until 8 MiB, then +8 MiB per step.
-            let new_size = if self.data.len() < 1 << 23 {
+            let new_size = if self.data.len() < BUFFER_DOUBLE_UNTIL {
                 self.data.len() * 2
             } else {
-                self.data.len() + (1 << 23)
+                self.data.len() + BUFFER_DOUBLE_UNTIL
             };
             self.data.resize(new_size, 0);
         }

@@ -28,6 +28,22 @@ pub struct FastqChunk {
     pub mask_n: u64,
 }
 
+impl FastqChunk {
+    #[inline(always)]
+    fn from_mask(len: usize, mask: FastqBitmask) -> Self {
+        Self {
+            len,
+            newline: mask.line_feeds,
+            is_dna: mask.is_dna & !mask.line_feeds,
+            two_bits: mask.two_bits,
+            high_bit: mask.high_bit,
+            low_bit: mask.low_bit,
+            mask_non_actg: mask.mask_non_actg & !mask.line_feeds,
+            mask_n: mask.mask_n,
+        }
+    }
+}
+
 impl Chunk for FastqChunk {}
 
 pub struct FastqLexer<'a, const CONFIG: Config, I: InputData<'a>> {
@@ -55,23 +71,24 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Lexer for FastqLexer<'a, CONFIG
     }
 }
 
+impl<'a, const CONFIG: Config, I: InputData<'a>> FastqLexer<'a, CONFIG, I> {
+    /// Re-run the SIMD scan on the current block and return the resulting
+    /// [`FastqChunk`] with the given `len`.  Used after `skip_to_newline` to
+    /// refresh stale bitmask fields (`is_dna`, `newline`, etc.) that were left
+    /// over from the quality block.
+    #[inline(always)]
+    pub(crate) fn scan_current_block(&self, len: usize) -> FastqChunk {
+        FastqChunk::from_mask(len, extract_fastq_bitmask::<CONFIG>(self.input.current_block()))
+    }
+}
+
 impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqLexer<'a, CONFIG, I> {
     type Item = FastqChunk;
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         self.input.next().map(|chunk| {
-            let mask = extract_fastq_bitmask::<CONFIG>(chunk);
-            FastqChunk {
-                len: chunk.len(),
-                newline: mask.line_feeds,
-                is_dna: mask.is_dna & !mask.line_feeds,
-                two_bits: mask.two_bits,
-                high_bit: mask.high_bit,
-                low_bit: mask.low_bit,
-                mask_non_actg: mask.mask_non_actg & !mask.line_feeds,
-                mask_n: mask.mask_n,
-            }
+            FastqChunk::from_mask(chunk.len(), extract_fastq_bitmask::<CONFIG>(chunk))
         })
     }
 }

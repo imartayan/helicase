@@ -2,6 +2,7 @@
 
 use core::marker::PhantomData;
 use deko::read::AnyDecoder;
+use memchr::memchr;
 use memmap2::Mmap;
 use std::fs::File;
 use std::io::{self, Read, Stdin, stdin};
@@ -59,6 +60,30 @@ pub trait InputData<'a>: Iterator<Item = &'a [u8]> {
     /// This is only relevant for reader-based implementations.
     #[inline(always)]
     fn grow_buffer(&mut self, _additional: usize) {}
+
+    /// Scan the remaining buffer for the next `\n` byte without running the
+    /// SIMD lexer.  Advances the internal buffer position past the block that
+    /// contains the newline and returns `(delta_blocks, pos_in_block,
+    /// block_len)`:
+    ///
+    /// - `delta_blocks`: number of full 64-byte blocks skipped *before* the
+    ///   newline block (i.e. `block_counter` should increase by `delta_blocks + 1`).
+    /// - `pos_in_block`: byte offset of `\n` within the newline-containing block.
+    /// - `block_len`: number of valid bytes in the newline-containing block
+    ///   (`64` for a full block, less for the final partial block).
+    ///
+    /// Returns `None` if no `\n` is found in the remaining buffered data
+    /// (caller should fall back to the block-by-block lexer loop).
+    ///
+    /// The caller is responsible for re-running the SIMD scan on `current_block()`
+    /// to obtain fresh `is_dna`, `newline`, and other bitmasks after this call.
+    ///
+    /// This is only relevant for reader-based implementations; the default
+    /// returns `None` (random-access inputs use the existing block loop).
+    #[inline(always)]
+    fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)> {
+        None
+    }
 
     /// Returns the first byte of the (uncompressed when possible) input.
     fn first_byte(&self) -> u8;
@@ -156,6 +181,21 @@ impl<'a> InputData<'a> for SliceInput<'a> {
     }
 
     #[inline(always)]
+    fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)> {
+        if self.pos >= self.data.len() {
+            return None;
+        }
+        let p = memchr(b'\n', &self.data[self.pos..])?;
+        let delta_blocks = p / 64;
+        let pos_in_block = p % 64;
+        let block_start = self.pos + delta_blocks * 64;
+        let block_end = (block_start + 64).min(self.data.len());
+        let block_len = block_end - block_start;
+        self.pos = block_start + 64;
+        Some((delta_blocks, pos_in_block, block_len))
+    }
+
+    #[inline(always)]
     fn first_byte(&self) -> u8 {
         self.first_byte
     }
@@ -227,6 +267,11 @@ impl<'a> InputData<'a> for MmapInput<'a> {
     }
 
     #[inline(always)]
+    fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)> {
+        self.slice.skip_to_newline()
+    }
+
+    #[inline(always)]
     fn first_byte(&self) -> u8 {
         self.slice.first_byte()
     }
@@ -291,6 +336,11 @@ impl InputData<'static> for RamFileInput {
     #[inline(always)]
     fn is_end_of_buffer(&self) -> bool {
         self.slice.is_end_of_buffer()
+    }
+
+    #[inline(always)]
+    fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)> {
+        self.slice.skip_to_newline()
     }
 
     #[inline(always)]
@@ -475,6 +525,28 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
     }
 
     #[inline(always)]
+    fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)> {
+        // self.pos is always a multiple of 64 and points to the start of the
+        // next block that would be returned by Iterator::next().  Scan from
+        // there through the end of valid data for '\n'.
+        if self.pos >= self.len {
+            return None;
+        }
+        let p = memchr(b'\n', &self.data[self.pos..self.len])?;
+        // p is a byte offset from self.pos.
+        let delta_blocks = p / 64; // full 64-byte blocks before the \n block
+        let pos_in_block = p % 64; // position of \n within its block
+        let block_start = self.pos + delta_blocks * 64;
+        let block_end = (block_start + 64).min(self.len);
+        let block_len = block_end - block_start;
+        // Advance past the block that contains the newline so the next
+        // Iterator::next() call (from consume_newline → increment_pos) will
+        // correctly load the block that follows the quality line.
+        self.pos = block_start + 64;
+        Some((delta_blocks, pos_in_block, block_len))
+    }
+
+    #[inline(always)]
     fn first_byte(&self) -> u8 {
         self.first_byte
     }
@@ -558,6 +630,11 @@ impl InputData<'static> for FileInput {
     }
 
     #[inline(always)]
+    fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)> {
+        self.reader.skip_to_newline()
+    }
+
+    #[inline(always)]
     fn first_byte(&self) -> u8 {
         self.reader.first_byte()
     }
@@ -634,6 +711,11 @@ impl InputData<'static> for StdinInput {
     #[inline(always)]
     fn grow_buffer(&mut self, additional: usize) {
         self.reader.grow_buffer(additional)
+    }
+
+    #[inline(always)]
+    fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)> {
+        self.reader.skip_to_newline()
     }
 
     #[inline(always)]

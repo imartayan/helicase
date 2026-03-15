@@ -509,7 +509,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                         continue;
                     }
                     self.finished = self.skip_to_header_or_dna();
-                    self.contiguous_dna = true;
                     if (1u64 << self.pos_in_block & self.block.header) != 0 {
                         self.state = State::Header;
                         if flag_is_set(CONFIG, RETURN_RECORD) {
@@ -531,6 +530,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                     if flag_is_set(CONFIG, COMPUTE_HEADER) && I::RANDOM_ACCESS {
                         self.header_range.end = self.global_pos() - 1;
                     }
+                    self.contiguous_dna = true;
                     self.state = State::Restart;
                 }
                 State::StartDNA => {

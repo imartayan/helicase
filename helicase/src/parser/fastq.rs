@@ -19,8 +19,6 @@ pub struct FastqParser<'a, const CONFIG: Config, I: InputData<'a>> {
     header_range: Range<usize>,
     quality_range: Range<usize>,
     dna_range: Range<usize>,
-    cur_header: Vec<u8>,
-    cur_quality: Vec<u8>,
     cur_dna_string: Vec<u8>,
     cur_dna_columnar: ColumnarDNA,
     cur_dna_packed: PackedDNA,
@@ -49,8 +47,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
             header_range: 0..0,
             quality_range: 0..0,
             dna_range: 0..0,
-            cur_header: Vec::new(),
-            cur_quality: Vec::new(),
             cur_dna_string: Vec::new(),
             cur_dna_columnar: ColumnarDNA::new(),
             cur_dna_packed: PackedDNA::new(),
@@ -81,12 +77,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastqParser<'a, CONF
 
     #[inline(always)]
     fn clear_record(&mut self) {
-        if flag_is_set(CONFIG, COMPUTE_HEADER) {
-            self.cur_header.clear();
-        }
-        if flag_is_set(CONFIG, COMPUTE_QUALITY) {
-            self.cur_quality.clear();
-        }
         self.clear_chunk();
     }
 
@@ -120,7 +110,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastqParser<'a, CONF
         if I::RANDOM_ACCESS {
             &self.lexer.input.data()[self.header_range.clone()]
         } else {
-            &self.cur_header
+            let off = self.lexer.input.buffer_offset();
+            &self.lexer.input.buffer()[self.header_range.start - off..self.header_range.end - off]
         }
     }
 
@@ -132,9 +123,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastqParser<'a, CONF
         if I::RANDOM_ACCESS {
             self.lexer.input.data()[self.header_range.clone()].to_vec()
         } else {
-            let mut res = Vec::with_capacity(self.cur_header.capacity());
-            swap(&mut res, &mut self.cur_header);
-            res
+            let off = self.lexer.input.buffer_offset();
+            self.lexer.input.buffer()[self.header_range.start - off..self.header_range.end - off]
+                .to_vec()
         }
     }
 
@@ -202,8 +193,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastqParser<'a, CONF
             self.lexer.input.data()[self.dna_range.clone()].to_vec()
         } else {
             let off = self.lexer.input.buffer_offset();
-            self.lexer.input.buffer()[self.dna_range.start - off..self.dna_range.end - off]
-                .to_vec()
+            self.lexer.input.buffer()[self.dna_range.start - off..self.dna_range.end - off].to_vec()
         }
     }
 
@@ -355,14 +345,15 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                     if flag_is_not_set(CONFIG, MERGE_RECORDS) {
                         self.clear_record();
                     }
-                    if flag_is_set(CONFIG, COMPUTE_HEADER) && I::RANDOM_ACCESS {
+                    if flag_is_set(CONFIG, COMPUTE_HEADER) {
                         self.header_range.start = self.global_pos();
                     }
-                    let mut first_pos = self.pos_in_block;
                     while self.block.newline == 0 {
-                        if flag_is_set(CONFIG, COMPUTE_HEADER) && !I::RANDOM_ACCESS {
-                            let header_chunk = &self.lexer.input.current_block()[first_pos..];
-                            self.cur_header.extend_from_slice(header_chunk);
+                        if flag_is_set(CONFIG, COMPUTE_HEADER)
+                            && !I::RANDOM_ACCESS
+                            && self.lexer.input.is_end_of_buffer()
+                        {
+                            self.lexer.input.make_room(self.header_range.start);
                         }
                         self.block = match self.lexer.next() {
                             Some(b) => b,
@@ -373,16 +364,21 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         };
                         self.block_counter += 1;
                         self.pos_in_block = 0;
-                        first_pos = 0;
                     }
                     self.pos_in_block = self.block.newline.trailing_zeros() as usize;
-                    if flag_is_set(CONFIG, COMPUTE_HEADER) && I::RANDOM_ACCESS {
+                    if flag_is_set(CONFIG, COMPUTE_HEADER) {
                         self.header_range.end = self.global_pos();
                     }
-                    if flag_is_set(CONFIG, COMPUTE_HEADER) && !I::RANDOM_ACCESS {
-                        let header_chunk =
-                            &self.lexer.input.current_block()[first_pos..self.pos_in_block];
-                        self.cur_header.extend_from_slice(header_chunk);
+                    // Zero-copy header: if the header newline is at the very end of the
+                    // buffer, consume_newline() → increment_pos() → lexer.next() would
+                    // reload the buffer (advancing buffer_offset past header_range.start).
+                    // Anchor the buffer at header_range.start first.
+                    if flag_is_set(CONFIG, COMPUTE_HEADER)
+                        && !I::RANDOM_ACCESS
+                        && self.pos_in_block + 1 >= self.block.len
+                        && self.lexer.input.is_end_of_buffer()
+                    {
+                        self.lexer.input.make_room(self.header_range.start);
                     }
                     self.consume_newline();
                 }
@@ -427,15 +423,22 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                             let dna_chunk = &self.lexer.input.current_block()[self.pos_in_block..];
                             self.cur_dna_string.extend_from_slice(dna_chunk);
                         }
-                        // For file-backed inputs without merge: shift DNA to the front of
+                        // For file-backed inputs: shift the record anchor to the front of
                         // the buffer and refill so zero-copy access remains valid later.
-                        if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
-                            && !I::RANDOM_ACCESS
-                            && !(flag_is_set(CONFIG, SPLIT_NON_ACTG)
-                                && flag_is_set(CONFIG, MERGE_DNA_CHUNKS))
+                        if !I::RANDOM_ACCESS
                             && self.lexer.input.is_end_of_buffer()
+                            && (flag_is_set(CONFIG, COMPUTE_HEADER)
+                                || (flag_is_set(CONFIG, COMPUTE_DNA_STRING)
+                                    && !(flag_is_set(CONFIG, SPLIT_NON_ACTG)
+                                        && flag_is_set(CONFIG, MERGE_DNA_CHUNKS))))
                         {
-                            self.lexer.input.make_room(self.dna_range.start);
+                            self.lexer
+                                .input
+                                .make_room(if flag_is_set(CONFIG, COMPUTE_HEADER) {
+                                    self.header_range.start
+                                } else {
+                                    self.dna_range.start
+                                });
                         }
                         if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
                             self.cur_dna_columnar.append(
@@ -520,14 +523,21 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         0
                     };
                     self.dna_range.end = self.global_pos();
-                    if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
-                        && !I::RANDOM_ACCESS
-                        && !(flag_is_set(CONFIG, SPLIT_NON_ACTG)
-                            && flag_is_set(CONFIG, MERGE_DNA_CHUNKS))
+                    if !I::RANDOM_ACCESS
                         && self.pos_in_block + 1 >= self.block.len
                         && self.lexer.input.is_end_of_buffer()
+                        && (flag_is_set(CONFIG, COMPUTE_HEADER)
+                            || (flag_is_set(CONFIG, COMPUTE_DNA_STRING)
+                                && !(flag_is_set(CONFIG, SPLIT_NON_ACTG)
+                                    && flag_is_set(CONFIG, MERGE_DNA_CHUNKS))))
                     {
-                        self.lexer.input.make_room(self.dna_range.start);
+                        self.lexer
+                            .input
+                            .make_room(if flag_is_set(CONFIG, COMPUTE_HEADER) {
+                                self.header_range.start
+                            } else {
+                                self.dna_range.start
+                            });
                     }
                     if flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
                         || ((1 << self.pos_in_block) & self.block.newline) != 0
@@ -542,13 +552,20 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                 2 => {
                     // PLUS
                     while self.block.newline == 0 {
-                        if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
-                            && !I::RANDOM_ACCESS
-                            && !(flag_is_set(CONFIG, SPLIT_NON_ACTG)
-                                && flag_is_set(CONFIG, MERGE_DNA_CHUNKS))
+                        if !I::RANDOM_ACCESS
                             && self.lexer.input.is_end_of_buffer()
+                            && (flag_is_set(CONFIG, COMPUTE_HEADER)
+                                || (flag_is_set(CONFIG, COMPUTE_DNA_STRING)
+                                    && !(flag_is_set(CONFIG, SPLIT_NON_ACTG)
+                                        && flag_is_set(CONFIG, MERGE_DNA_CHUNKS))))
                         {
-                            self.lexer.input.make_room(self.dna_range.start);
+                            self.lexer
+                                .input
+                                .make_room(if flag_is_set(CONFIG, COMPUTE_HEADER) {
+                                    self.header_range.start
+                                } else {
+                                    self.dna_range.start
+                                });
                         }
                         self.block = match self.lexer.next() {
                             Some(b) => b,
@@ -561,14 +578,21 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         self.pos_in_block = 0;
                     }
                     self.pos_in_block = self.block.newline.trailing_zeros() as usize;
-                    if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
-                        && !I::RANDOM_ACCESS
-                        && !(flag_is_set(CONFIG, SPLIT_NON_ACTG)
-                            && flag_is_set(CONFIG, MERGE_DNA_CHUNKS))
+                    if !I::RANDOM_ACCESS
                         && self.pos_in_block + 1 >= self.block.len
                         && self.lexer.input.is_end_of_buffer()
+                        && (flag_is_set(CONFIG, COMPUTE_HEADER)
+                            || (flag_is_set(CONFIG, COMPUTE_DNA_STRING)
+                                && !(flag_is_set(CONFIG, SPLIT_NON_ACTG)
+                                    && flag_is_set(CONFIG, MERGE_DNA_CHUNKS))))
                     {
-                        self.lexer.input.make_room(self.dna_range.start);
+                        self.lexer
+                            .input
+                            .make_room(if flag_is_set(CONFIG, COMPUTE_HEADER) {
+                                self.header_range.start
+                            } else {
+                                self.dna_range.start
+                            });
                     }
                     self.consume_newline();
                 }
@@ -586,14 +610,25 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                     // buffer is exhausted (DNA anchor first, quality anchor second).
                     if self.dna_range.len() >= 1024 && self.block.newline == 0 {
                         if !I::RANDOM_ACCESS && self.lexer.input.is_end_of_buffer() {
-                            if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
-                                && !(flag_is_set(CONFIG, SPLIT_NON_ACTG)
-                                    && flag_is_set(CONFIG, MERGE_DNA_CHUNKS))
+                            if flag_is_set(CONFIG, COMPUTE_HEADER)
+                                || (flag_is_set(CONFIG, COMPUTE_DNA_STRING)
+                                    && !(flag_is_set(CONFIG, SPLIT_NON_ACTG)
+                                        && flag_is_set(CONFIG, MERGE_DNA_CHUNKS)))
                             {
-                                self.lexer.input.make_room(self.dna_range.start);
+                                self.lexer.input.make_room(
+                                    if flag_is_set(CONFIG, COMPUTE_HEADER) {
+                                        self.header_range.start
+                                    } else {
+                                        self.dna_range.start
+                                    },
+                                );
                             }
                             if flag_is_set(CONFIG, COMPUTE_QUALITY)
                                 && self.lexer.input.is_end_of_buffer()
+                                && !flag_is_set(CONFIG, COMPUTE_HEADER)
+                                && !(flag_is_set(CONFIG, COMPUTE_DNA_STRING)
+                                    && !(flag_is_set(CONFIG, SPLIT_NON_ACTG)
+                                        && flag_is_set(CONFIG, MERGE_DNA_CHUNKS)))
                             {
                                 self.lexer.input.make_room(self.quality_range.start);
                             }
@@ -611,20 +646,31 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         // None → quality spans a buffer boundary; fall through to while loop.
                     }
                     while self.block.newline == 0 {
-                        // Zero-copy anchoring: keep DNA (and thus quality) in buffer.
-                        // DNA guard fires first; if it refills the buffer the quality
+                        // Zero-copy anchoring: keep record (header/DNA/quality) in buffer.
+                        // Record guard fires first; if it refills the buffer the quality
                         // guard's is_end_of_buffer() check will be false (no double refill).
-                        if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
-                            && !I::RANDOM_ACCESS
-                            && !(flag_is_set(CONFIG, SPLIT_NON_ACTG)
-                                && flag_is_set(CONFIG, MERGE_DNA_CHUNKS))
+                        if !I::RANDOM_ACCESS
                             && self.lexer.input.is_end_of_buffer()
+                            && (flag_is_set(CONFIG, COMPUTE_HEADER)
+                                || (flag_is_set(CONFIG, COMPUTE_DNA_STRING)
+                                    && !(flag_is_set(CONFIG, SPLIT_NON_ACTG)
+                                        && flag_is_set(CONFIG, MERGE_DNA_CHUNKS))))
                         {
-                            self.lexer.input.make_room(self.dna_range.start);
+                            self.lexer
+                                .input
+                                .make_room(if flag_is_set(CONFIG, COMPUTE_HEADER) {
+                                    self.header_range.start
+                                } else {
+                                    self.dna_range.start
+                                });
                         }
                         if flag_is_set(CONFIG, COMPUTE_QUALITY)
                             && !I::RANDOM_ACCESS
                             && self.lexer.input.is_end_of_buffer()
+                            && !flag_is_set(CONFIG, COMPUTE_HEADER)
+                            && !(flag_is_set(CONFIG, COMPUTE_DNA_STRING)
+                                && !(flag_is_set(CONFIG, SPLIT_NON_ACTG)
+                                    && flag_is_set(CONFIG, MERGE_DNA_CHUNKS)))
                         {
                             self.lexer.input.make_room(self.quality_range.start);
                         }
@@ -643,17 +689,25 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         self.pos_in_block = self.pos_in_block.min(self.block.len);
                         self.quality_range.end = self.global_pos();
                     }
-                    if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
-                        && !I::RANDOM_ACCESS
-                        && !(flag_is_set(CONFIG, SPLIT_NON_ACTG)
-                            && flag_is_set(CONFIG, MERGE_DNA_CHUNKS))
+                    if !I::RANDOM_ACCESS
                         && self.pos_in_block + 1 >= self.block.len
                         && self.lexer.input.is_end_of_buffer()
+                        && (flag_is_set(CONFIG, COMPUTE_HEADER)
+                            || (flag_is_set(CONFIG, COMPUTE_DNA_STRING)
+                                && !(flag_is_set(CONFIG, SPLIT_NON_ACTG)
+                                    && flag_is_set(CONFIG, MERGE_DNA_CHUNKS))))
                     {
-                        self.lexer.input.make_room(self.dna_range.start);
+                        self.lexer
+                            .input
+                            .make_room(if flag_is_set(CONFIG, COMPUTE_HEADER) {
+                                self.header_range.start
+                            } else {
+                                self.dna_range.start
+                            });
                     }
                     if flag_is_set(CONFIG, COMPUTE_QUALITY)
                         && !I::RANDOM_ACCESS
+                        && !flag_is_set(CONFIG, COMPUTE_HEADER)
                         && !(flag_is_set(CONFIG, COMPUTE_DNA_STRING)
                             && !(flag_is_set(CONFIG, SPLIT_NON_ACTG)
                                 && flag_is_set(CONFIG, MERGE_DNA_CHUNKS)))

@@ -4,7 +4,7 @@ use crate::dna_format::*;
 #[cfg(feature = "packed-seq")]
 use packed_seq::{PackedSeq, PackedSeqVec};
 
-pub trait Parser {
+pub trait HelicaseParser {
     /// Get the [`Format`] associated to this parser.
     fn format(&self) -> Format;
 
@@ -102,6 +102,6 @@ pub trait Parser {
     fn clear_record(&mut self);
 }
 
-pub trait ParserIter: Parser + Iterator<Item = Event> {}
+pub trait HelicaseParserIter: HelicaseParser + Iterator<Item = Event> {}
 
-impl<T: Parser + Iterator<Item = Event>> ParserIter for T {}
+impl<T: HelicaseParser + Iterator<Item = Event>> HelicaseParserIter for T {}

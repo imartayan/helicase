@@ -11,7 +11,7 @@ pub use crate::input::*;
 pub use config::{Config, ParserOptions};
 pub use kmer::*;
 pub use kmer_collection::*;
-pub use parser::{Event, FastaParser, FastqParser, FastxParser, Parser};
+pub use parser::{FastaParser, FastqParser, FastxParser, HelicaseParser};
 
 #[cfg(target_feature = "avx2")]
 pub(crate) mod simd {

@@ -5,7 +5,7 @@ use crate::input::*;
 use std::io;
 
 /// A wrapper for [`FastaParser`] / [`FastqParser`] detecting the format at runtime.
-pub struct FastxParser<'a, const CONFIG: Config>(Box<dyn ParserIter + 'a>);
+pub struct FastxParser<'a, const CONFIG: Config>(Box<dyn HelicaseParserIter + 'a>);
 
 impl<'a, const CONFIG: Config, I: InputData<'a> + 'a> FromInputData<'a, I>
     for FastxParser<'a, CONFIG>
@@ -21,7 +21,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a> + 'a> FromInputData<'a, I>
     }
 }
 
-impl<'a, const CONFIG: Config> Parser for FastxParser<'a, CONFIG> {
+impl<'a, const CONFIG: Config> HelicaseParser for FastxParser<'a, CONFIG> {
     #[inline(always)]
     fn format(&self) -> Format {
         self.0.format()

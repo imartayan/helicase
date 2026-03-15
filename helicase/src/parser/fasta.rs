@@ -155,6 +155,12 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastaParser<'a, CONF
         }
         if I::RANDOM_ACCESS && self.contiguous_dna {
             &self.lexer.input.data()[self.dna_range.clone()]
+        } else if !I::RANDOM_ACCESS
+            && self.contiguous_dna
+            && flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
+        {
+            let buf_off = self.lexer.input.buffer_offset();
+            &self.lexer.input.buffer()[self.dna_range.start - buf_off..self.dna_range.end - buf_off]
         } else {
             &self.cur_dna_string
         }
@@ -167,6 +173,13 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastaParser<'a, CONF
         }
         if I::RANDOM_ACCESS && self.contiguous_dna {
             self.lexer.input.data()[self.dna_range.clone()].to_vec()
+        } else if !I::RANDOM_ACCESS
+            && self.contiguous_dna
+            && flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
+        {
+            let buf_off = self.lexer.input.buffer_offset();
+            self.lexer.input.buffer()[self.dna_range.start - buf_off..self.dna_range.end - buf_off]
+                .to_vec()
         } else {
             let mut res = Vec::with_capacity(self.cur_dna_string.capacity());
             swap(&mut res, &mut self.cur_dna_string);
@@ -255,7 +268,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastaParser<'a, CONF
         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
             self.dna_len
         } else if flag_is_set(CONFIG, COMPUTE_DNA_STRING) {
-            if I::RANDOM_ACCESS && self.contiguous_dna {
+            if self.contiguous_dna && (I::RANDOM_ACCESS || flag_is_not_set(CONFIG, SPLIT_NON_ACTG))
+            {
                 self.dna_range.len()
             } else {
                 self.cur_dna_string.len()
@@ -355,11 +369,15 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
 
     #[inline(always)]
     fn skip_to_non_dna(&mut self) -> bool {
+        // Skip per-block copies when the zero-copy fast path is active.
+        // Fast path: contiguous_dna && (RANDOM_ACCESS || !SPLIT_NON_ACTG).
         let mask = !0 << self.pos_in_block;
         let mut position = !self.block.is_dna & mask;
         let mut first_pos = self.pos_in_block;
         while position == 0 {
-            if flag_is_set(CONFIG, COMPUTE_DNA_STRING) && !(I::RANDOM_ACCESS && self.contiguous_dna)
+            if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
+                && !(self.contiguous_dna
+                    && (I::RANDOM_ACCESS || flag_is_not_set(CONFIG, SPLIT_NON_ACTG)))
             {
                 let dna_chunk = &self.lexer.input().current_block()[self.pos_in_block..];
                 self.cur_dna_string.extend_from_slice(dna_chunk);
@@ -392,6 +410,13 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
                 self.dna_len += self.block.len - self.pos_in_block;
             }
+            if !I::RANDOM_ACCESS
+                && flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
+                && self.contiguous_dna
+                && self.lexer.input.is_end_of_buffer()
+            {
+                self.lexer.input.make_room(self.dna_range.start);
+            }
             self.block = match self.lexer.next() {
                 Some(b) => b,
                 None => {
@@ -405,7 +430,10 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             position = !self.block.is_dna;
         }
         self.pos_in_block = position.trailing_zeros() as usize;
-        if flag_is_set(CONFIG, COMPUTE_DNA_STRING) && !(I::RANDOM_ACCESS && self.contiguous_dna) {
+        if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
+            && !(self.contiguous_dna
+                && (I::RANDOM_ACCESS || flag_is_not_set(CONFIG, SPLIT_NON_ACTG)))
+        {
             let dna_chunk = &self.lexer.input().current_block()[first_pos..self.pos_in_block];
             self.cur_dna_string.extend_from_slice(dna_chunk);
         }
@@ -445,6 +473,14 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
         let mask = !0 << self.pos_in_block;
         let mut position = (self.block.is_dna | self.block.split | self.block.header) & mask;
         while position == 0 {
+            // Keep the DNA in the buffer if the zero-copy fast path is still active.
+            if !I::RANDOM_ACCESS
+                && flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
+                && self.contiguous_dna
+                && self.lexer.input.is_end_of_buffer()
+            {
+                self.lexer.input.make_room(self.dna_range.start);
+            }
             self.block = match self.lexer.next() {
                 Some(b) => b,
                 None => {
@@ -516,7 +552,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                     if flag_is_not_set(CONFIG, MERGE_DNA_CHUNKS) {
                         self.clear_chunk();
                     }
-                    if flag_is_set(CONFIG, COMPUTE_DNA_STRING) && I::RANDOM_ACCESS {
+                    if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
+                        && (I::RANDOM_ACCESS || flag_is_not_set(CONFIG, SPLIT_NON_ACTG))
+                    {
                         self.dna_range.start = self.global_pos();
                     }
                 }
@@ -534,12 +572,21 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                         continue;
                     }
                     if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
-                        && I::RANDOM_ACCESS
                         && self.contiguous_dna
+                        && (I::RANDOM_ACCESS || flag_is_not_set(CONFIG, SPLIT_NON_ACTG))
                         && ((1 << self.pos_in_block) & self.block.header) == 0
                     {
-                        let dna_chunk = &self.lexer.input.data()[self.dna_range.clone()];
-                        self.cur_dna_string.extend_from_slice(dna_chunk);
+                        if I::RANDOM_ACCESS {
+                            let dna_chunk = &self.lexer.input.data()[self.dna_range.clone()];
+                            self.cur_dna_string.extend_from_slice(dna_chunk);
+                        } else {
+                            // Retroactively copy the first segment from the buffer.
+                            let buf_off = self.lexer.input.buffer_offset();
+                            let start = self.dna_range.start - buf_off;
+                            let end = self.dna_range.end - buf_off;
+                            self.cur_dna_string
+                                .extend_from_slice(&self.lexer.input.buffer()[start..end]);
+                        }
                         self.contiguous_dna = false;
                     }
                     if ((1 << self.pos_in_block) & self.block.is_dna) != 0 {

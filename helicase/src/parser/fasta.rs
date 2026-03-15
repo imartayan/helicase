@@ -289,6 +289,27 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
         }
     }
 
+    /// Keep the record anchor in the buffer when the buffer is about to be
+    /// exhausted inside a section loop.  CONFIG predicates come first so the
+    /// call compiles away when not needed.  Uses `contiguous_dna` to decide
+    /// whether zero-copy DNA is still active (FASTA can switch mid-record).
+    #[inline(always)]
+    fn make_room_record(&mut self) {
+        if (flag_is_set(CONFIG, COMPUTE_HEADER) || flag_is_set(CONFIG, COMPUTE_DNA_STRING))
+            && !I::RANDOM_ACCESS
+            && self.lexer.input.is_end_of_buffer()
+            && (flag_is_set(CONFIG, COMPUTE_HEADER) || self.contiguous_dna)
+        {
+            self.lexer
+                .input
+                .make_room(if flag_is_set(CONFIG, COMPUTE_HEADER) {
+                    self.header_range.start
+                } else {
+                    self.dna_range.start
+                });
+        }
+    }
+
     #[inline(always)]
     fn skip_to_start_header(&mut self) -> bool {
         let mask = !0 << self.pos_in_block;
@@ -336,6 +357,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
                 && !I::RANDOM_ACCESS
                 && self.lexer.input.is_end_of_buffer()
             {
+                // Header-only anchor: dna_range is not yet set at this point.
                 self.lexer.input.make_room(self.header_range.start);
             }
             self.block = match self.lexer.next() {
@@ -395,19 +417,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
                 self.dna_len += self.block.len - self.pos_in_block;
             }
-            if !I::RANDOM_ACCESS
-                && self.lexer.input.is_end_of_buffer()
-                && (flag_is_set(CONFIG, COMPUTE_HEADER)
-                    || (flag_is_set(CONFIG, COMPUTE_DNA_STRING) && self.contiguous_dna))
-            {
-                self.lexer
-                    .input
-                    .make_room(if flag_is_set(CONFIG, COMPUTE_HEADER) {
-                        self.header_range.start
-                    } else {
-                        self.dna_range.start
-                    });
-            }
+            self.make_room_record();
             self.block = match self.lexer.next() {
                 Some(b) => b,
                 None => {
@@ -465,19 +475,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
         let mut position = (self.block.is_dna | self.block.split | self.block.header) & mask;
         while position == 0 {
             // Keep the record anchor in the buffer if the zero-copy fast path is active.
-            if !I::RANDOM_ACCESS
-                && self.lexer.input.is_end_of_buffer()
-                && (flag_is_set(CONFIG, COMPUTE_HEADER)
-                    || (flag_is_set(CONFIG, COMPUTE_DNA_STRING) && self.contiguous_dna))
-            {
-                self.lexer
-                    .input
-                    .make_room(if flag_is_set(CONFIG, COMPUTE_HEADER) {
-                        self.header_range.start
-                    } else {
-                        self.dna_range.start
-                    });
-            }
+            self.make_room_record();
             self.block = match self.lexer.next() {
                 Some(b) => b,
                 None => {

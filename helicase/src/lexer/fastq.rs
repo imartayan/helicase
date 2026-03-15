@@ -78,7 +78,10 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqLexer<'a, CONFIG, I> {
     /// over from the quality block.
     #[inline(always)]
     pub(crate) fn scan_current_block(&self, len: usize) -> FastqChunk {
-        FastqChunk::from_mask(len, extract_fastq_bitmask::<CONFIG>(self.input.current_block()))
+        FastqChunk::from_mask(
+            len,
+            extract_fastq_bitmask::<CONFIG>(self.input.current_block()),
+        )
     }
 }
 
@@ -87,8 +90,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqLexer<'a, CON
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
-        self.input.next().map(|chunk| {
-            FastqChunk::from_mask(chunk.len(), extract_fastq_bitmask::<CONFIG>(chunk))
-        })
+        self.input
+            .next()
+            .map(|chunk| FastqChunk::from_mask(chunk.len(), extract_fastq_bitmask::<CONFIG>(chunk)))
     }
 }

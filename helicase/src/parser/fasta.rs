@@ -155,10 +155,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastaParser<'a, CONF
         }
         if I::RANDOM_ACCESS && self.contiguous_dna {
             &self.lexer.input.data()[self.dna_range.clone()]
-        } else if !I::RANDOM_ACCESS
-            && self.contiguous_dna
-            && flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
-        {
+        } else if !I::RANDOM_ACCESS && self.contiguous_dna {
             let buf_off = self.lexer.input.buffer_offset();
             &self.lexer.input.buffer()[self.dna_range.start - buf_off..self.dna_range.end - buf_off]
         } else {
@@ -173,10 +170,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastaParser<'a, CONF
         }
         if I::RANDOM_ACCESS && self.contiguous_dna {
             self.lexer.input.data()[self.dna_range.clone()].to_vec()
-        } else if !I::RANDOM_ACCESS
-            && self.contiguous_dna
-            && flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
-        {
+        } else if !I::RANDOM_ACCESS && self.contiguous_dna {
             let buf_off = self.lexer.input.buffer_offset();
             self.lexer.input.buffer()[self.dna_range.start - buf_off..self.dna_range.end - buf_off]
                 .to_vec()
@@ -268,8 +262,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Parser for FastaParser<'a, CONF
         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
             self.dna_len
         } else if flag_is_set(CONFIG, COMPUTE_DNA_STRING) {
-            if self.contiguous_dna && (I::RANDOM_ACCESS || flag_is_not_set(CONFIG, SPLIT_NON_ACTG))
-            {
+            if self.contiguous_dna {
                 self.dna_range.len()
             } else {
                 self.cur_dna_string.len()
@@ -369,16 +362,12 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
 
     #[inline(always)]
     fn skip_to_non_dna(&mut self) -> bool {
-        // Skip per-block copies when the zero-copy fast path is active.
-        // Fast path: contiguous_dna && (RANDOM_ACCESS || !SPLIT_NON_ACTG).
+        // Skip per-block copies when the zero-copy fast path is active: contiguous_dna.
         let mask = !0 << self.pos_in_block;
         let mut position = !self.block.is_dna & mask;
         let mut first_pos = self.pos_in_block;
         while position == 0 {
-            if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
-                && !(self.contiguous_dna
-                    && (I::RANDOM_ACCESS || flag_is_not_set(CONFIG, SPLIT_NON_ACTG)))
-            {
+            if flag_is_set(CONFIG, COMPUTE_DNA_STRING) && !self.contiguous_dna {
                 let dna_chunk = &self.lexer.input().current_block()[self.pos_in_block..];
                 self.cur_dna_string.extend_from_slice(dna_chunk);
             }
@@ -410,8 +399,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
                 self.dna_len += self.block.len - self.pos_in_block;
             }
-            if !I::RANDOM_ACCESS
-                && flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
+            if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
+                && !I::RANDOM_ACCESS
                 && self.contiguous_dna
                 && self.lexer.input.is_end_of_buffer()
             {
@@ -430,10 +419,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             position = !self.block.is_dna;
         }
         self.pos_in_block = position.trailing_zeros() as usize;
-        if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
-            && !(self.contiguous_dna
-                && (I::RANDOM_ACCESS || flag_is_not_set(CONFIG, SPLIT_NON_ACTG)))
-        {
+        if flag_is_set(CONFIG, COMPUTE_DNA_STRING) && !self.contiguous_dna {
             let dna_chunk = &self.lexer.input().current_block()[first_pos..self.pos_in_block];
             self.cur_dna_string.extend_from_slice(dna_chunk);
         }
@@ -474,8 +460,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
         let mut position = (self.block.is_dna | self.block.split | self.block.header) & mask;
         while position == 0 {
             // Keep the DNA in the buffer if the zero-copy fast path is still active.
-            if !I::RANDOM_ACCESS
-                && flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
+            if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
+                && !I::RANDOM_ACCESS
                 && self.contiguous_dna
                 && self.lexer.input.is_end_of_buffer()
             {
@@ -523,6 +509,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                         continue;
                     }
                     self.finished = self.skip_to_header_or_dna();
+                    self.contiguous_dna = true;
                     if (1u64 << self.pos_in_block & self.block.header) != 0 {
                         self.state = State::Header;
                         if flag_is_set(CONFIG, RETURN_RECORD) {
@@ -544,7 +531,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                     if flag_is_set(CONFIG, COMPUTE_HEADER) && I::RANDOM_ACCESS {
                         self.header_range.end = self.global_pos() - 1;
                     }
-                    self.contiguous_dna = true;
                     self.state = State::Restart;
                 }
                 State::StartDNA => {
@@ -552,9 +538,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                     if flag_is_not_set(CONFIG, MERGE_DNA_CHUNKS) {
                         self.clear_chunk();
                     }
-                    if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
-                        && (I::RANDOM_ACCESS || flag_is_not_set(CONFIG, SPLIT_NON_ACTG))
-                    {
+                    if flag_is_set(CONFIG, COMPUTE_DNA_STRING) {
                         self.dna_range.start = self.global_pos();
                     }
                 }
@@ -573,8 +557,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                     }
                     if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
                         && self.contiguous_dna
-                        && (I::RANDOM_ACCESS || flag_is_not_set(CONFIG, SPLIT_NON_ACTG))
                         && ((1 << self.pos_in_block) & self.block.header) == 0
+                    // Split DNA (newline or non-ACTG)
                     {
                         if I::RANDOM_ACCESS {
                             let dna_chunk = &self.lexer.input.data()[self.dna_range.clone()];

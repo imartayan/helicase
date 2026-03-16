@@ -19,6 +19,7 @@ pub struct FastqParser<'a, const CONFIG: Config, I: InputData<'a>> {
     header_range: Range<usize>,
     quality_range: Range<usize>,
     dna_range: Range<usize>,
+    record_start: usize,
     cur_dna_string: Vec<u8>,
     cur_dna_columnar: ColumnarDNA,
     cur_dna_packed: PackedDNA,
@@ -47,6 +48,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
             header_range: 0..0,
             quality_range: 0..0,
             dna_range: 0..0,
+            record_start: 0,
             cur_dna_string: Vec::new(),
             cur_dna_columnar: ColumnarDNA::new(),
             cur_dna_packed: PackedDNA::new(),
@@ -411,6 +413,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                     if self.finished {
                         return None;
                     }
+                    self.record_start = self.global_pos() - 1;
                     if flag_is_not_set(CONFIG, MERGE_RECORDS) {
                         self.clear_record();
                     }
@@ -572,11 +575,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                     if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
                         self.dna_len += self.pos_in_block - first_pos;
                     }
-                    let return_pos = if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
-                        self.global_pos()
-                    } else {
-                        0
-                    };
                     self.dna_range.end = self.global_pos();
                     self.make_room_record_end();
                     if flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
@@ -586,7 +584,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                     }
                     if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
                         self.prepare_return();
-                        return Some(Event::DnaChunk(return_pos));
+                        return Some(Event::DnaChunk(self.dna_range.clone()));
                     }
                 }
                 2 => {
@@ -660,7 +658,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                     self.consume_newline();
                     if flag_is_set(CONFIG, RETURN_RECORD) {
                         self.prepare_return();
-                        return Some(Event::Record(self.global_pos()));
+                        return Some(Event::Record(self.record_start..self.global_pos()));
                     }
                 }
                 _ => unreachable!(),

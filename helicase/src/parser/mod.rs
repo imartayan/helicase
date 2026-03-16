@@ -7,6 +7,8 @@ mod fastx;
 mod paraseq_traits;
 mod traits;
 
+use core::ops::Range;
+
 pub use fasta::*;
 pub use fastq::*;
 pub use fastx::*;
@@ -19,6 +21,6 @@ pub enum Format {
 }
 
 pub enum Event {
-    Record(usize),
-    DnaChunk(usize),
+    Record(Range<usize>),
+    DnaChunk(Range<usize>),
 }

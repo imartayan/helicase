@@ -27,6 +27,7 @@ pub struct FastaParser<'a, const CONFIG: Config, I: InputData<'a>> {
     pos_in_block: usize,
     header_range: Range<usize>,
     dna_range: Range<usize>,
+    record_start: usize,
     contiguous_dna: bool,
     cur_dna_string: Vec<u8>,
     cur_dna_columnar: ColumnarDNA,
@@ -55,6 +56,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             pos_in_block: 0,
             header_range: 0..0,
             dna_range: 0..0,
+            record_start: 0,
             contiguous_dna: true,
             cur_dna_string: Vec::new(),
             cur_dna_columnar: ColumnarDNA::new(),
@@ -513,7 +515,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                         self.state = State::Start;
                         if flag_is_set(CONFIG, RETURN_RECORD) {
                             self.prepare_return();
-                            return Some(Event::Record(self.global_pos()));
+                            return Some(Event::Record(self.record_start..self.global_pos()));
                         }
                         continue;
                     }
@@ -522,7 +524,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                         self.state = State::Header;
                         if flag_is_set(CONFIG, RETURN_RECORD) {
                             self.prepare_return();
-                            return Some(Event::Record(self.global_pos()));
+                            return Some(Event::Record(self.record_start..self.global_pos()));
                         }
                     } else if (1u64 << self.pos_in_block & self.block.is_dna) != 0 {
                         self.state = State::StartDNA;
@@ -532,6 +534,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                     if flag_is_not_set(CONFIG, MERGE_RECORDS) {
                         self.clear_record();
                     }
+                    self.record_start = self.global_pos();
                     if flag_is_set(CONFIG, COMPUTE_HEADER) {
                         self.header_range.start = self.global_pos() + 1;
                     }
@@ -547,9 +550,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                     if flag_is_not_set(CONFIG, MERGE_DNA_CHUNKS) {
                         self.clear_chunk();
                     }
-                    if flag_is_set(CONFIG, COMPUTE_DNA_STRING) {
-                        self.dna_range.start = self.global_pos();
-                    }
+                    self.dna_range.start = self.global_pos();
                 }
                 State::InDNABlock => {
                     if self.skip_to_non_dna() {
@@ -594,7 +595,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                     self.state = State::Restart;
                     if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
                         self.prepare_return();
-                        return Some(Event::DnaChunk(self.global_pos() - 1));
+                        return Some(Event::DnaChunk(self.dna_range.clone()));
                     }
                 }
             }

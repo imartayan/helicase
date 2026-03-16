@@ -33,6 +33,7 @@ sysctl -w kernel.perf_event_paranoid=1
 If you'd like to verify that `helicase` produces the same output as [needletail](https://github.com/onecodex/needletail), a validation script is provided:
 ```sh
 RUSTFLAGS="-C target-cpu=native" cargo r -r --example validate -- <INPUT>
+RUSTFLAGS="-C target-cpu=native" cargo r -r --example validate_split -- <INPUT>
 RUSTFLAGS="-C target-cpu=native" cargo r -r -F simd-minimizers --example validate_packed -- <INPUT>
 ```
 

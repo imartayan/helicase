@@ -80,10 +80,7 @@ pub trait InputData<'a>: Iterator<Item = &'a [u8]> {
     ///
     /// This is only relevant for reader-based implementations; the default
     /// returns `None` (random-access inputs use the existing block loop).
-    #[inline(always)]
-    fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)> {
-        None
-    }
+    fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)>;
 
     /// Returns the first byte of the (uncompressed when possible) input.
     fn first_byte(&self) -> u8;

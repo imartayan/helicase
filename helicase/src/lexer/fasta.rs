@@ -70,7 +70,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaLexer<'a, CON
             let mask = extract_fasta_bitmask::<CONFIG>(chunk);
             let non_lf = !mask.line_feeds;
             let c = self.carry.add(mask.open_bracket, non_lf);
-            let header = c ^ non_lf;
+            let header = (c ^ non_lf) | mask.open_bracket;
             let is_dna = mask.is_dna & !header & non_lf;
             let split = if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
                 !header & !is_dna & non_lf
@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn test_parse() {
-        let fasta = ">head\nTTTCTtaAAAA\nAGAAAA\nACAA\n>hhh\nCTCTTANNAAA\nCAAAnAGCTTT";
+        let fasta = ">head\nTTTCTtaAAAA\nAGAAAA\nACAA\n>h>h\nCTCTTANNAAA\nCAAAnAGCTTT";
         let expected = ">>>>>>TTTCTTAAAAA AGAAAA ACAA >>>>>CTCTTA||AAA CAAA|AGCTTT";
         assert_eq!(parse_and_format(fasta), expected);
     }

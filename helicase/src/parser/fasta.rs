@@ -651,7 +651,7 @@ mod tests {
         .config();
 
     static FASTA: &[u8] =
-        b">head\nTTTCTtaAAAA\nAGAAAA\nACAAN\n\n>hhh\nCTCTTANNAAA\nCAAAnAGCTTT\n>A B C \nCCAC"
+        b">head\nTTTCTtaAAAA\nAGAAAA\nACAAN\n\n>h>h\nCTCTTANNAAA\nCAAAnAGCTTT\n>A B C \nCCAC"
             .as_slice();
 
     #[test]
@@ -661,7 +661,7 @@ mod tests {
         while let Some(_) = f.next() {
             res.push(String::from_utf8(f.get_header_owned()).unwrap());
         }
-        assert_eq!(res, vec!["head", "hhh", "A B C ",]);
+        assert_eq!(res, vec!["head", "h>h", "A B C ",]);
     }
 
     #[test]

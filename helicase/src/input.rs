@@ -1,4 +1,4 @@
-//! Input formats and helpers.
+//! Input types and helpers.
 
 use core::marker::PhantomData;
 use deko::read::AnyDecoder;
@@ -14,6 +14,26 @@ const BUFFER_DOUBLE_UNTIL: usize = 1 << 24;
 pub trait InputData<'a>: Iterator<Item = &'a [u8]> {
     const RANDOM_ACCESS: bool;
 
+    /// Returns the first byte of the (uncompressed when possible) input.
+    fn first_byte(&self) -> u8;
+
+    /// Get a reference to the current block of up to 64 bytes.
+    ///
+    /// If the length is smaller than 64, the following bytes are guaranteed to be zeros.
+    fn current_block(&self) -> &[u8];
+
+    /// Returns the type of compression format detected, `None` if uncompressed.
+    #[inline(always)]
+    fn compression_format(&mut self) -> io::Result<Option<deko::Format>> {
+        Ok(None)
+    }
+
+    /// Returns `true` if compression has been detected.
+    #[inline(always)]
+    fn is_compressed(&mut self) -> io::Result<bool> {
+        Ok(self.compression_format()?.is_some())
+    }
+
     /// Get a reference to the complete slice of data.
     ///
     /// This is not available for reader-based implementations.
@@ -22,11 +42,6 @@ pub trait InputData<'a>: Iterator<Item = &'a [u8]> {
         assert!(Self::RANDOM_ACCESS);
         unimplemented!()
     }
-
-    /// Get a reference to the current block of up to 64 bytes.
-    ///
-    /// If the length is smaller than 64, the following bytes are guaranteed to be zeros.
-    fn current_block(&self) -> &[u8];
 
     /// Get a reference to the internal buffer.
     ///
@@ -45,19 +60,17 @@ pub trait InputData<'a>: Iterator<Item = &'a [u8]> {
     /// This is only relevant for reader-based implementations.
     fn is_end_of_buffer(&self) -> bool;
 
-    /// Shift buffered data starting at `keep_from` (absolute file offset) to
-    /// the beginning of the buffer, then refill the rest from the reader.
-    ///
-    /// After this call `buffer_offset() == keep_from` and `buffer()[0..]`
-    /// holds everything from `keep_from` onwards.
+    /// Shift buffered data from `keep_from` to the start of the buffer, then refill from the reader.
     ///
     /// This is only relevant for reader-based implementations.
+    #[doc(hidden)]
     #[inline(always)]
     fn make_room(&mut self, _keep_from: usize) {}
 
     /// Grow buffer and load `additional` new bytes.
     ///
     /// This is only relevant for reader-based implementations.
+    #[doc(hidden)]
     #[inline(always)]
     fn grow_buffer(&mut self, _additional: usize) {}
 
@@ -78,26 +91,9 @@ pub trait InputData<'a>: Iterator<Item = &'a [u8]> {
     /// The caller is responsible for re-running the SIMD scan on `current_block()`
     /// to obtain fresh `is_dna`, `newline`, and other bitmasks after this call.
     ///
-    /// This is only relevant for reader-based implementations; the default
-    /// returns `None` (random-access inputs use the existing block loop).
+    /// This is only relevant for reader-based implementations.
+    #[doc(hidden)]
     fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)>;
-
-    /// Returns the first byte of the (uncompressed when possible) input.
-    fn first_byte(&self) -> u8;
-
-    /// Returns the type of compression format detected.
-    ///
-    /// This is only available for reader-based implementations.
-    #[inline(always)]
-    fn compression_format(&mut self) -> io::Result<Option<deko::Format>> {
-        Ok(None)
-    }
-
-    /// Returns `true` if compression has been detected.
-    #[inline(always)]
-    fn is_compressed(&mut self) -> io::Result<bool> {
-        Ok(self.compression_format()?.is_some())
-    }
 }
 
 pub trait FromInputData<'a, I: InputData<'a>>: Sized {
@@ -106,7 +102,7 @@ pub trait FromInputData<'a, I: InputData<'a>>: Sized {
 }
 
 /// Slice input.
-/// It supports parallel processing, but not transparent decompression.
+/// It does not support transparent decompression.
 pub struct SliceInput<'a> {
     data: &'a [u8],
     pos: usize,
@@ -154,8 +150,8 @@ impl<'a> InputData<'a> for SliceInput<'a> {
     const RANDOM_ACCESS: bool = true;
 
     #[inline(always)]
-    fn data(&self) -> &[u8] {
-        self.data
+    fn first_byte(&self) -> u8 {
+        self.first_byte
     }
 
     #[inline(always)]
@@ -165,6 +161,11 @@ impl<'a> InputData<'a> for SliceInput<'a> {
         } else {
             unsafe { std::slice::from_raw_parts(self.last_block.as_ptr(), self.data.len() % 64) }
         }
+    }
+
+    #[inline(always)]
+    fn data(&self) -> &[u8] {
+        self.data
     }
 
     #[inline(always)]
@@ -191,16 +192,11 @@ impl<'a> InputData<'a> for SliceInput<'a> {
         self.pos = block_start + 64;
         Some((delta_blocks, pos_in_block, block_len))
     }
-
-    #[inline(always)]
-    fn first_byte(&self) -> u8 {
-        self.first_byte
-    }
 }
 
 pub trait FromSlice<'a>: FromInputData<'a, SliceInput<'a>> {
     /// Build the struct from a slice.
-    /// It supports parallel processing, but not transparent decompression.
+    /// It does not support transparent decompression.
     #[inline(always)]
     fn from_slice(data: &'a [u8]) -> io::Result<Self> {
         Self::from_input(SliceInput::new(data))
@@ -210,7 +206,7 @@ pub trait FromSlice<'a>: FromInputData<'a, SliceInput<'a>> {
 impl<'a, F: FromInputData<'a, SliceInput<'a>>> FromSlice<'a> for F {}
 
 /// Memory mapped file.
-/// It supports parallel processing, but not transparent decompression.
+/// It does not support transparent decompression.
 pub struct MmapInput<'a> {
     slice: SliceInput<'a>,
     _mmap: Mmap,
@@ -244,13 +240,18 @@ impl<'a> InputData<'a> for MmapInput<'a> {
     const RANDOM_ACCESS: bool = true;
 
     #[inline(always)]
-    fn data(&self) -> &[u8] {
-        self.slice.data()
+    fn first_byte(&self) -> u8 {
+        self.slice.first_byte()
     }
 
     #[inline(always)]
     fn current_block(&self) -> &[u8] {
         self.slice.current_block()
+    }
+
+    #[inline(always)]
+    fn data(&self) -> &[u8] {
+        self.slice.data()
     }
 
     #[inline(always)]
@@ -267,16 +268,11 @@ impl<'a> InputData<'a> for MmapInput<'a> {
     fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)> {
         self.slice.skip_to_newline()
     }
-
-    #[inline(always)]
-    fn first_byte(&self) -> u8 {
-        self.slice.first_byte()
-    }
 }
 
 pub trait FromMmap<'a>: FromInputData<'a, MmapInput<'a>> {
     /// Build the struct from a memory mapped file.
-    /// It supports parallel processing, but not transparent decompression.
+    /// It does not support transparent decompression.
     #[inline(always)]
     fn from_file_mmap<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         Self::from_input(MmapInput::new(path)?)
@@ -286,7 +282,7 @@ pub trait FromMmap<'a>: FromInputData<'a, MmapInput<'a>> {
 impl<'a, F: FromInputData<'a, MmapInput<'a>>> FromMmap<'a> for F {}
 
 /// File entirely loaded in RAM, only recommended for small files.
-/// It supports parallel processing, but not transparent decompression.
+/// It does not support transparent decompression.
 pub struct RamFileInput {
     slice: SliceInput<'static>,
     _vec: Vec<u8>,
@@ -316,13 +312,18 @@ impl InputData<'static> for RamFileInput {
     const RANDOM_ACCESS: bool = true;
 
     #[inline(always)]
-    fn data(&self) -> &[u8] {
-        self.slice.data()
+    fn first_byte(&self) -> u8 {
+        self.slice.first_byte()
     }
 
     #[inline(always)]
     fn current_block(&self) -> &[u8] {
         self.slice.current_block()
+    }
+
+    #[inline(always)]
+    fn data(&self) -> &[u8] {
+        self.slice.data()
     }
 
     #[inline(always)]
@@ -339,16 +340,11 @@ impl InputData<'static> for RamFileInput {
     fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)> {
         self.slice.skip_to_newline()
     }
-
-    #[inline(always)]
-    fn first_byte(&self) -> u8 {
-        self.slice.first_byte()
-    }
 }
 
 pub trait FromRamFile: FromInputData<'static, RamFileInput> {
     /// Build the struct from a file entirely loaded in RAM, this is only recommended for small files.
-    /// It supports parallel processing, but not transparent decompression.
+    /// It does not support transparent decompression.
     #[inline(always)]
     fn from_file_in_ram<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         Self::from_input(RamFileInput::new(path)?)
@@ -358,7 +354,7 @@ pub trait FromRamFile: FromInputData<'static, RamFileInput> {
 impl<F: FromInputData<'static, RamFileInput>> FromRamFile for F {}
 
 /// Reader input.
-/// It supports transparent decompression, but not parallel processing.
+/// It supports transparent decompression.
 pub struct ReaderInput<'a, R: Read + Send + 'a> {
     data: Vec<u8>,
     len: usize,
@@ -442,6 +438,11 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
     const RANDOM_ACCESS: bool = false;
 
     #[inline(always)]
+    fn first_byte(&self) -> u8 {
+        self.first_byte
+    }
+
+    #[inline(always)]
     fn current_block(&self) -> &[u8] {
         if 64 <= self.pos && self.pos <= self.len {
             unsafe { std::slice::from_raw_parts(self.data.as_ptr().add(self.pos - 64), 64) }
@@ -452,6 +453,16 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
                     self.len % 64,
                 )
             }
+        }
+    }
+
+    #[inline(always)]
+    fn compression_format(&mut self) -> io::Result<Option<deko::Format>> {
+        let format = self.decoder.kind()?;
+        if format == deko::Format::Verbatim {
+            Ok(None)
+        } else {
+            Ok(Some(format))
         }
     }
 
@@ -542,26 +553,11 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
         self.pos = block_start + 64;
         Some((delta_blocks, pos_in_block, block_len))
     }
-
-    #[inline(always)]
-    fn first_byte(&self) -> u8 {
-        self.first_byte
-    }
-
-    #[inline(always)]
-    fn compression_format(&mut self) -> io::Result<Option<deko::Format>> {
-        let format = self.decoder.kind()?;
-        if format == deko::Format::Verbatim {
-            Ok(None)
-        } else {
-            Ok(Some(format))
-        }
-    }
 }
 
 pub trait FromReader<'a, R: Read + Send + 'a>: FromInputData<'a, ReaderInput<'a, R>> {
     /// Build the struct from a reader.
-    /// It supports transparent decompression, but not parallel processing.
+    /// It supports transparent decompression.
     #[inline(always)]
     fn from_reader(reader: R) -> io::Result<Self> {
         Self::from_input(ReaderInput::new(reader))
@@ -571,7 +567,7 @@ pub trait FromReader<'a, R: Read + Send + 'a>: FromInputData<'a, ReaderInput<'a,
 impl<'a, R: Read + Send + 'a, F: FromInputData<'a, ReaderInput<'a, R>>> FromReader<'a, R> for F {}
 
 /// File input.
-/// It supports transparent decompression, but not parallel processing.
+/// It supports transparent decompression.
 pub struct FileInput {
     reader: ReaderInput<'static, File>,
 }
@@ -597,8 +593,18 @@ impl InputData<'static> for FileInput {
     const RANDOM_ACCESS: bool = false;
 
     #[inline(always)]
+    fn first_byte(&self) -> u8 {
+        self.reader.first_byte()
+    }
+
+    #[inline(always)]
     fn current_block(&self) -> &[u8] {
         self.reader.current_block()
+    }
+
+    #[inline(always)]
+    fn compression_format(&mut self) -> io::Result<Option<deko::Format>> {
+        self.reader.compression_format()
     }
 
     #[inline(always)]
@@ -630,21 +636,11 @@ impl InputData<'static> for FileInput {
     fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)> {
         self.reader.skip_to_newline()
     }
-
-    #[inline(always)]
-    fn first_byte(&self) -> u8 {
-        self.reader.first_byte()
-    }
-
-    #[inline(always)]
-    fn compression_format(&mut self) -> io::Result<Option<deko::Format>> {
-        self.reader.compression_format()
-    }
 }
 
 pub trait FromFile: FromInputData<'static, FileInput> {
     /// Build the struct from a file.
-    /// It supports transparent decompression, but not parallel processing.
+    /// It supports transparent decompression.
     #[inline(always)]
     fn from_file<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         Self::from_input(FileInput::new(path)?)
@@ -654,7 +650,7 @@ pub trait FromFile: FromInputData<'static, FileInput> {
 impl<F: FromInputData<'static, FileInput>> FromFile for F {}
 
 /// Stdin input.
-/// It supports transparent decompression, but not parallel processing.
+/// It supports transparent decompression.
 pub struct StdinInput {
     reader: ReaderInput<'static, Stdin>,
 }
@@ -681,8 +677,18 @@ impl InputData<'static> for StdinInput {
     const RANDOM_ACCESS: bool = false;
 
     #[inline(always)]
+    fn first_byte(&self) -> u8 {
+        self.reader.first_byte()
+    }
+
+    #[inline(always)]
     fn current_block(&self) -> &[u8] {
         self.reader.current_block()
+    }
+
+    #[inline(always)]
+    fn compression_format(&mut self) -> io::Result<Option<deko::Format>> {
+        self.reader.compression_format()
     }
 
     #[inline(always)]
@@ -714,21 +720,11 @@ impl InputData<'static> for StdinInput {
     fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)> {
         self.reader.skip_to_newline()
     }
-
-    #[inline(always)]
-    fn first_byte(&self) -> u8 {
-        self.reader.first_byte()
-    }
-
-    #[inline(always)]
-    fn compression_format(&mut self) -> io::Result<Option<deko::Format>> {
-        self.reader.compression_format()
-    }
 }
 
 pub trait FromStdin: FromInputData<'static, StdinInput> {
     /// Build the struct from stdin.
-    /// It supports transparent decompression, but not parallel processing.
+    /// It supports transparent decompression.
     #[inline(always)]
     fn from_stdin() -> io::Result<Self> {
         Self::from_input(StdinInput::new())

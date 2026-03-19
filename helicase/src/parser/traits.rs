@@ -5,7 +5,7 @@ use crate::dna_format::*;
 use packed_seq::{PackedSeq, PackedSeqVec};
 
 pub trait HelicaseParser {
-    /// Get the [`Format`] associated to this parser.
+    /// Get the [`Format`] associated to this parser (FASTA or FASTQ).
     fn format(&self) -> Format;
 
     /// Get a reference to the current header.
@@ -79,7 +79,7 @@ pub trait HelicaseParser {
     fn get_dna_len(&self) -> usize;
 
     /// Get a reference to the current quality line.
-    /// This returns `None` for FASTA file.
+    /// Returns `None` for FASTA.
     #[inline(always)]
     fn get_quality(&self) -> Option<&[u8]> {
         None
@@ -87,17 +87,17 @@ pub trait HelicaseParser {
 
     /// Get an owned version of the current quality line.
     /// This will trigger a new allocation and a copy.
-    /// This returns `None` for FASTA file.
+    /// Returns `None` for FASTA.
     #[inline(always)]
     fn get_quality_owned(&mut self) -> Option<Vec<u8>> {
         None
     }
 
-    /// Clear the information of the current record.
+    /// Manually clear the information of the current chunk.
     /// This is only useful when [`MERGE_DNA_CHUNKS`](crate::config::advanced::MERGE_DNA_CHUNKS) is enabled.
     fn clear_chunk(&mut self);
 
-    /// Clear the information of the current record.
+    /// Manually clear the information of the current record.
     /// This is only useful when [`MERGE_RECORDS`](crate::config::advanced::MERGE_RECORDS) is enabled.
     fn clear_record(&mut self);
 }

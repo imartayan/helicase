@@ -114,28 +114,28 @@ impl ParserOptions {
         self.ignore_dna().and_dna_string()
     }
 
-    /// Also compute DNA as bytes.
-    #[inline(always)]
-    pub const fn and_dna_string(self) -> Self {
-        Self(self.0 | COMPUTE_DNA_STRING)
-    }
-
     /// Set the DNA format to [`PackedDNA`](crate::dna_format::PackedDNA).
     #[inline(always)]
     pub const fn dna_packed(self) -> Self {
         self.ignore_dna().and_dna_packed()
     }
 
-    /// Also compute DNA as [`PackedDNA`](crate::dna_format::PackedDNA).
-    #[inline(always)]
-    pub const fn and_dna_packed(self) -> Self {
-        Self(self.0 | COMPUTE_DNA_PACKED | SPLIT_NON_ACTG | RETURN_DNA_CHUNK)
-    }
-
     /// Set the DNA format to [`ColumnarDNA`](crate::dna_format::ColumnarDNA).
     #[inline(always)]
     pub const fn dna_columnar(self) -> Self {
         self.ignore_dna().and_dna_columnar()
+    }
+
+    /// Also compute DNA as bytes.
+    #[inline(always)]
+    pub const fn and_dna_string(self) -> Self {
+        Self(self.0 | COMPUTE_DNA_STRING)
+    }
+
+    /// Also compute DNA as [`PackedDNA`](crate::dna_format::PackedDNA).
+    #[inline(always)]
+    pub const fn and_dna_packed(self) -> Self {
+        Self(self.0 | COMPUTE_DNA_PACKED | SPLIT_NON_ACTG | RETURN_DNA_CHUNK)
     }
 
     /// Also compute DNA as [`ColumnarDNA`](crate::dna_format::ColumnarDNA).

@@ -63,20 +63,20 @@
 //!
 //! The parser can output a bitpacked representation of the sequence in two formats:
 //!
-//! - [`dna_format::PackedDNA`] — maps each base to two bits and packs them (compatible with
+//! - [`PackedDNA`](dna_format::PackedDNA) - maps each base to two bits and packs them (compatible with
 //!   [packed-seq](https://github.com/rust-seq/packed-seq) via the `packed-seq` feature).
-//! - [`dna_format::ColumnarDNA`] — separates the high bit and the low bit of each base into two
+//! - [`ColumnarDNA`](dna_format::ColumnarDNA) - separates the high bit and the low bit of each base into two
 //!   bitmasks.
 //!
 //! Since each base is encoded in two bits, non-ACTG bases must be handled explicitly. Three
 //! options are available via [`ParserOptions`]:
 //!
-//! - [`split_non_actg`](ParserOptions::split_non_actg) — splits the sequence at non-ACTG bases,
-//!   yielding multiple [`parser::Event::DnaChunk`] events.
-//! - [`skip_non_actg`](ParserOptions::skip_non_actg) — skips non-ACTG bases and merges the
-//!   remaining chunks, yielding one [`parser::Event::Record`] event per record.
-//! - [`keep_non_actg`](ParserOptions::keep_non_actg) — keeps non-ACTG bases with a lossy
-//!   two-bit encoding, yielding one [`parser::Event::Record`] event per record.
+//! - [`split_non_actg`](ParserOptions::split_non_actg) - splits the sequence at non-ACTG bases,
+//!   yielding multiple [`DnaChunk`](parser::Event::DnaChunk) events.
+//! - [`skip_non_actg`](ParserOptions::skip_non_actg) - skips non-ACTG bases and merges the
+//!   remaining chunks, yielding one [`Record`](parser::Event::Record) event per record.
+//! - [`keep_non_actg`](ParserOptions::keep_non_actg) - keeps non-ACTG bases with a lossy
+//!   two-bit encoding, yielding one [`Record`](parser::Event::Record) event per record.
 //!
 //! # Iterating over chunks of packed DNA
 //!

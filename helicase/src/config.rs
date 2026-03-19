@@ -43,6 +43,54 @@ pub mod advanced {
 use advanced::*;
 
 /// Compile-time builder for the configuration of the parser.
+///
+/// Options are set using a builder pattern and must be finalized with
+/// [`config`](ParserOptions::config) to produce a [`Config`] usable as a
+/// const generic.
+///
+/// # Examples
+///
+/// Default configuration - compute headers and DNA as ASCII-encoded bytes, stopping after each record:
+///
+/// ```rust
+/// use helicase::*;
+///
+/// const CONFIG: Config = ParserOptions::default().config();
+/// ```
+///
+/// Ignore headers and compute [`PackedDNA`](crate::dna_format::PackedDNA), splitting non-ACTG characters and stopping after each chunk by default:
+///
+/// ```rust
+/// use helicase::*;
+///
+/// const CONFIG: Config = ParserOptions::default()
+///     .ignore_headers()
+///     .dna_packed()
+///     .config();
+/// ```
+///
+/// Compute both a DNA string and [`PackedDNA`](crate::dna_format::PackedDNA), splitting non-ACTG characters and stopping after each chunk by default:
+///
+/// ```rust
+/// use helicase::*;
+///
+/// const CONFIG: Config = ParserOptions::default()
+///     .dna_string()
+///     .and_dna_packed()
+///     .config();
+/// ```
+///
+/// Compute [`ColumnarDNA`](crate::dna_format::ColumnarDNA), lossily encode non-ACTG bases and produce a [`BitMask`](crate::dna_format::BitMask) marking their positions:
+///
+/// ```rust
+/// use helicase::*;
+///
+/// const CONFIG: Config = ParserOptions::default()
+///     .dna_columnar()
+///     .keep_non_actg()
+///     .compute_mask_non_actg()
+///     .config();
+/// ```
 #[derive(Clone, Copy)]
 pub struct ParserOptions(Config);
 
@@ -144,28 +192,44 @@ impl ParserOptions {
         Self(self.0 | COMPUTE_DNA_COLUMNAR | SPLIT_NON_ACTG | RETURN_DNA_CHUNK)
     }
 
-    /// Compute a mask indicating non-ACTG bases.
-    /// This is only relevant when using [`keep_non_actg`](#method.keep_non_actg).
+    /// Compute a [`BitMask`](crate::dna_format::BitMask) indicating non-ACTG bases.
+    /// This is only relevant when using [`keep_non_actg`](ParserOptions::keep_non_actg).
     #[inline(always)]
     pub const fn compute_mask_non_actg(self) -> Self {
         Self(self.0 | COMPUTE_MASK_NON_ACTG)
     }
 
-    /// Keep the non-ACTG bases in the sequence, even it their encoding is lossy.
-    /// This is enabled by default with [`dna_string`](#method.dna_string).
+    /// Keep the non-ACTG bases in the sequence, even if their encoding is lossy.
+    ///
+    /// This is the default behaviour with [`dna_string`](ParserOptions::dna_string).
+    /// Combine with [`compute_mask_non_actg`](ParserOptions::compute_mask_non_actg) to
+    /// identify which positions were non-ACTG.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use helicase::*;
+    ///
+    /// const CONFIG: Config = ParserOptions::default()
+    ///     .dna_string()
+    ///     .keep_non_actg()
+    ///     .compute_mask_non_actg()
+    ///     .config();
+    /// ```
     #[inline(always)]
     pub const fn keep_non_actg(self) -> Self {
         Self(self.0 & !(SPLIT_NON_ACTG | RETURN_DNA_CHUNK | MERGE_DNA_CHUNKS))
     }
 
-    /// Split the sequence at non-ACTG bases, returning multiple [`DnaChunk`](crate::parser::Event).
-    /// This is enabled by default with [`dna_packed`](#method.dna_packed) and [`dna_columnar`](#method.dna_columnar).
+    /// Split the sequence at non-ACTG bases, yielding one [`Event::DnaChunk`](crate::parser::Event) per contiguous ACTG run.
+    ///
+    /// This is the default behaviour with [`dna_packed`](ParserOptions::dna_packed) and [`dna_columnar`](ParserOptions::dna_columnar).
     #[inline(always)]
     pub const fn split_non_actg(self) -> Self {
         Self((self.0 & !MERGE_DNA_CHUNKS) | SPLIT_NON_ACTG | RETURN_DNA_CHUNK)
     }
 
-    /// Skip non-ACTG bases in the sequence, chunks of ACTG bases get merged together.
+    /// Skip non-ACTG bases, merging the remaining ACTG runs into a single chunk per record
     #[inline(always)]
     pub const fn skip_non_actg(self) -> Self {
         Self((self.0 & !RETURN_DNA_CHUNK) | SPLIT_NON_ACTG | MERGE_DNA_CHUNKS)
@@ -182,8 +246,9 @@ impl ParserOptions {
     }
 
     /// Stop the parser iterator after each DNA chunk.
-    /// By default, this is disabled with [`dna_string`](#method.dna_string)
-    /// but enabled with [`dna_packed`](#method.dna_packed) and [`dna_columnar`](#method.dna_columnar).
+    ///
+    /// Disabled by default with [`dna_string`](ParserOptions::dna_string),
+    /// enabled by default with [`dna_packed`](ParserOptions::dna_packed) and [`dna_columnar`](ParserOptions::dna_columnar).
     #[inline(always)]
     pub const fn return_dna_chunk(self, enable: bool) -> Self {
         if enable {

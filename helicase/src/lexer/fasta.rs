@@ -32,8 +32,6 @@ pub struct FastaChunk {
     pub mask_n: u64,
 }
 
-impl Chunk for FastaChunk {}
-
 pub struct FastaLexer<'a, const CONFIG: Config, I: InputData<'a>> {
     pub(crate) input: I,
     carry: Carry,

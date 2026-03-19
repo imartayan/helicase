@@ -1,5 +1,3 @@
-pub trait Chunk: Default {}
-
 pub trait Lexer {
     type Input;
 

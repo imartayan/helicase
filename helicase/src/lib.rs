@@ -1,8 +1,8 @@
-mod carrying_add;
+pub(crate) mod carrying_add;
 pub mod config;
 pub mod dna_format;
 pub mod input;
-pub mod lexer;
+pub(crate) mod lexer;
 pub mod parser;
 
 pub use config::{Config, ParserOptions};

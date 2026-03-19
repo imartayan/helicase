@@ -44,8 +44,6 @@ impl FastqChunk {
     }
 }
 
-impl Chunk for FastqChunk {}
-
 pub struct FastqLexer<'a, const CONFIG: Config, I: InputData<'a>> {
     pub(crate) input: I,
     _phantom: PhantomData<&'a [u8]>,

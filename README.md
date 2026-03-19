@@ -51,11 +51,11 @@ fn main() {
 ### Adjusting the configuration
 
 The parser supports options that can be adjusted in the `ParserOptions`.
-For instance, if you don't need to look at the headers and you want to skip non-ACTG bases, you can change to configuration to:
+For instance, if you don't need to look at the headers and you want to split non-ACTG bases, you can change to configuration to:
 ```rust
 const CONFIG: Config = ParserOptions::default()
     .ignore_headers()
-    .skip_non_actg()
+    .split_non_actg()
     .config();
 ```
 
@@ -67,7 +67,7 @@ The parser can output a bitpacked representation of the sequence in two differen
 
 Since each base is encoded using two bits, we have to handle non-ACTG bases differently.
 Three options are available for that:
-- `split_non_actg` splits the sequence into contiguous chunks of ACTG bases, stopping the iterator at each chunk.
+- `split_non_actg` splits the sequence into contiguous chunks of ACTG bases, stopping the iterator at each chunk (default for bitpacked formats).
 - `skip_non_actg` skips the non-ACTG bases and merge the remaining chunks together, stopping once at the end of the record.
 - `keep_non_actg` keeps the non-ACTG bases and encodes them with a lossy representation.
 
@@ -78,6 +78,7 @@ use helicase::input::*;
 use helicase::*;
 
 const CONFIG: Config = ParserOptions::default()
+    // by default, dna_packed splits non-ACTG bases and stops after each chunk
     .dna_packed()
     // don't stop the iterator at the end of a record
     .return_record(false)

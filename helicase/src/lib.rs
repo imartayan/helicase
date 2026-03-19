@@ -47,15 +47,15 @@
 //!
 //! # Adjusting the configuration
 //!
-//! The parser is configured at compile-time via [`ParserOptions`]. For example, to skip headers
-//! and ignore non-ACTG bases:
+//! The parser is configured at compile-time via [`ParserOptions`].
+//! For example, to ignore headers and split non-ACTG bases:
 //!
 //! ```rust
 //! use helicase::*;
 //!
 //! const CONFIG: Config = ParserOptions::default()
 //!     .ignore_headers()
-//!     .skip_non_actg()
+//!     .split_non_actg()
 //!     .config();
 //! ```
 //!
@@ -85,6 +85,7 @@
 //! use helicase::*;
 //!
 //! const CONFIG: Config = ParserOptions::default()
+//!     // by default, dna_packed splits non-ACTG bases and stops after each chunk
 //!     .dna_packed()
 //!     // don't stop the iterator at the end of a record
 //!     .return_record(false)

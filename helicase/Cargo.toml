@@ -2,9 +2,9 @@
 name = "helicase"
 version = "0.1.0"
 edition = "2024"
-authors = ["Igor Martayan <imartayan@users.noreply.github.com>"]
+authors = ["Igor Martayan", "Charles Paperman"]
 description = "SIMD-accelerated parser for FASTA and FASTQ files"
-keywords = ["bioinformatics", "fasta", "fastq", "parser", "simd"]
+keywords = ["bioinformatics", "fasta", "fastq", "parser", "bitpacking", "simd"]
 license = "MIT"
 
 [dependencies]

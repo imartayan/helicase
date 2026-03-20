@@ -62,21 +62,79 @@
 //! # Bitpacked DNA formats
 //!
 //! The parser can output a bitpacked representation of the sequence in two formats:
-//!
-//! - [`PackedDNA`](dna_format::PackedDNA) - maps each base to two bits and packs them (compatible with
-//!   [packed-seq](https://github.com/rust-seq/packed-seq) via the `packed-seq` feature).
-//! - [`ColumnarDNA`](dna_format::ColumnarDNA) - separates the high bit and the low bit of each base into two
-//!   bitmasks.
+//! - [`PackedDNA`](dna_format::PackedDNA) maps each base to two bits and packs them
+//!   (compatible with [packed-seq](https://github.com/rust-seq/packed-seq) via the `packed-seq` feature).
+//! - [`ColumnarDNA`](dna_format::ColumnarDNA) separates the high bit and the low bit of each base into two bitmasks.
 //!
 //! Since each base is encoded in two bits, non-ACTG bases must be handled explicitly. Three
 //! options are available via [`ParserOptions`]:
+//! - [`split_non_actg`](ParserOptions::split_non_actg) splits the sequence at non-ACTG bases,
+//!   yielding one [`DnaChunk`](parser::Event::DnaChunk) event per contiguous ACTG run (default for bitpacked formats).
+//! - [`skip_non_actg`](ParserOptions::skip_non_actg) skips non-ACTG bases and merges the remaining chunks,
+//!   yielding one [`Record`](parser::Event::Record) event per record.
+//! - [`keep_non_actg`](ParserOptions::keep_non_actg) keeps non-ACTG bases and encodes them lossily,
+//!   yielding one [`Record`](parser::Event::Record) event per record (default for string format).
 //!
-//! - [`split_non_actg`](ParserOptions::split_non_actg) - splits the sequence at non-ACTG bases,
-//!   yielding multiple [`DnaChunk`](parser::Event::DnaChunk) events.
-//! - [`skip_non_actg`](ParserOptions::skip_non_actg) - skips non-ACTG bases and merges the
-//!   remaining chunks, yielding one [`Record`](parser::Event::Record) event per record.
-//! - [`keep_non_actg`](ParserOptions::keep_non_actg) - keeps non-ACTG bases with a lossy
-//!   two-bit encoding, yielding one [`Record`](parser::Event::Record) event per record.
+//! # Events
+//!
+//! The parser is an iterator that yields [`Event`](parser::Event) values.
+//! An event signals a record boundary or a contiguous DNA chunk,
+//! but the data is always read from the parser itself via [`get_header`](HelicaseParser::get_header), [`get_dna_string`](HelicaseParser::get_dna_string), etc.
+//!
+//! There are two kinds of event:
+//! - [`Event::Record`](parser::Event::Record) emitted once per record, after all of its DNA
+//!   chunks. Enabled by [`return_record`](ParserOptions::return_record) (on by default).
+//! - [`Event::DnaChunk`](parser::Event::DnaChunk) emitted for each contiguous ACTG run.
+//!   Enabled by [`return_dna_chunk`](ParserOptions::return_dna_chunk) (on by default with
+//!   [`dna_packed`](ParserOptions::dna_packed) and [`dna_columnar`](ParserOptions::dna_columnar)).
+//!
+//! When both are active you need to match on the event to distinguish them:
+//! ```rust,no_run
+//! use helicase::input::*;
+//! use helicase::parser::Event;
+//! use helicase::*;
+//!
+//! // dna_packed enables DnaChunk events; and Record events are also kept by default.
+//! const CONFIG: Config = ParserOptions::default().dna_packed().config();
+//!
+//! fn main() {
+//!     let path = "...";
+//!     let mut parser = FastxParser::<CONFIG>::from_file(&path).expect("Cannot open file");
+//!
+//!     while let Some(event) = parser.next() {
+//!         match event {
+//!             Event::Record(_) => {
+//!                 // all chunks of this record have been processed
+//!             }
+//!             Event::DnaChunk(_) => {
+//!                 // one contiguous ACTG run is ready
+//!                 let seq = parser.get_dna_packed();
+//!             }
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! When only one type of event is active, the event value can be safely ignored:
+//! ```rust,no_run
+//! use helicase::input::*;
+//! use helicase::*;
+//!
+//! // Default config: only Record events, one per record.
+//! const CONFIG: Config = ParserOptions::default().config();
+//!
+//! fn main() {
+//!     let path = "...";
+//!     let mut parser = FastxParser::<CONFIG>::from_file(&path).expect("Cannot open file");
+//!
+//!     while let Some(_) = parser.next() {
+//!         let header = parser.get_header();
+//!         let seq = parser.get_dna_string();
+//!     }
+//! }
+//! ```
+//!
+//! It is even possible to disable all events to process the entire file in one go, for instance if you simply want to count bases.
 //!
 //! # Iterating over chunks of packed DNA
 //!
@@ -112,14 +170,14 @@
 //!
 //! # Crate features
 //!
-//! | Feature    | Default | Description |
-//! |------------|---------|-------------|
-//! | `packed-seq` | no    | conversion to [packed-seq](https://github.com/rust-seq/packed-seq) types |
-//! | `no-pdep`  | no      | disable PDEP instruction (recommended for AMD CPUs prior to 2020) |
-//! | `gz`       | yes     | gzip decompression via [deko](https://github.com/igankevich/deko) |
-//! | `zstd`     | yes     | zstd decompression |
-//! | `bz2`      | no      | bzip2 decompression |
-//! | `xz`       | no      | xz decompression |
+//! | Feature      | Default | Description |
+//! |--------------|---------|-------------|
+//! | `packed-seq` | no      | conversion to [packed-seq](https://github.com/rust-seq/packed-seq) types |
+//! | `no-pdep`    | no      | disable PDEP instruction (recommended for AMD CPUs prior to 2020) |
+//! | `gz`         | yes     | gzip decompression |
+//! | `zstd`       | yes     | zstd decompression |
+//! | `bz2`        | no      | bzip2 decompression |
+//! | `xz`         | no      | xz decompression |
 
 pub(crate) mod carrying_add;
 pub mod config;

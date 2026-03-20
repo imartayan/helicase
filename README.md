@@ -1,10 +1,11 @@
 # Helicase
 
+[![crates.io](https://img.shields.io/crates/v/helicase)](https://crates.io/crates/helicase)
+[![docs](https://img.shields.io/docsrs/helicase)](https://docs.rs/helicase)
+
 Helicase is a carefully optimized FASTA/FASTQ parser that extensively uses vectorized instructions.
 
 It is designed for three main goals: being highly configurable, handling non-ACTG bases and computing bitpacked representations of DNA.
-
-[Documentation](https://imartayan.github.io/helicase/)
 
 ## Requirements
 

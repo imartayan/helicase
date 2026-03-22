@@ -18,6 +18,31 @@ enum State {
 }
 
 /// A parser for the [FASTA format](https://en.wikipedia.org/wiki/FASTA_format).
+/// Configured via [`ParserOptions`].
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use helicase::input::*;
+/// use helicase::*;
+///
+/// // set the options of the parser (at compile-time)
+/// const CONFIG: Config = ParserOptions::default().config();
+///
+/// fn main() {
+///     let path = "...";
+///
+///     // create a parser with the desired options
+///     let mut parser = FastaParser::<CONFIG, _>::from_file(&path).expect("Cannot open file");
+///
+///     // iterate over records
+///     while let Some(_event) = parser.next() {
+///         let header = parser.get_header();
+///         let seq = parser.get_dna_string();
+///         // ...
+///     }
+/// }
+/// ```
 pub struct FastaParser<'a, const CONFIG: Config, I: InputData<'a>> {
     lexer: FastaLexer<'a, CONFIG, I>,
     finished: bool,

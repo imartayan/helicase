@@ -5,6 +5,31 @@ use crate::input::*;
 use std::io;
 
 /// A wrapper for [`FastaParser`] / [`FastqParser`] detecting the format at runtime.
+/// Configured via [`ParserOptions`].
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use helicase::input::*;
+/// use helicase::*;
+///
+/// // set the options of the parser (at compile-time)
+/// const CONFIG: Config = ParserOptions::default().config();
+///
+/// fn main() {
+///     let path = "...";
+///
+///     // create a parser with the desired options
+///     let mut parser = FastxParser::<CONFIG>::from_file(&path).expect("Cannot open file");
+///
+///     // iterate over records
+///     while let Some(_event) = parser.next() {
+///         let header = parser.get_header();
+///         let seq = parser.get_dna_string();
+///         // ...
+///     }
+/// }
+/// ```
 pub struct FastxParser<'a, const CONFIG: Config>(Box<dyn HelicaseParserIter + 'a>);
 
 impl<'a, const CONFIG: Config, I: InputData<'a> + 'a> FromInputData<'a, I>

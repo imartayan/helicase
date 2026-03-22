@@ -9,6 +9,31 @@ use core::ops::Range;
 use std::io;
 
 /// A parser for the [FASTQ format](https://en.wikipedia.org/wiki/FASTQ_format).
+/// Configured via [`ParserOptions`].
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use helicase::input::*;
+/// use helicase::*;
+///
+/// // set the options of the parser (at compile-time)
+/// const CONFIG: Config = ParserOptions::default().config();
+///
+/// fn main() {
+///     let path = "...";
+///
+///     // create a parser with the desired options
+///     let mut parser = FastqParser::<CONFIG, _>::from_file(&path).expect("Cannot open file");
+///
+///     // iterate over records
+///     while let Some(_event) = parser.next() {
+///         let header = parser.get_header();
+///         let seq = parser.get_dna_string();
+///         // ...
+///     }
+/// }
+/// ```
 pub struct FastqParser<'a, const CONFIG: Config, I: InputData<'a>> {
     lexer: FastqLexer<'a, CONFIG, I>,
     finished: bool,

@@ -19,6 +19,9 @@
 //!
 //! # Minimal example
 //!
+//! The main entry point is to define a configuration via [`ParserOptions`]
+//! and build a [`FastxParser`] with this configuration.
+//!
 //! ```rust,no_run
 //! use helicase::input::*;
 //! use helicase::*;
@@ -127,7 +130,7 @@
 //!     let path = "...";
 //!     let mut parser = FastxParser::<CONFIG>::from_file(&path).expect("Cannot open file");
 //!
-//!     while let Some(_) = parser.next() {
+//!     while let Some(_event) = parser.next() {
 //!         let header = parser.get_header();
 //!         let seq = parser.get_dna_string();
 //!     }

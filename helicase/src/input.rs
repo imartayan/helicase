@@ -205,7 +205,7 @@ pub trait FromSlice<'a>: FromInputData<'a, SliceInput<'a>> {
 
 impl<'a, F: FromInputData<'a, SliceInput<'a>>> FromSlice<'a> for F {}
 
-/// Memory mapped file.
+/// Memory-mapped file.
 /// It does not support transparent decompression.
 pub struct MmapInput<'a> {
     slice: SliceInput<'a>,
@@ -271,8 +271,10 @@ impl<'a> InputData<'a> for MmapInput<'a> {
 }
 
 pub trait FromMmap<'a>: FromInputData<'a, MmapInput<'a>> {
-    /// Build the struct from a memory mapped file.
+    /// Build the struct from a memory-mapped file.
     /// It does not support transparent decompression.
+    ///
+    /// Also see [`from_file`](FromFile::from_file) to use a file reader.
     #[inline(always)]
     fn from_file_mmap<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         Self::from_input(MmapInput::new(path)?)
@@ -641,6 +643,8 @@ impl InputData<'static> for FileInput {
 pub trait FromFile: FromInputData<'static, FileInput> {
     /// Build the struct from a file.
     /// It supports transparent decompression.
+    ///
+    /// Also see [`from_file_mmap`](FromMmap::from_file_mmap) to use a memory-mapped file.
     #[inline(always)]
     fn from_file<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         Self::from_input(FileInput::new(path)?)

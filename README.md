@@ -7,6 +7,8 @@ Helicase is a carefully optimized FASTA/FASTQ parser that extensively uses vecto
 
 It is designed for three main goals: being highly configurable, handling non-ACTG bases and computing bitpacked representations of DNA.
 
+The underlying algorithm is described in [Helicase: Vectorized parsing and bitpacking of genomic sequences](https://doi.org/10.64898/2026.03.19.712912), please [cite it](#citation) if you use this library.
+
 ## Requirements
 
 This library requires AVX2, SSE3 or NEON instruction sets, make sure to enable `target-cpu=native` when using it:
@@ -207,3 +209,19 @@ More information in the [bench README](bench/README.md).
 ## Acknowledgements
 
 This project was initially started by [Loup Lobet](https://lplt.net/) during his internship with [Charles Paperman](https://paperman.name/).
+
+## Citation
+
+> Helicase: Vectorized parsing and bitpacking of genomic sequences. Igor Martayan, Loup Lobet, Camille Marchet, and Charles Paperman. https://doi.org/10.64898/2026.03.19.712912
+
+```bibtex
+@article{helicase,
+  title     = {Helicase: Vectorized parsing and bitpacking of genomic sequences},
+  author    = {Martayan, Igor and Lobet, Loup and Marchet, Camille and Paperman, Charles},
+  year      = {2026},
+  month     = {03},
+  publisher = {Cold Spring Harbor Laboratory},
+  journal   = {bioRxiv},
+  doi       = {10.64898/2026.03.19.712912}
+}
+```

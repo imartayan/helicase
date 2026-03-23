@@ -16,6 +16,7 @@ memmap2 = "0.9"
 packed-seq = { version = "4.4", default-features = false, optional = true }
 paraseq = { version = "0.4", default-features = false, optional = true }
 paste = "1.0.15"
+rayon = "1.11.0"
 tracing = "0.1.44"
 
 [features]

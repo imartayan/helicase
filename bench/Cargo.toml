@@ -16,7 +16,6 @@ niffler = { version = "3.0", default-features = false, features = [
     "zstd",
 ] }
 paraseq = { version = "0.4", default-features = false, features = ["niffler"] }
-rayon = "1.11"
 regex = "1.12"
 simd-minimizers = { version = "2.2", features = ["scalar"], optional = true }
 sysinfo = "0.37.2"

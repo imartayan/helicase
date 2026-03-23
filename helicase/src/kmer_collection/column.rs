@@ -1,6 +1,9 @@
 use crate::config::advanced::*;
 use crate::dna_format::ColumnarDNA;
+use crate::kmer::*;
 use crate::*;
+use rayon::join;
+use rayon::prelude::*;
 use std::cmp::min;
 use std::io;
 use std::thread;
@@ -89,6 +92,44 @@ impl<const K: usize, T: BitStorage> MerChunk<K, T> {
             .map(|(u, v)| Mer::<K, T>(*u, *v))
     }
 
+    // Parallel iterator
+    pub fn par_iter(&self) -> impl ParallelIterator<Item = Mer<K, T>> + '_
+    where
+        T: Send + Copy + Sync,
+    {
+        self.0
+            .par_iter()
+            .zip(self.1.par_iter())
+            .map(|(&u, &v)| Mer::<K, T>(u, v))
+    }
+
+    /// Parallel split by integer keys in 0..max_key
+    pub fn par_split_by_keys<F>(&self, max_key: usize, classifier: F) -> Vec<MerChunk<K, T>>
+    where
+        T: Send + Copy + Sync,
+        F: Fn(Mer<K, T>) -> usize + Sync,
+    {
+        // Each thread will create its own thread-local buckets
+        self.par_iter()
+            .fold(
+                || vec![MerChunk::new(); max_key], // initialize one Vec<Mer> per key
+                |mut local_buckets, mer| {
+                    let key = classifier(mer);
+                    local_buckets[key].push(mer);
+                    local_buckets
+                },
+            )
+            .reduce(
+                || vec![MerChunk::new(); max_key],
+                |mut acc, thread_buckets| {
+                    for (key, mut vec) in thread_buckets.into_iter().enumerate() {
+                        acc[key].append(&mut vec);
+                    }
+                    acc
+                },
+            )
+    }
+
     pub fn get(&self, i: usize) -> Mer<K, T> {
         self.as_slice().get(i)
     }
@@ -138,12 +179,17 @@ impl<const K: usize, T: BitStorage> MerChunk<K, T> {
     }
 
     #[inline(always)]
-    pub fn append_from_columnar(&mut self, seq: &ColumnarDNA) -> Result<(), String> {
+    pub fn append_from_columnar(&mut self, seq: &ColumnarDNA) {
         if seq.len() < K {
-            return Ok(());
+            return;
         }
-        // THIS IS FOR LOUP
-        todo!();
+        // THIS IS FOR LOUP: improve this
+        let (v0, v1) = join(
+            || sliding_window::<T, K>(seq.high_bits(), seq.len()),
+            || sliding_window::<T, K>(seq.low_bits(), seq.len()),
+        );
+
+        self.append(&mut MerChunk(v0, v1));
     }
 
     pub fn par_sort(self, significant_bits: u8, dedup: bool, mut thread_count: usize) -> Self

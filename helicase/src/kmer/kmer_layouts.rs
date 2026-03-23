@@ -94,7 +94,7 @@ impl<const K: usize, B: BitStorage> Kmer for Mer<K, B> {
 
     #[inline(always)]
     fn hash(&self) -> u64 {
-        self.0.hash() ^ (self.1.hash() << 3) // BOUUH
+        self.0.hash() ^ self.1.hash()
     }
 
     #[inline(always)]

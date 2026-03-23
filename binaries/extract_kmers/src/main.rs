@@ -4,14 +4,12 @@ mod arrow_types;
 use arrow_types::ArrowDispatch;
 mod mmap_arrow_reader;
 
-//mod parquet_writer;
-//use parquet_writer::*;
-//
 mod arrow_writer;
 use arrow_writer::*;
 
 use clap::Parser as ClapParser;
 use helicase::*;
+use std::fmt::Display;
 use std::fs::read;
 use tracing::{info, info_span};
 use tracing_subscriber::fmt::time::UtcTime;
@@ -76,14 +74,15 @@ struct Args {
     capacity: usize,
 }
 
-fn main_dispatched<const K: usize, T: ArrowDispatch + Send + 'static>(args: &Args) {
+fn main_dispatched<const K: usize, T: ArrowDispatch + Send + 'static + Display + Sync>(
+    args: &Args,
+) {
     let path = &args.input;
     let data = read(path).expect("Cannot open file");
     let _span = info_span!("main");
     let _t = TraceTimer::new("main");
     if let Some(path) = &args.arrow_path {
-        fastx_slice_to_arrow::<K, T>(&data, path, args.bucket_log_nb, args.capacity)
-            .unwrap();
+        fastx_slice_to_arrow::<K, T>(&data, path, args.bucket_log_nb, args.capacity).unwrap();
     }
     //if args.dedup | args.sort | args.par_sort {
     //    let mut kmers = MerChunk::<K, T>::new();

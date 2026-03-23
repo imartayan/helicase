@@ -8,6 +8,7 @@ mod arrow_writer;
 use arrow_writer::*;
 
 use clap::Parser as ClapParser;
+use clap::ValueEnum;
 use helicase::*;
 use std::fmt::Display;
 use std::fs::read;
@@ -25,8 +26,7 @@ fn init_tracing(log_level: &str) {
         .init();
 }
 
-#[derive(ClapParser, Debug)]
-#[derive(Debug, Clone, ValueEnum)]
+#[derive(ClapParser, Debug, Clone, ValueEnum)]
 enum TypeLayout {
     U8,
     U16,
@@ -35,8 +35,7 @@ enum TypeLayout {
     U128,
 }
 
-#[derive(Parser, Debug)]
->>>>>>> 9dd698f (adding a binary for building kmer collection)
+#[derive(ClapParser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Input file (FASTA/FASTQ)
@@ -44,7 +43,6 @@ struct Args {
     /// kmer size
     #[arg(short, long)]
     k: usize,
-<<<<<<< HEAD
     /// without deduplication
     #[arg(short = 'w', long)]
     dedup: bool,
@@ -146,22 +144,4 @@ fn main() {
     let args = Args::parse();
     init_tracing(&args.log_level);
     dispatch_k!(args.k, |K, T| main_dispatched::<K, T>(&args))
-=======
-    /// type layout
-    #[arg(short = 'c', long)]
-    t: TypeLayout,
-}
-fn main() {
-    let args = Args::parse();
-    let path = &args.input;
-    let start = Instant::now();
-    let data = read(path).expect("Cannot open file");
-    let elapsed = start.elapsed().as_secs_f64();
-    println!("Loading the data in {}s", elapsed);
-    let start = Instant::now();
-    let kmers = kmer_from_fastx_slice::<63, u64>(&data).expect("invalid data");
-    let elapsed = start.elapsed().as_secs_f64();
-    println!("Computing kmers in {}s", elapsed);
-    println!("{}", kmers.len());
->>>>>>> 9dd698f (adding a binary for building kmer collection)
 }

@@ -407,8 +407,6 @@ mod tests {
 
     #[test]
     fn test_sliding_window_exact_fit() {
-        type B3 = BitString<u8, 3>;
-
         // Put the bits in the remainder instead of a full u64
         // bits: 0b1101 (LSB-first: 1,0,1,1)
         let input = ([], 0b1101u64);

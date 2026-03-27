@@ -44,6 +44,9 @@ impl<'a, const K: usize, B: BitStorage> MerSlice<'a, K, B> {
     }
 }
 
+
+
+
 #[derive(Clone, Debug)]
 pub struct MerChunk<const K: usize, B: BitStorage>(
     pub Vec<BitString<B, K>>,
@@ -130,8 +133,31 @@ impl<const K: usize, T: BitStorage> MerChunk<K, T> {
             )
     }
 
+    /// Parallel split and sort with a Hash-sort algorithm.
+    ///
+    /// buckets contains a 2^k NullableMerChunk, all of the same size 2^p.
+    ///
+    /// a kmer will go in the bucket 0<= i < 2^k if the integer value represented by
+    /// its k-MSB-bits is i.
+    ///
+    /// a kmer will go in the position 0<= j < 2^p if this position is empty and 
+    /// if the MSB bits between k and and k+p represents the value j.
+    ///
+    /// Possibly, two kmer will go to the same cell, if it is the case, we
+    /// resolve the collision by moving on the cell at the right the largest
+    /// kmer by lexicographical order on (hash, high, low).
+    ///
+    /// The resulting NullableMerChunk will contains kmers that are ordered.
+    pub par_split_and_sort(&self, buckets: &[&mut NullableMerChunk]){
+    }
+
     pub fn get(&self, i: usize) -> Mer<K, T> {
         self.as_slice().get(i)
+    }
+
+    pub fn set(&self, i: usize, mer: Mer<K,T>) {
+        self.0[i] = mer.0;
+        self.1[i] = mer.1;
     }
 
     #[inline(always)]
@@ -291,6 +317,106 @@ impl<const K: usize, T: BitStorage> MerChunk<K, T> {
         self.1 = onto_map_copy(&mut self.1, &onto_map, out_size);
     }
 }
+
+#[derive(Clone, Debug)]
+pub struct NullableMerChunk<const K: usize, T: BitStorage>{
+    pub merchunk: MerChunk<K,T>,
+    pub valid: BitVec,
+}
+
+impl<const K: usize, T: BitStorage> NullableMerChunk<K,T> {
+    fn new(size: usize) -> {
+        let some = Mer::<K,T>::some_kmer()
+        let mut v0 = vec![some.0, size];    
+        let mut v1 = vec![some.1, size];    
+        let mut valid = BitVec::repeat(false, size);
+        Self {MerChunk(v0, v1), valid }
+    }
+
+    fn get_uncheck(&self, offset: usize) -> Mer<K,T> {
+        self.merchunk.get(offset)
+    }
+
+    fn is_free(&self, offset: usize) -> bool{
+        !self.valid.[offset]
+    }
+    fn get(&self, offset: usize) -> Option<Mer<K,T>>{
+        if !self.is_free(offset) {
+            Some(self.get_uncheck(offset))
+        } else {
+            None
+        }
+    }
+
+    fn set(&self, offset: usize, mer: Mer<K,T>) {
+        self.merchunk.set(offset, mer);
+        self.valid.set(offset, true)
+    }
+
+}
+
+pub trait Monoid {
+    fn identity() -> Self;
+    fn combine(&self, other: &Self) -> Self;
+}
+
+#[derive(Clone, Debug)]
+pub struct MerGroupedMap<const K: usize, T: BitStorage, V: Monoid>{
+    pub mers : NullableMerChunk<K,T>,
+    pub values: Vec<T>,
+    pub size: usize,
+    pub log2_capacity: usize,
+    pub hash_msb_offset: usize,
+    pub collision_count: usize,
+}
+
+const USIZE_SIZE = std::mem::size_of<usize>() * 8;
+
+impl<const K: usize, T: BitStorage, V> MerGroupedMap<K,T> {
+    fn new(log2_capacity: usize, hash_msb_offset: usize) {
+        assert!(hash_msb_offset + log2_capacity < USIZE_SIZE);
+        let capacity = 1usize << log2_capacity;
+        let mers = NullableMerChunk::<K,T>::new(capacity);
+        let values = vec![T::identity(), capacity];
+        Self { mers, value, size: 0, log2_size, hash_msb_offset, collision_count: 0}
+    }
+    fn len(&self) -> usize {
+        self.size
+    }
+
+    fn is_empty(&self) -> bool {
+        self.size == 0
+    }
+
+    fn extract_from_hash(hash: usize) -> usize {
+    }
+
+    fn add(&mut self, mer: Mer<K,T>, v: V){
+        let mut mer_to_insert = mer;
+        let hash = mer.hash();
+        let mut offset = extract_from_hash(hash);
+        while !mers.is_free(offset) {
+            self.collision_count += 1;
+            new_mer = mers.get_uncheck(offset);
+            let new_hash = new_mer.hash();
+            if new_hash > hash {
+                mers.set(offset, mer_to_insert);
+                mer_to_insert = new_mer;
+                hash = new_hash;
+            }
+            offset += 1;
+        }
+        mers.set(offset, mer);
+    }
+
+    fn check(&mut self, mer: Mer<K,T>){
+    }
+
+    fn compactify(&self) -> (MerChunk<K,T>, Vec<T>){
+    }
+
+}
+    
 
 impl<const K: usize, B: BitStorage> Extend<Mer<K, B>> for MerChunk<K, B> {
     fn extend<T>(&mut self, iter: T)

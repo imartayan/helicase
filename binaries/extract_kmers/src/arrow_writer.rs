@@ -215,7 +215,7 @@ fn dummy_writer() -> FileWriter<File> {
 ///     - high is the high bits of each kmer
 ///     - low it the low bits of each kmer
 ///
-/// The output format is a collection of Arrow IPC file
+/// The output format is a collection of Arrow IPC file or a concatenated version of that
 ///
 /// The algorithm will produce bucket 2^bucket_log_nb buckets and dispatch kmers in each
 /// buckets according to the bucket_log_nb most significant bits. By doing so, we
@@ -225,10 +225,8 @@ fn dummy_writer() -> FileWriter<File> {
 /// Optionally, each bucket can be :
 ///     - sort
 ///     - deduplicated with only one occurence of each kmer
-///     - add a count value on the output with the count of each kmer
+///     - add a count value on the output with the count of each kmer /not implemented\
 ///   
-/// Remark that count requires dedup which requires sort. Otherwise the function will return
-/// an Error.
 ///
 /// Finally, it is possible to concatenate each bucket into one very big arrow IPC file.
 pub fn fastx_slice_to_arrow<const K: usize, B: BitStorage + ArrowDispatch + Display + Sync>(

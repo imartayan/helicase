@@ -192,12 +192,21 @@ pub mod parser;
 pub use config::{Config, ParserOptions};
 pub use parser::{FastaParser, FastqParser, FastxParser, HelicaseParser};
 
-#[cfg(target_feature = "avx2")]
+#[cfg(target_feature = "avx512bw")]
+pub(crate) mod simd {
+    mod avx512;
+    pub use avx512::*;
+}
+#[cfg(all(not(target_feature = "avx512bw"), target_feature = "avx2"))]
 pub(crate) mod simd {
     mod avx2;
     pub use avx2::*;
 }
-#[cfg(all(not(target_feature = "avx2"), target_feature = "ssse3"))]
+#[cfg(all(
+    not(target_feature = "avx512bw"),
+    not(target_feature = "avx2"),
+    target_feature = "ssse3"
+))]
 #[deprecated(
     note = "Helicase currently uses SSE3 instead of AVX2 instructions. Compile using `-C target-cpu=native` to get better performances."
 )]

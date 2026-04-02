@@ -3,17 +3,19 @@ use timer::TraceTimer;
 mod arrow_types;
 use arrow_types::ArrowDispatch;
 
+mod arrow_builders;
 mod arrow_writer;
 use arrow_writer::*;
 
-mod kernels;
-
 use clap::Parser as ClapParser;
 use clap::ValueEnum;
+use eyre::{Result, eyre};
 use helicase::*;
+use memmap2::Mmap;
 use std::fmt::Display;
 use std::fs::read;
-use tracing::info_span;
+use std::path::Path;
+use tracing::{info, info_span};
 use tracing_subscriber::fmt::time::UtcTime;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -47,9 +49,6 @@ struct Args {
     /// without deduplication
     #[arg(long, default_value_t = false)]
     no_dedup: bool,
-    /// without sorting
-    #[arg(long, default_value_t = false)]
-    no_sort: bool,
     /// log level (warn, info, debug)
     #[arg(long, default_value = "info")]
     log_level: String,
@@ -60,34 +59,55 @@ struct Args {
     #[arg(short = 'b', long, default_value_t = 7)]
     bucket_log_nb: usize,
     /// bucket starting capacity
-    #[arg(short='c', long, default_value_t=1<<10)]
+    #[arg(short='c', long, default_value_t=1<<24)]
     capacity: usize,
     /// keep the directory and prevent the final concatenation of buckets
     #[arg(long, default_value_t = false)]
     keep_bucket: bool,
+    /// The Hash-Sort aggregation needs space. This number of power of two we use as a multiplying
+    /// factor. For bucket of size n, the allocated space will be
+    /// 2^(log2(n) + hashsort_log_factor)
+    #[arg(long, default_value_t = 3)]
+    hashsort_log_factor: u32,
+    /// Prevent usage of mmap
+    #[arg(long)]
+    no_mmap: bool,
 }
 
 fn main_dispatched<const K: usize, T: ArrowDispatch + Send + 'static + Display + Sync>(
     args: &Args,
-) {
+) -> Result<()> {
     let path = &args.input;
-    let data = read(path).expect("Cannot open file");
     let _span = info_span!("main");
-    let _t = TraceTimer::new("main");
-    fastx_slice_to_arrow::<K, T>(
-        &data,
-        &args.output,
-        args.bucket_log_nb,
-        args.capacity,
-        !args.no_sort,
-        !args.no_dedup,
-        !args.keep_bucket,
-    )
-    .unwrap();
+    let exec = |data| {
+        fastx_slice_to_arrow::<K, T>(
+            data,
+            &args.output,
+            args.bucket_log_nb,
+            args.capacity,
+            args.hashsort_log_factor,
+            !args.no_dedup,
+            !args.keep_bucket,
+        )
+    };
+    if args.no_mmap {
+        info!("Loading data in RAM");
+        let data = read(path)?;
+        exec(&data)
+    } else {
+        info!("Access to data with mmap");
+        let file = std::fs::File::open(path)?;
+        let data = unsafe { Mmap::map(&file)? };
+        exec(&data)
+    }
 }
 
-fn main() {
+fn main() -> Result<()> {
     let args = Args::parse();
+
+    if Path::new(&args.output).exists() {
+        return Err(eyre!("Output file '{}' already exists", &args.output));
+    }
     init_tracing(&args.log_level);
     dispatch_k!(args.k, |K, T| main_dispatched::<K, T>(&args))
 }

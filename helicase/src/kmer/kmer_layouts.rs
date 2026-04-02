@@ -1,4 +1,3 @@
-//use crate::dna::ColumnarDNA;
 use crate::kmer::bitstring::*;
 use std::cmp::min;
 use std::fmt::Debug;
@@ -7,6 +6,8 @@ pub trait Kmer: Sized + Ord + Copy {
     fn append_left_ascii(&self, x: u8) -> Result<Self, String>;
     fn append_right_ascii(&self, x: u8) -> Result<Self, String>;
     fn complement(&self) -> Self;
+    /// Hash implementation that will be encoded on the 2*K first bits
+    /// where K is the kmer size.
     fn hash(&self) -> u64;
     fn normalize(&self) -> Self {
         min(*self, self.rc())
@@ -94,7 +95,27 @@ impl<const K: usize, B: BitStorage> Kmer for Mer<K, B> {
 
     #[inline(always)]
     fn hash(&self) -> u64 {
-        self.0.hash() ^ self.1.hash()
+        let high = self.0.value.fold_to_u64();
+        let low = self.1.value.fold_to_u64();
+        let mut to_hash: u64;
+        let mask: u64;
+        if K < 32 {
+            to_hash = (high << K) ^ low;
+            mask = (!0) >> (64 - 2 * K);
+        } else if K < 64 {
+            to_hash = (high << (64 - K)) ^ low;
+            mask = !0;
+        } else {
+            to_hash = high ^ (low.rotate_left(32));
+            mask = !0;
+        }
+
+        to_hash ^= to_hash >> 30;
+        to_hash *= 0xbf58476d1ce4e5b9 & mask;
+        to_hash ^= to_hash >> 27;
+        to_hash *= 0x94d049bb133111eb & mask;
+        to_hash ^= to_hash >> 31;
+        to_hash & mask
     }
 
     #[inline(always)]
@@ -186,5 +207,57 @@ mod tests {
         let s = mer.to_string();
         assert_eq!(s.len(), 4);
         assert!(s.contains('A') || s.contains('C') || s.contains('G') || s.contains('T'));
+    }
+    #[test]
+    fn test_hash_uses_only_2k_bits_small_k() {
+        fn check<const K: usize, T: BitStorage>() {
+            let seq = [b'A'; K];
+            let mer: Mer<K, T> = (&seq).try_into().unwrap();
+            let h = mer.hash();
+
+            let mask = if 2 * K == 64 {
+                u64::MAX
+            } else {
+                (1u64 << (2 * K)) - 1
+            };
+
+            assert_eq!(h & !mask, 0, "hash has bits outside 2K region for K={}", K);
+        }
+
+        check::<5, u8>();
+        check::<5, u128>();
+        check::<10, u16>();
+        check::<16, u16>();
+        check::<16, u32>();
+        check::<31, u32>();
+        check::<31, u64>();
+        check::<31, u128>();
+    }
+
+    #[test]
+    fn test_hash_uses_only_2k_bits_varied_sequences() {
+        fn check<const K: usize>(seq: [u8; K]) {
+            let mer: Mer<K, u8> = (&seq).try_into().unwrap();
+            let h = mer.hash();
+            let offset: usize = 64 - 2 * K;
+
+            let mask = if 2 * K == 64 {
+                u64::MAX
+            } else {
+                (1u64 << (2 * K)) - 1
+            };
+
+            assert_eq!(
+                h & !mask,
+                0,
+                "hash:\n {h:064b}\n{:>offset$}^\n has bits outside 2K region for sequence {:?} on K={K}",
+                offset,
+                seq,
+            );
+        }
+
+        check::<4>([b'A', b'C', b'G', b'T']);
+        check::<4>([b'T', b'T', b'G', b'A']);
+        check::<8>([b'A', b'A', b'C', b'G', b'T', b'C', b'G', b'T']);
     }
 }

@@ -1,20 +1,30 @@
 use arrow::array::*;
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::*;
 use helicase::kmer::*;
 use helicase::kmer_collection::MerChunk;
 
 use paste::paste;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use eyre::Result;
 
+pub trait SliceableArray<V> {
+    fn as_slice(&self) -> &[V];
+}
+
 pub trait Builder: Send + Sync {
     type Value: BitStorage;
-    type ArrayType;
+    type ArrayType: SliceableArray<Self::Value> + 'static;
     const ARROW_DATA_TYPE: DataType;
     fn with_capacity(capacity: usize) -> Self;
     fn append<const K: usize>(&mut self, m: MerChunk<K, Self::Value>);
     fn finish(&mut self, schema: Arc<Schema>) -> Result<RecordBatch>;
+    fn array_to_values(array: &Self::ArrayType) -> &[Self::Value] {
+        array.as_slice()
+    }
+
+    // each concrete Builder decides how to go from Vec<Self::Value> -> Array
+    fn array_from_values(values: &[Self::Value]) -> Arc<dyn Array>;
     fn len(&self) -> usize;
 }
 
@@ -25,25 +35,26 @@ pub trait ArrowDispatch: BitStorage + Send + Sync {
 
     /// Schema helper
     fn build_schema(count: bool) -> Arc<Schema> {
-        static SCHEMA: OnceLock<Arc<Schema>> = OnceLock::new();
-        SCHEMA
-            .get_or_init(|| {
-                let mut columns = vec![
-                    Field::new("hash", DataType::UInt64, false),
-                    Field::new("high", Self::ARROW_DATA_TYPE, false),
-                    Field::new("low", Self::ARROW_DATA_TYPE, false),
-                ];
-                if count {
-                    columns.push(Field::new("count", DataType::UInt16, false));
-                }
-                Arc::new(Schema::new(columns))
-            })
-            .clone()
+        let mut columns = vec![
+            Field::new("hash", DataType::UInt64, false),
+            Field::new("high", Self::ARROW_DATA_TYPE, false),
+            Field::new("low", Self::ARROW_DATA_TYPE, false),
+        ];
+        if count {
+            columns.push(Field::new("count", DataType::UInt16, false));
+        }
+        Arc::new(Schema::new(columns))
     }
 }
 
 macro_rules! impl_arrow_fixed {
     ($t:ty, $arrow:ty, $dt:expr, $atype: ty) => {
+        impl SliceableArray<$t> for $atype {
+            fn as_slice(&self) -> &[$t] {
+                self.values().as_ref()
+            }
+        }
+
         paste! {
             pub struct [<Builder $t:upper>] {
                 hash: Vec<u64>,
@@ -95,6 +106,11 @@ macro_rules! impl_arrow_fixed {
                 fn len(&self) -> usize{
                     self.hash.len()
                 }
+                fn array_from_values(values: &[$t]) -> Arc<dyn Array> {
+                    let mut builder = PrimitiveBuilder::<$arrow>::new();
+                    builder.append_slice(values);
+                    Arc::new(builder.finish())
+                }
 
             }
             impl ArrowDispatch for $t {
@@ -108,6 +124,15 @@ impl_arrow_fixed!(u8, UInt8Type, DataType::UInt8, UInt8Array);
 impl_arrow_fixed!(u16, UInt16Type, DataType::UInt16, UInt16Array);
 impl_arrow_fixed!(u32, UInt32Type, DataType::UInt32, UInt32Array);
 impl_arrow_fixed!(u64, UInt64Type, DataType::UInt64, UInt64Array);
+
+impl SliceableArray<u128> for FixedSizeBinaryArray {
+    fn as_slice(&self) -> &[u128] {
+        // unsafe reinterpret of bytes as u128, zero-copy
+        let bytes = self.values().as_slice();
+        assert!(bytes.len().is_multiple_of(16));
+        unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const u128, bytes.len() / 16) }
+    }
+}
 
 pub struct BuilderU128 {
     hash: Vec<u64>,
@@ -157,6 +182,10 @@ impl Builder for BuilderU128 {
 
     fn len(&self) -> usize {
         self.hash.len()
+    }
+    fn array_from_values(values: &[u128]) -> Arc<dyn Array> {
+        let bytes = values.iter().map(|x| x.to_le_bytes());
+        Arc::new(FixedSizeBinaryArray::try_from_iter(bytes).unwrap())
     }
 }
 impl ArrowDispatch for u128 {

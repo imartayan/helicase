@@ -1,11 +1,8 @@
-use crate::config::advanced::*;
 use crate::dna_format::ColumnarDNA;
 use crate::kmer::*;
-use crate::*;
 use rayon::join;
 use rayon::prelude::*;
 use std::cmp::min;
-use std::io;
 use std::thread;
 use tracing::info;
 
@@ -43,9 +40,6 @@ impl<'a, const K: usize, B: BitStorage> MerSlice<'a, K, B> {
         high.zip(low).map(|(h, l)| MerSlice::<K, B>(h, l))
     }
 }
-
-
-
 
 #[derive(Clone, Debug)]
 pub struct MerChunk<const K: usize, B: BitStorage>(
@@ -133,29 +127,11 @@ impl<const K: usize, T: BitStorage> MerChunk<K, T> {
             )
     }
 
-    /// Parallel split and sort with a Hash-sort algorithm.
-    ///
-    /// buckets contains a 2^k NullableMerChunk, all of the same size 2^p.
-    ///
-    /// a kmer will go in the bucket 0<= i < 2^k if the integer value represented by
-    /// its k-MSB-bits is i.
-    ///
-    /// a kmer will go in the position 0<= j < 2^p if this position is empty and 
-    /// if the MSB bits between k and and k+p represents the value j.
-    ///
-    /// Possibly, two kmer will go to the same cell, if it is the case, we
-    /// resolve the collision by moving on the cell at the right the largest
-    /// kmer by lexicographical order on (hash, high, low).
-    ///
-    /// The resulting NullableMerChunk will contains kmers that are ordered.
-    pub par_split_and_sort(&self, buckets: &[&mut NullableMerChunk]){
-    }
-
     pub fn get(&self, i: usize) -> Mer<K, T> {
         self.as_slice().get(i)
     }
 
-    pub fn set(&self, i: usize, mer: Mer<K,T>) {
+    pub fn set(&mut self, i: usize, mer: Mer<K, T>) {
         self.0[i] = mer.0;
         self.1[i] = mer.1;
     }
@@ -318,106 +294,6 @@ impl<const K: usize, T: BitStorage> MerChunk<K, T> {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct NullableMerChunk<const K: usize, T: BitStorage>{
-    pub merchunk: MerChunk<K,T>,
-    pub valid: BitVec,
-}
-
-impl<const K: usize, T: BitStorage> NullableMerChunk<K,T> {
-    fn new(size: usize) -> {
-        let some = Mer::<K,T>::some_kmer()
-        let mut v0 = vec![some.0, size];    
-        let mut v1 = vec![some.1, size];    
-        let mut valid = BitVec::repeat(false, size);
-        Self {MerChunk(v0, v1), valid }
-    }
-
-    fn get_uncheck(&self, offset: usize) -> Mer<K,T> {
-        self.merchunk.get(offset)
-    }
-
-    fn is_free(&self, offset: usize) -> bool{
-        !self.valid.[offset]
-    }
-    fn get(&self, offset: usize) -> Option<Mer<K,T>>{
-        if !self.is_free(offset) {
-            Some(self.get_uncheck(offset))
-        } else {
-            None
-        }
-    }
-
-    fn set(&self, offset: usize, mer: Mer<K,T>) {
-        self.merchunk.set(offset, mer);
-        self.valid.set(offset, true)
-    }
-
-}
-
-pub trait Monoid {
-    fn identity() -> Self;
-    fn combine(&self, other: &Self) -> Self;
-}
-
-#[derive(Clone, Debug)]
-pub struct MerGroupedMap<const K: usize, T: BitStorage, V: Monoid>{
-    pub mers : NullableMerChunk<K,T>,
-    pub values: Vec<T>,
-    pub size: usize,
-    pub log2_capacity: usize,
-    pub hash_msb_offset: usize,
-    pub collision_count: usize,
-}
-
-const USIZE_SIZE = std::mem::size_of<usize>() * 8;
-
-impl<const K: usize, T: BitStorage, V> MerGroupedMap<K,T> {
-    fn new(log2_capacity: usize, hash_msb_offset: usize) {
-        assert!(hash_msb_offset + log2_capacity < USIZE_SIZE);
-        let capacity = 1usize << log2_capacity;
-        let mers = NullableMerChunk::<K,T>::new(capacity);
-        let values = vec![T::identity(), capacity];
-        Self { mers, value, size: 0, log2_size, hash_msb_offset, collision_count: 0}
-    }
-    fn len(&self) -> usize {
-        self.size
-    }
-
-    fn is_empty(&self) -> bool {
-        self.size == 0
-    }
-
-    fn extract_from_hash(hash: usize) -> usize {
-    }
-
-    fn add(&mut self, mer: Mer<K,T>, v: V){
-        let mut mer_to_insert = mer;
-        let hash = mer.hash();
-        let mut offset = extract_from_hash(hash);
-        while !mers.is_free(offset) {
-            self.collision_count += 1;
-            new_mer = mers.get_uncheck(offset);
-            let new_hash = new_mer.hash();
-            if new_hash > hash {
-                mers.set(offset, mer_to_insert);
-                mer_to_insert = new_mer;
-                hash = new_hash;
-            }
-            offset += 1;
-        }
-        mers.set(offset, mer);
-    }
-
-    fn check(&mut self, mer: Mer<K,T>){
-    }
-
-    fn compactify(&self) -> (MerChunk<K,T>, Vec<T>){
-    }
-
-}
-    
-
 impl<const K: usize, B: BitStorage> Extend<Mer<K, B>> for MerChunk<K, B> {
     fn extend<T>(&mut self, iter: T)
     where
@@ -444,61 +320,6 @@ impl<const K: usize, B: BitStorage> TryFrom<&[u8]> for MerChunk<K, B> {
         mers.append_from_ascii(seq)?;
         Ok(mers)
     }
-}
-
-pub fn kmer_from_fastx_slice<const K: usize, B: BitStorage>(
-    data: &[u8],
-) -> io::Result<MerChunk<K, B>> {
-    const DNA_LEN: Config = COMPUTE_DNA_LEN | SPLIT_NON_ACTG | RETURN_DNA_CHUNK;
-    let mut parser = FastxParser::<DNA_LEN>::from_slice(data).unwrap();
-    let mut kmer_nb = 0;
-    while let Some(_) = parser.next() {
-        kmer_nb += parser.get_dna_len() - K + 1;
-    }
-    info!("Computed number of kmer before parsing: {}", kmer_nb);
-
-    const DNA_STRING: Config = ParserOptions::default()
-        .ignore_headers()
-        .dna_string()
-        .split_non_actg()
-        .return_dna_chunk(true)
-        .return_record(false)
-        .config();
-    let mut parser = FastxParser::<DNA_STRING>::from_slice(data)?;
-    let mut chunks = MerChunk::<_, B>::with_capacity(kmer_nb);
-    while let Some(_) = parser.next() {
-        // unsafe unwrap:: this unwrap actually panic if the DNA contains non-nuc symbols. This
-        // can't happen per the semantic of the parser.
-        let dna_str = parser.get_dna_string();
-        chunks.append_from_ascii(dna_str).unwrap()
-    }
-    Ok(chunks)
-}
-
-pub fn chunk_process_from_fastx_slice<const K: usize, B: BitStorage>(
-    data: &[u8],
-    mut closure: impl FnMut(&mut MerChunk<K, B>) -> io::Result<()>,
-) -> io::Result<()> {
-    const DNA_STRING: Config = ParserOptions::default()
-        .ignore_headers()
-        .dna_string()
-        .split_non_actg()
-        .return_dna_chunk(true)
-        .return_record(false)
-        .config();
-    let mut parser = FastxParser::<DNA_STRING>::from_slice(data)?;
-    let mut chunks = MerChunk::<_, B>::new();
-    while let Some(_) = parser.next() {
-        // unsafe unwrap:: this unwrap actually panic if the DNA contains non-nuc symbols. This
-        // can't happen per the semantic of the parser.
-        let dna_str = parser.get_dna_string();
-        chunks
-            .append_from_ascii(dna_str)
-            .map_err(std::io::Error::other)?;
-        closure(&mut chunks)?;
-        chunks.clear();
-    }
-    Ok(())
 }
 
 #[cfg(test)]

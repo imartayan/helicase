@@ -1,11 +1,8 @@
 use crate::TraceTimer;
+use crate::arrow_builders::*;
 use crate::arrow_types::*;
-use crate::kernels::dedup_sorted_columns;
-use arrow::compute::{SortColumn, concat_batches, lexsort_to_indices, take};
-use arrow::datatypes::Schema;
 use arrow::ipc::reader::FileReader;
 use arrow::ipc::writer::FileWriter;
-use arrow::record_batch::RecordBatch;
 use helicase::kmer::*;
 use helicase::kmer_collection::*;
 use helicase::*;
@@ -13,190 +10,26 @@ use rayon::prelude::*;
 use std::fmt::Display;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::thread::JoinHandle;
-use tracing::{debug, info, instrument, trace};
+use tracing::{debug, info, instrument};
 
 use eyre::{Result, eyre};
 
-pub struct BucketBuilder<B: ArrowDispatch> {
-    writer: FileWriter<File>,
-    index: usize,
-    filename: String,
-    builder: B::Builder,
-    capacity: usize,
-    handle: Option<JoinHandle<FileWriter<File>>>,
-    schema: Arc<Schema>,
-    is_closed: bool,
-}
-
-impl<B: ArrowDispatch> BucketBuilder<B> {
-    pub fn new(
-        filename: &Path,
-        index: usize,
-        capacity: usize,
-        schema: Arc<Schema>,
-    ) -> Result<Self> {
-        let file = File::create(filename)?;
-        let writer = FileWriter::try_new(file, &schema)?;
-        let builder = B::Builder::with_capacity(capacity);
-        trace!(file = %filename.display(), "creating bucket");
-        Ok(Self {
-            writer,
-            index,
-            filename: filename.display().to_string(),
-            builder,
-            capacity,
-            handle: None,
-            schema,
-            is_closed: false,
-        })
+fn update_builders_from_chunk<const K: usize, B: BitStorage + ArrowDispatch>(
+    builders: &mut [BucketBuilder<B>],
+    mer_chunk: &mut MerChunk<K, B>,
+    bucket_log_nb: usize,
+    offset: usize,
+) {
+    let bucket_nb: usize = 1 << bucket_log_nb;
+    let split_chunks = mer_chunk.par_split_by_keys(bucket_nb, |mer: Mer<K, B>| {
+        let shift = 64 - offset - bucket_log_nb - 2;
+        (mer.hash() >> shift) as usize
+    });
+    for (i, chunk) in split_chunks.into_iter().enumerate() {
+        info!("Append to bucket {i} #mers:{}", chunk.len());
+        builders[i].append_merchunk(chunk).unwrap();
     }
-
-    pub fn append_merchunk<const K: usize>(&mut self, m: MerChunk<K, B>) -> Result<()> {
-        self.builder.append(m);
-        self.commit()?;
-        Ok(())
-    }
-
-    fn commit(&mut self) -> Result<()> {
-        if self.builder.len() >= self.capacity {
-            {
-                let _t = TraceTimer::skippable(format!("waiting writing {}", self.index), 2);
-                self.join()?;
-            }
-            let batch = self.builder.finish(self.schema.clone())?;
-            trace!(
-                bucket = self.filename,
-                columns = batch.num_columns(),
-                "Writing batch"
-            );
-            // move writer into flush thread
-            let mut writer = std::mem::replace(&mut self.writer, dummy_writer());
-            self.handle = Some(std::thread::spawn(move || {
-                writer.write(&batch).unwrap();
-                writer
-            }));
-        }
-        Ok(())
-    }
-
-    pub fn join(&mut self) -> Result<()> {
-        if let Some(handle) = self.handle.take() {
-            self.writer = handle
-                .join()
-                .map_err(|e| eyre::eyre!("writer thread panicked: {:?}", e))?;
-        }
-        Ok(())
-    }
-
-    pub fn finish(&mut self) -> Result<()> {
-        self.join()?;
-        if let Some(handle) = self.handle.take() {
-            self.writer = handle
-                .join()
-                .map_err(|e| eyre::eyre!("writer thread panic at finishing: {:?}", e))?;
-        }
-
-        // flush remaining rows
-        if self.builder.len() > 0 {
-            let batch = self.builder.finish(self.schema.clone())?;
-            self.writer.write(&batch)?;
-        }
-        self.writer.finish()?;
-        self.is_closed = true;
-        Ok(())
-    }
-
-    pub fn clean(&mut self, sort: bool, dedup: bool, count: bool) -> Result<()> {
-        if dedup & !sort {
-            return Err(eyre!("Impossible to deduplicate kmers without sorting"));
-        }
-
-        if count & !dedup {
-            return Err(eyre!("Impossible to count kmers without deduplication"));
-        }
-        let _time = TraceTimer::new(format!("Cleaning arrow file {}", self.index));
-
-        // Ensure everything is flushed
-
-        if !self.is_closed {
-            self.finish()?;
-        }
-
-        // Reopen file for reading
-        let file = File::open(&self.filename)?;
-        let reader = FileReader::try_new(file, None)?;
-
-        let schema = reader.schema();
-
-        // Collect all batches
-        let mut batches = Vec::new();
-        for batch in reader {
-            batches.push(batch.unwrap());
-        }
-
-        if batches.is_empty() {
-            return Ok(());
-        }
-
-        // Concatenate into a single batch
-        let combined = concat_batches(&schema, &batches)?;
-        let mut hash_array = combined.column(0).clone();
-        let mut high_array = combined.column(1).clone();
-        let mut low_array = combined.column(2).clone();
-        info!("Concat done for bucket {}", self.index);
-
-        if sort {
-            let _time = TraceTimer::new(format!("Sorting ...{}", self.index));
-            let sort_columns = vec![
-                SortColumn {
-                    values: hash_array.clone(),
-                    options: None,
-                },
-                SortColumn {
-                    values: high_array.clone(),
-                    options: None,
-                },
-                SortColumn {
-                    values: low_array.clone(),
-                    options: None,
-                },
-            ];
-            let indices = lexsort_to_indices(&sort_columns, None)?;
-            hash_array = take(&hash_array, &indices, None)?;
-            high_array = take(&high_array, &indices, None)?;
-            low_array = take(&low_array, &indices, None)?;
-            if dedup {
-                let deduped = dedup_sorted_columns(&[
-                    hash_array.clone(),
-                    high_array.clone(),
-                    low_array.clone(),
-                ])?;
-                hash_array = deduped[0].clone();
-                high_array = deduped[1].clone();
-                low_array = deduped[2].clone();
-            }
-            if count {
-                todo!();
-            }
-        }
-
-        // Rewrite file with a single batch
-        let batch = RecordBatch::try_new(schema.clone(), vec![hash_array, high_array, low_array])?;
-        let file = File::create(&self.filename)?;
-        let mut writer = FileWriter::try_new(file, &schema)?;
-        writer.write(&batch)?;
-        writer.finish()?;
-        Ok(())
-    }
-}
-
-// dummy_writer is just a placeholder for mem::replace
-fn dummy_writer() -> FileWriter<File> {
-    // you can open /dev/null or create a temp file
-    let f = File::create("/dev/null").unwrap();
-    FileWriter::try_new(f, &Arc::new(Schema::empty())).unwrap()
+    mer_chunk.truncate(0);
 }
 
 #[instrument(
@@ -229,16 +62,33 @@ fn dummy_writer() -> FileWriter<File> {
 ///   
 ///
 /// Finally, it is possible to concatenate each bucket into one very big arrow IPC file.
+///
+/// The bucketing use the hash of the kmer. For a kmer of size K only the first min(64, 2K) bits
+/// of this hash are used. We bucket by MSB first so we have a first offset bits are not used.
+/// We split among the bucket using `bucket_log_nb` bits after this offset.
+///
+///
+///  Recall that hash is 64-bit word:
+///
+///  ┌──────────────────────────────────────────────────────────────┐
+///  │        offset bits  │ bucket_log_nb  bits │   remaining      │
+///  │     (unused MSB)    │   (bucket index)    │      bits        │
+///  ├─────────────────────┼─────────────────────┼──────────────────┤
+///  │ 0 0 0 ... 0         │ b b b ... b         │ r r r ... r      │
+///  └──────────────────────────────────────────────────────────────┘
+///   ↑                   ↑
+///   │                   └── used to select bucket
+///   └── ignored / not used
+///
 pub fn fastx_slice_to_arrow<const K: usize, B: BitStorage + ArrowDispatch + Display + Sync>(
     data: &[u8],
     output_path: &str,
     bucket_log_nb: usize,
     bucket_capacity: usize,
-    sort: bool,
+    agg_mer_log_size_factor: u32,
     dedup: bool,
     concatenate_bucket: bool,
 ) -> Result<()> {
-    const COUNT: bool = false;
     let _t = TraceTimer::new("fastx_slice_to_arrow");
     let dir_path = if concatenate_bucket {
         PathBuf::from(&format!("{}_dir", output_path))
@@ -258,7 +108,7 @@ pub fn fastx_slice_to_arrow<const K: usize, B: BitStorage + ArrowDispatch + Disp
         bucket_capacity, "initializing kmer extraction pipeline"
     );
 
-    let schema = B::build_schema(false);
+    let mut schema = B::build_schema(false);
     debug!(
         datatype = ?B::ARROW_DATA_TYPE,
         "arrow schema initialized"
@@ -266,11 +116,14 @@ pub fn fastx_slice_to_arrow<const K: usize, B: BitStorage + ArrowDispatch + Disp
     let _init_span = tracing::info_span!("initialize_buckets");
     let mut builders: Vec<BucketBuilder<B>> = Vec::with_capacity(bucket_nb);
 
+    let offset = if K < 64 { 2 * K } else { 64 };
     for i in 0..bucket_nb {
         let filename = Path::new(&dir_path).join(format!("{i}.arrow"));
         builders.push(BucketBuilder::new(
             &filename,
             i,
+            (64 - offset) + bucket_log_nb,
+            agg_mer_log_size_factor,
             bucket_capacity,
             schema.clone(),
         )?);
@@ -290,36 +143,26 @@ pub fn fastx_slice_to_arrow<const K: usize, B: BitStorage + ArrowDispatch + Disp
     let mut mer_chunk = MerChunk::<K, B>::new();
     while parser.next().is_some() {
         seq_count += 1;
+
         let seq = parser.get_dna_columnar();
         {
-            let _time = TraceTimer::new("Computing merchunk");
+            let _time = TraceTimer::skippable("Computing merchunk", 1000);
             mer_chunk.append_from_columnar(seq);
         }
         kmer_count += mer_chunk.len();
         if mer_chunk.len() > bucket_capacity {
-            let split_chunks;
-            {
-                let _time = TraceTimer::new("Splitting merchunk");
-                split_chunks = mer_chunk.par_split_by_keys(bucket_nb, |mer: Mer<K, B>| {
-                    (mer.hash() >> (64 - bucket_log_nb)) as usize
-                });
-            }
-            {
-                let _time = TraceTimer::new("writting merchunk");
-                for (i, chunk) in split_chunks.into_iter().enumerate() {
-                    builders[i].append_merchunk(chunk).unwrap();
-                }
-            }
-            info!("Seq: {} and kmers:{}", seq_count, kmer_count);
-            mer_chunk.truncate(0);
+            update_builders_from_chunk(&mut builders, &mut mer_chunk, bucket_log_nb, offset);
         }
     }
+    // do not forgot the final buffer !
+    update_builders_from_chunk(&mut builders, &mut mer_chunk, bucket_log_nb, offset);
+
     for builder in builders.iter_mut() {
         builder.finish()?;
     }
     builders
         .par_iter_mut()
-        .try_for_each(|builder| builder.clean(sort, dedup, COUNT))?;
+        .try_for_each(|builder| builder.clean::<K>(dedup))?;
 
     info!(
         sequences = seq_count,
@@ -330,6 +173,9 @@ pub fn fastx_slice_to_arrow<const K: usize, B: BitStorage + ArrowDispatch + Disp
     );
 
     if concatenate_bucket {
+        if dedup {
+            schema = B::build_schema(true);
+        }
         let _t = TraceTimer::new("concatenating bucket");
         let output = Path::new(output_path);
         let mut writer = FileWriter::try_new(File::create(output)?, &schema)?;

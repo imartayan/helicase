@@ -6,6 +6,7 @@ pub mod kmer;
 pub mod kmer_collection;
 pub mod lexer;
 pub mod parser;
+pub mod pipeline;
 
 pub use crate::input::*;
 pub use config::{Config, ParserOptions};

@@ -22,11 +22,10 @@ fn update_builders_from_chunk<const K: usize, B: BitStorage + ArrowDispatch>(
 ) {
     let bucket_nb: usize = 1 << bucket_log_nb;
     let split_chunks = mer_chunk.par_split_by_keys(bucket_nb, |mer: Mer<K, B>| {
-        let shift = 64 - offset - bucket_log_nb - 2;
+        let shift = offset - bucket_log_nb;
         (mer.hash() >> shift) as usize
     });
     for (i, chunk) in split_chunks.into_iter().enumerate() {
-        info!("Append to bucket {i} #mers:{}", chunk.len());
         builders[i].append_merchunk(chunk).unwrap();
     }
     mer_chunk.truncate(0);

@@ -56,18 +56,25 @@ struct Args {
     #[arg(short = 'o', long)]
     output: String,
     /// log bucket nb
-    #[arg(short = 'b', long, default_value_t = 7)]
+    #[arg(short = 'b', long, default_value_t = 4)]
     bucket_log_nb: usize,
     /// bucket starting capacity
-    #[arg(short='c', long, default_value_t=1<<24)]
+    #[arg(short='c', long, default_value_t=1<<23)]
     capacity: usize,
+    /// numbers of threads. Carefull, high parallelism
+    /// will be detrimental as it will staturate IO.
+    /// Also, RAM behaviour are per threads. Hence
+    /// the number of threads is multiplicative with
+    /// respect to RAM usage.
+    #[arg(long, default_value_t = 4)]
+    max_num_threads: usize,
     /// keep the directory and prevent the final concatenation of buckets
     #[arg(long, default_value_t = false)]
     keep_bucket: bool,
     /// The Hash-Sort aggregation needs space. This number of power of two we use as a multiplying
     /// factor. For bucket of size n, the allocated space will be
     /// 2^(log2(n) + hashsort_log_factor)
-    #[arg(long, default_value_t = 3)]
+    #[arg(long, default_value_t = 1)]
     hashsort_log_factor: u32,
     /// Prevent usage of mmap
     #[arg(long)]
@@ -104,6 +111,9 @@ fn main_dispatched<const K: usize, T: ArrowDispatch + Send + 'static + Display +
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(args.max_num_threads)
+        .build_global()?;
 
     if Path::new(&args.output).exists() {
         return Err(eyre!("Output file '{}' already exists", &args.output));

@@ -74,8 +74,8 @@ impl ColumnarDNA {
     #[inline(always)]
     pub fn extract_u32(&self, offset: usize, size: usize) -> (u32, u32) {
         assert!(
-            size > 32,
-            "Can't use extract_u32 with a larger value than 32"
+            size <= 32,
+            "Can't use extract_u32 with a larger value than 32 got {size}"
         );
         debug_assert!(offset + size <= self.len, "extract past end");
 

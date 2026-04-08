@@ -1,0 +1,13 @@
+[package]
+name = "approximate_count_kmer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cardinality-estimator = "1.0.3"
+clap = { version = "4.6", features = ["derive"] }
+eyre = "0.6.12"
+helicase = { version = "0.1.0", path = "../../helicase" }
+memmap2 = "0.9.10"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt", "time"] }

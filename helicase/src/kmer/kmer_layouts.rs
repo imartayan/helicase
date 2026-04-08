@@ -111,6 +111,7 @@ impl<'a, const K: usize> Iterator for DNAIterReversibleHash<'a, K> {
     fn next(&mut self) -> Option<Self::Item> {
         if self.offset + K <= self.dna.len() {
             let (high, low) = self.dna.extract_u32(self.offset, K);
+            self.offset += 1;
             Some(ReversibleHashMer(reversible_hash::<K, u32>(high, low)))
         } else {
             None
@@ -131,6 +132,8 @@ where
 {
     type Iter<'a> = DNAIterReversibleHash<'a, K>;
     type Hash = u64;
+
+    #[inline(always)]
     fn hash(&self) -> Self::Hash {
         self.0
     }
@@ -245,6 +248,7 @@ impl<'a, const K: usize, B: BitStorage> Iterator for DNAIterMer<'a, K, B> {
     fn next(&mut self) -> Option<Self::Item> {
         if self.offset + K <= self.dna.len() {
             let (high, low) = BitString::<B, K>::dna_extract(self.dna, self.offset);
+            self.offset += 1;
             Some(Mer::<K, B>(high, low))
         } else {
             None

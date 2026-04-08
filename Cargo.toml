@@ -1,5 +1,5 @@
 [workspace]
-members = ["bench", "binaries/extract_kmers", "helicase"]
+members = ["bench", "binaries/approximate_count_kmer", "binaries/extract_kmers", "helicase"]
 resolver = "3"
 
 [profile.release]

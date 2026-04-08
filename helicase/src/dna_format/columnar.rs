@@ -70,6 +70,55 @@ impl ColumnarDNA {
         self.cur_lo = 0;
         self.len = 0;
     }
+    /// Extract `S` bases at offset as `(high, low)` u32 pair. S ≤ 32.
+    #[inline(always)]
+    pub fn extract_u32(&self, offset: usize, size: usize) -> (u32, u32) {
+        assert!(
+            size > 32,
+            "Can't use extract_u32 with a larger value than 32"
+        );
+        debug_assert!(offset + size <= self.len, "extract past end");
+
+        let start_block = offset / BP_PER_BLOCK;
+        let start_bit = offset % BP_PER_BLOCK;
+        let first_block_bits = BP_PER_BLOCK - start_bit;
+
+        let hi_block = if start_block < self.high_bits.len() {
+            self.high_bits[start_block]
+        } else {
+            self.cur_hi
+        };
+        let lo_block = if start_block < self.low_bits.len() {
+            self.low_bits[start_block]
+        } else {
+            self.cur_lo
+        };
+
+        if size <= first_block_bits {
+            let mask = (1u64 << size) - 1;
+            (
+                (hi_block >> start_bit & mask) as u32,
+                (lo_block >> start_bit & mask) as u32,
+            )
+        } else {
+            let next_block = start_block + 1;
+            let hi_block_next = if next_block < self.high_bits.len() {
+                self.high_bits[next_block]
+            } else {
+                self.cur_hi
+            };
+            let lo_block_next = if next_block < self.low_bits.len() {
+                self.low_bits[next_block]
+            } else {
+                self.cur_lo
+            };
+            let hi =
+                ((hi_block >> start_bit) | (hi_block_next << first_block_bits)) & ((1 << size) - 1);
+            let lo =
+                ((lo_block >> start_bit) | (lo_block_next << first_block_bits)) & ((1 << size) - 1);
+            (hi as u32, lo as u32)
+        }
+    }
 
     #[inline(always)]
     pub fn append(&mut self, high: T, low: T, size: usize) {
@@ -139,8 +188,7 @@ impl ColumnarDNA {
         }
     }
 
-    #[allow(dead_code)]
-    fn push_str(&mut self, s: &str) {
+    pub fn push_str(&mut self, s: &str) {
         self.push_ascii(s.as_bytes());
     }
 }

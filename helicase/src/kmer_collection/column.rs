@@ -355,7 +355,7 @@ mod tests {
         chunk1.append(&mut chunk2);
         assert_eq!(chunk1.len(), 2);
 
-        let mer = Mer::<4, u8>::some_kmer();
+        let mer = Mer::<4, u8>::any();
         chunk1.push(mer);
         assert_eq!(chunk1.len(), 3);
     }

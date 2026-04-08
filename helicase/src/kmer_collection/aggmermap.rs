@@ -28,7 +28,7 @@ impl<const K: usize, T: BitStorage, V: Monoid> Data<K, T, V> {
     fn some() -> Self {
         Self {
             hash: 0,
-            mer: Mer::<K, T>::some_kmer(),
+            mer: Mer::<K, T>::any(),
             value: V::identity(),
         }
     }

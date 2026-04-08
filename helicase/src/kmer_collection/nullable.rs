@@ -12,7 +12,7 @@ impl<const K: usize, T: BitStorage> NullableMerChunk<K, T> {
     /// Creates a new chunk of given size, with all entries inoccupied.
     /// Underlying storage is initialized with a sentinel value.
     pub fn new(size: usize) -> Self {
-        let sentinel = Mer::<K, T>::some_kmer();
+        let sentinel = Mer::<K, T>::any();
 
         let v0 = vec![sentinel.0; size];
         let v1 = vec![sentinel.1; size];
@@ -107,7 +107,7 @@ mod tests {
     fn test_nullable_set_and_get() {
         let mut chunk: NullableMerChunk<4, u8> = NullableMerChunk::new(3);
 
-        let mer = Mer::<4, u8>::some_kmer();
+        let mer = Mer::<4, u8>::any();
         chunk.set(1, mer);
 
         assert!(!chunk.is_occupied(0));
@@ -123,8 +123,8 @@ mod tests {
     fn test_nullable_overwrite() {
         let mut chunk: NullableMerChunk<4, u8> = NullableMerChunk::new(1);
 
-        let mer1 = Mer::<4, u8>::some_kmer();
-        let mer2 = Mer::<4, u8>::some_kmer();
+        let mer1 = Mer::<4, u8>::any();
+        let mer2 = Mer::<4, u8>::any();
 
         chunk.set(0, mer1);
         assert_eq!(chunk.get(0), Some(mer1));
@@ -137,7 +137,7 @@ mod tests {
     fn test_nullable_clear() {
         let mut chunk: NullableMerChunk<4, u8> = NullableMerChunk::new(2);
 
-        let mer = Mer::<4, u8>::some_kmer();
+        let mer = Mer::<4, u8>::any();
         chunk.set(0, mer);
 
         assert!(chunk.is_occupied(0));
@@ -153,7 +153,7 @@ mod tests {
     fn test_nullable_clear_all() {
         let mut chunk: NullableMerChunk<4, u8> = NullableMerChunk::new(3);
 
-        let mer = Mer::<4, u8>::some_kmer();
+        let mer = Mer::<4, u8>::any();
         for i in 0..3 {
             chunk.set(i, mer);
         }
@@ -170,7 +170,7 @@ mod tests {
     fn test_nullable_sparse_usage() {
         let mut chunk: NullableMerChunk<4, u8> = NullableMerChunk::new(5);
 
-        let mer = Mer::<4, u8>::some_kmer();
+        let mer = Mer::<4, u8>::any();
 
         chunk.set(1, mer);
         chunk.set(3, mer);
@@ -190,7 +190,7 @@ mod tests {
     fn test_nullable_get_assume_occupied() {
         let mut chunk: NullableMerChunk<4, u8> = NullableMerChunk::new(1);
 
-        let mer = Mer::<4, u8>::some_kmer();
+        let mer = Mer::<4, u8>::any();
         chunk.set(0, mer);
 
         let retrieved = chunk.get_assume_occupied(0);

@@ -223,7 +223,7 @@ mod tests {
                 v.push_str("A");
             }
 
-            // Write 1–10 bits after the boundary
+            // Write 1-10 bits after the boundary
             for size in 1..10 {
                 let ch = letters[size & 3];
                 v.push_str(&ch.to_string());

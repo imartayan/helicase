@@ -467,7 +467,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         self.header_range.end = self.global_pos();
                     }
                     // Zero-copy header: if the header newline is at the very end of the
-                    // buffer, consume_newline() → increment_pos() → lexer.next() would
+                    // buffer, consume_newline() -> increment_pos() -> lexer.next() would
                     // reload the buffer (advancing buffer_offset past header_range.start).
                     // Anchor the buffer at header_range.start first.
                     if flag_is_set(CONFIG, COMPUTE_HEADER)
@@ -649,13 +649,13 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                             self.block_counter += delta + 1;
                             self.pos_in_block = nl_pos;
                             // Re-run SIMD on the block so that all bitmask fields
-                            // (newline, is_dna, two_bits, …) are fresh.  The block
+                            // (newline, is_dna, two_bits, etc) are fresh.  The block
                             // may contain `@`, the next header, and the start of DNA
                             // after the quality '\n', so stale fields would corrupt
                             // subsequent header and DNA parsing.
                             self.block = self.lexer.scan_current_block(bl_len);
                         }
-                        // None → quality spans a buffer boundary; fall through to while loop.
+                        // None -> quality spans a buffer boundary; fall through to while loop.
                     }
                     while self.block.newline == 0 {
                         // Zero-copy anchoring: keep record (header/DNA/quality) in buffer.

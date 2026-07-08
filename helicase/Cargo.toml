@@ -1,6 +1,6 @@
 [package]
 name = "helicase"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 authors = ["Igor Martayan", "Charles Paperman"]
 description = "SIMD-accelerated library for FASTA/FASTQ parsing and bitpacking"
@@ -16,7 +16,7 @@ deko = { version = "0.6", default-features = false }
 flate2 = { version = "1.1", features = ["zlib-rs"], optional = true }
 memchr = "2.8"
 memmap2 = "0.9"
-packed-seq = { version = "4.4", default-features = false, optional = true }
+packed-seq = { version = "5.0", default-features = false, optional = true }
 paraseq = { version = "0.4", default-features = false, optional = true }
 
 [features]

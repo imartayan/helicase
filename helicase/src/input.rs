@@ -550,7 +550,7 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
         let block_end = (block_start + 64).min(self.len);
         let block_len = block_end - block_start;
         // Advance past the block that contains the newline so the next
-        // Iterator::next() call (from consume_newline → increment_pos) will
+        // Iterator::next() call (from consume_newline to increment_pos) will
         // correctly load the block that follows the quality line.
         self.pos = block_start + 64;
         Some((delta_blocks, pos_in_block, block_len))

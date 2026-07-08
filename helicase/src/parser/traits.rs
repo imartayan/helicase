@@ -39,8 +39,8 @@ pub trait HelicaseParser {
     /// Get a [`PackedSeq`] based on the underlying [`PackedDNA`].
     ///
     /// Note this is equivalent to:
-    /// ```rust
-    /// self.get_dna_packed().as_packed_seq()
+    /// ```ignore
+    /// parser.get_dna_packed().as_packed_seq()
     /// ```
     #[cfg(feature = "packed-seq")]
     #[inline(always)]
@@ -52,8 +52,8 @@ pub trait HelicaseParser {
     /// This will trigger a new allocation.
     ///
     /// Note this is equivalent to:
-    /// ```rust
-    /// self.get_dna_packed_owned().into_packed_seq_vec()
+    /// ```ignore
+    /// parser.get_dna_packed_owned().into_packed_seq_vec()
     /// ```
     #[cfg(feature = "packed-seq")]
     #[inline(always)]

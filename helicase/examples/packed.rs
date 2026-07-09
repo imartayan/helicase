@@ -3,11 +3,7 @@
 use helicase::input::*;
 use helicase::*;
 
-const CONFIG: Config = ParserOptions::default()
-    .dna_packed()
-    // don't stop the iterator at the end of a record
-    .return_record(false)
-    .config();
+const CONFIG: Config = ParserOptions::default().dna_packed().config();
 
 fn main() {
     let path = std::env::args().nth(1).expect("No input file given");

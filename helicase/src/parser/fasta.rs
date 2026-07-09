@@ -641,8 +641,7 @@ mod tests {
         .ignore_headers()
         .dna_string()
         .split_non_actg()
-        .config()
-        & !RETURN_RECORD;
+        .config();
     const CONFIG_STRING_ACTG_MERGE: Config = ParserOptions::default()
         .ignore_headers()
         .dna_string()
@@ -651,8 +650,7 @@ mod tests {
     const CONFIG_COLUMNAR: Config = ParserOptions::default()
         .ignore_headers()
         .dna_columnar()
-        .config()
-        & !RETURN_RECORD;
+        .config();
     const CONFIG_COLUMNAR_MERGE: Config = ParserOptions::default()
         .ignore_headers()
         .dna_columnar()
@@ -661,8 +659,7 @@ mod tests {
     const CONFIG_PACKED: Config = ParserOptions::default()
         .ignore_headers()
         .dna_packed()
-        .config()
-        & !RETURN_RECORD;
+        .config();
     const CONFIG_PACKED_MERGE: Config = ParserOptions::default()
         .ignore_headers()
         .dna_packed()

@@ -137,10 +137,16 @@ impl ParserOptions {
         Self(self.0 & !COMPUTE_QUALITY)
     }
 
-    /// Compute the DNA length
+    /// Enable the computation DNA length.
     #[inline(always)]
     pub const fn compute_dna_len(self) -> Self {
         Self(self.0 | COMPUTE_DNA_LEN)
+    }
+
+    /// Disable the computation DNA length (default).
+    #[inline(always)]
+    pub const fn ignore_dna_len(self) -> Self {
+        Self(self.0 & !COMPUTE_DNA_LEN)
     }
 
     /// Disable the computation of DNA.
@@ -154,6 +160,7 @@ impl ParserOptions {
                     | SPLIT_NON_ACTG
                     | RETURN_DNA_CHUNK),
         )
+        .return_record(true)
     }
 
     /// Set the DNA format to bytes (default).
@@ -163,12 +170,24 @@ impl ParserOptions {
     }
 
     /// Set the DNA format to [`PackedDNA`](crate::dna_format::PackedDNA).
+    ///
+    /// By default, this option splits the sequence at non-ACTG bases, yielding one [`Event::DnaChunk`](crate::parser::Event) per contiguous ACTG run.
+    /// Other behaviors can be set using [`keep_non_actg`](ParserOptions::keep_non_actg) or [`skip_non_actg`](ParserOptions::skip_non_actg).
+    ///
+    /// Note that the default [`split_non_actg`](ParserOptions::split_non_actg) behavior disables [`Event::Record`](crate::parser::Event) to avoid duplicate processing.
+    /// This can be turned back on using [`return_record`](ParserOptions::return_record).
     #[inline(always)]
     pub const fn dna_packed(self) -> Self {
         self.ignore_dna().and_dna_packed()
     }
 
     /// Set the DNA format to [`ColumnarDNA`](crate::dna_format::ColumnarDNA).
+    ///
+    /// By default, this option splits the sequence at non-ACTG bases, yielding one [`Event::DnaChunk`](crate::parser::Event) per contiguous ACTG run.
+    /// Other behaviors can be set using [`keep_non_actg`](ParserOptions::keep_non_actg) or [`skip_non_actg`](ParserOptions::skip_non_actg).
+    ///
+    /// Note that the default [`split_non_actg`](ParserOptions::split_non_actg) behavior disables [`Event::Record`](crate::parser::Event) to avoid duplicate processing.
+    /// This can be turned back on using [`return_record`](ParserOptions::return_record).
     #[inline(always)]
     pub const fn dna_columnar(self) -> Self {
         self.ignore_dna().and_dna_columnar()
@@ -181,15 +200,23 @@ impl ParserOptions {
     }
 
     /// Also compute DNA as [`PackedDNA`](crate::dna_format::PackedDNA).
+    ///
+    /// This calls [`split_non_actg`](ParserOptions::split_non_actg) by default,
+    /// which disables [`Event::Record`](crate::parser::Event),
+    /// even if [`dna_string`](ParserOptions::dna_string) or [`and_dna_string`](ParserOptions::and_dna_string) was used.
     #[inline(always)]
     pub const fn and_dna_packed(self) -> Self {
-        Self(self.0 | COMPUTE_DNA_PACKED | SPLIT_NON_ACTG | RETURN_DNA_CHUNK)
+        Self(self.0 | COMPUTE_DNA_PACKED).split_non_actg()
     }
 
     /// Also compute DNA as [`ColumnarDNA`](crate::dna_format::ColumnarDNA).
+    ///
+    /// This calls [`split_non_actg`](ParserOptions::split_non_actg) by default,
+    /// which disables [`Event::Record`](crate::parser::Event),
+    /// even if [`dna_string`](ParserOptions::dna_string) or [`and_dna_string`](ParserOptions::and_dna_string) was used.
     #[inline(always)]
     pub const fn and_dna_columnar(self) -> Self {
-        Self(self.0 | COMPUTE_DNA_COLUMNAR | SPLIT_NON_ACTG | RETURN_DNA_CHUNK)
+        Self(self.0 | COMPUTE_DNA_COLUMNAR).split_non_actg()
     }
 
     /// Compute a [`BitMask`](crate::dna_format::BitMask) indicating non-ACTG bases.
@@ -218,24 +245,30 @@ impl ParserOptions {
     /// ```
     #[inline(always)]
     pub const fn keep_non_actg(self) -> Self {
-        Self(self.0 & !(SPLIT_NON_ACTG | RETURN_DNA_CHUNK | MERGE_DNA_CHUNKS))
+        Self(self.0 & !(SPLIT_NON_ACTG | RETURN_DNA_CHUNK | MERGE_DNA_CHUNKS)).return_record(true)
     }
 
     /// Split the sequence at non-ACTG bases, yielding one [`Event::DnaChunk`](crate::parser::Event) per contiguous ACTG run.
     ///
     /// This is the default behaviour with [`dna_packed`](ParserOptions::dna_packed) and [`dna_columnar`](ParserOptions::dna_columnar).
+    /// This also disables [`Event::Record`](crate::parser::Event) to avoid processing each sequence twice.
+    /// Use [`return_record`](ParserOptions::return_record) to get `Record` events back.
     #[inline(always)]
     pub const fn split_non_actg(self) -> Self {
-        Self((self.0 & !MERGE_DNA_CHUNKS) | SPLIT_NON_ACTG | RETURN_DNA_CHUNK)
+        Self((self.0 & !MERGE_DNA_CHUNKS) | SPLIT_NON_ACTG | RETURN_DNA_CHUNK).return_record(false)
     }
 
-    /// Skip non-ACTG bases, merging the remaining ACTG runs into a single chunk per record
+    /// Skip non-ACTG bases, merging the remaining ACTG runs into a single chunk per record.
     #[inline(always)]
     pub const fn skip_non_actg(self) -> Self {
-        Self((self.0 & !RETURN_DNA_CHUNK) | SPLIT_NON_ACTG | MERGE_DNA_CHUNKS)
+        Self((self.0 & !RETURN_DNA_CHUNK) | SPLIT_NON_ACTG | MERGE_DNA_CHUNKS).return_record(true)
     }
 
     /// Stop the parser iterator after each record (`true` by default).
+    ///
+    /// Set to `false` by default after [`split_non_actg`](ParserOptions::split_non_actg)
+    /// (and anything that calls it, such as [`dna_packed`](ParserOptions::dna_packed) or [`and_dna_columnar`](ParserOptions::and_dna_columnar))
+    /// to avoid processing each sequence twice.
     #[inline(always)]
     pub const fn return_record(self, enable: bool) -> Self {
         if enable {

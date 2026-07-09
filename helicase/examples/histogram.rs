@@ -6,8 +6,6 @@ use helicase::*;
 const CONFIG: Config = ParserOptions::default()
     .ignore_headers()
     .dna_columnar()
-    // don't stop the iterator at the end of a record
-    .return_record(false)
     .config();
 
 fn main() {

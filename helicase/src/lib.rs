@@ -72,7 +72,8 @@
 //! Since each base is encoded in two bits, non-ACTG bases must be handled explicitly. Three
 //! options are available via [`ParserOptions`]:
 //! - [`split_non_actg`](ParserOptions::split_non_actg) splits the sequence at non-ACTG bases,
-//!   yielding one [`DnaChunk`](parser::Event::DnaChunk) event per contiguous ACTG run (default for bitpacked formats).
+//!   yielding one [`DnaChunk`](parser::Event::DnaChunk) event per contiguous ACTG run (default for bitpacked formats),
+//!   and disables `Record` events by default to avoid processing each sequence twice.
 //! - [`skip_non_actg`](ParserOptions::skip_non_actg) skips non-ACTG bases and merges the remaining chunks,
 //!   yielding one [`Record`](parser::Event::Record) event per record.
 //! - [`keep_non_actg`](ParserOptions::keep_non_actg) keeps non-ACTG bases and encodes them lossily,
@@ -85,8 +86,9 @@
 //! but the data is always read from the parser itself via [`get_header`](HelicaseParser::get_header), [`get_dna_string`](HelicaseParser::get_dna_string), etc.
 //!
 //! There are two kinds of event:
-//! - [`Event::Record`](parser::Event::Record) emitted once per record, after all of its DNA
-//!   chunks. Enabled by [`return_record`](ParserOptions::return_record) (on by default).
+//! - [`Event::Record`](parser::Event::Record) emitted once per record, after all of its DNA chunks.
+//!   Enabled by [`return_record`](ParserOptions::return_record) (on by default, off by default
+//!   whenever non-ACTG bases are split, to avoid processing each sequence twice).
 //! - [`Event::DnaChunk`](parser::Event::DnaChunk) emitted for each contiguous ACTG run.
 //!   Enabled by [`return_dna_chunk`](ParserOptions::return_dna_chunk) (on by default with
 //!   [`dna_packed`](ParserOptions::dna_packed) and [`dna_columnar`](ParserOptions::dna_columnar)).
@@ -97,8 +99,8 @@
 //! use helicase::parser::Event;
 //! use helicase::*;
 //!
-//! // dna_packed enables DnaChunk events; and Record events are also kept by default.
-//! const CONFIG: Config = ParserOptions::default().dna_packed().config();
+//! // dna_packed enables DnaChunk events; explicitly turn Record events back on.
+//! const CONFIG: Config = ParserOptions::default().dna_packed().return_record(true).config();
 //!
 //! fn main() {
 //!     let path = "...";
@@ -106,12 +108,12 @@
 //!
 //!     while let Some(event) = parser.next() {
 //!         match event {
-//!             Event::Record(_) => {
-//!                 // all chunks of this record have been processed
-//!             }
 //!             Event::DnaChunk(_) => {
 //!                 // one contiguous ACTG run is ready
 //!                 let seq = parser.get_dna_packed();
+//!             }
+//!             Event::Record(_) => {
+//!                 // all chunks of this record have been processed
 //!             }
 //!         }
 //!     }
@@ -146,10 +148,8 @@
 //! use helicase::*;
 //!
 //! const CONFIG: Config = ParserOptions::default()
-//!     // by default, dna_packed splits non-ACTG bases and stops after each chunk
+//!     // by default, dna_packed splits non-ACTG bases, stops after each chunk, and doesn't stop at the end of a record
 //!     .dna_packed()
-//!     // don't stop the iterator at the end of a record
-//!     .return_record(false)
 //!     .config();
 //!
 //! fn main() {

@@ -121,7 +121,10 @@ fn bitpack_dna<const CONFIG: Config>(v1: __m256i, v2: __m256i) -> (u64, u128, u6
             }
         }
 
-        if flag_is_set(CONFIG, SPLIT_NON_ACTG | COMPUTE_MASK_NON_ACTG) {
+        if flag_is_set(
+            CONFIG,
+            SPLIT_NON_ACTG | COMPUTE_MASK_NON_ACTG | COMPUTE_MASK_N,
+        ) {
             let mask_two_bits = _mm256_set1_epi8(0b110i8);
             let mask_upper = _mm256_set1_epi8(0b11011111u8 as i8);
             let uv1 = _mm256_and_si256(v1, mask_upper);
@@ -144,7 +147,7 @@ fn bitpack_dna<const CONFIG: Config>(v1: __m256i, v2: __m256i) -> (u64, u128, u6
                 mask_non_actg = !mask_actg;
             }
             if flag_is_set(CONFIG, COMPUTE_MASK_N) {
-                mask_n = u8_mask(v1, v2, ASCII_N);
+                mask_n = u8_mask(uv1, uv2, ASCII_N);
             }
         }
 

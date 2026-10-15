@@ -89,7 +89,10 @@ fn bitpack_dna<const CONFIG: Config>(v: uint8x16x4_t) -> (u64, u128, u64, u64, u
             two_bits = transmute(bitpacked);
         }
 
-        if flag_is_set(CONFIG, SPLIT_NON_ACTG | COMPUTE_MASK_NON_ACTG) {
+        if flag_is_set(
+            CONFIG,
+            SPLIT_NON_ACTG | COMPUTE_MASK_NON_ACTG | COMPUTE_MASK_N,
+        ) {
             let lookup = map_8x16x4(v, |v| vqtbl1q_u8(LUT_ACTG, vandq_u8(v, TWO_BITS)));
             let uppercase = map_8x16x4(v, |v| vandq_u8(v, UPPERCASE));
             let mask_actg =

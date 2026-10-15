@@ -12,9 +12,7 @@ enum State {
     Start,
     Restart,
     Header,
-    StartDNA,
     InDNABlock,
-    EndDNA,
 }
 
 /// A parser for the [FASTA format](https://en.wikipedia.org/wiki/FASTA_format).
@@ -587,7 +585,11 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                             return Some(Event::Record(self.record_start..self.global_pos()));
                         }
                     } else if (1u64 << self.pos_in_block & self.block.is_dna) != 0 {
-                        self.state = State::StartDNA;
+                        if flag_is_not_set(CONFIG, MERGE_DNA_CHUNKS) {
+                            self.clear_chunk();
+                        }
+                        self.dna_range.start = self.global_pos();
+                        self.state = State::InDNABlock;
                     }
                 }
                 State::Header => {
@@ -603,26 +605,35 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                         self.header_range.end = self.global_pos() - 1;
                     }
                     self.contiguous_dna = true;
-                    self.state = State::Restart;
-                }
-                State::StartDNA => {
-                    self.state = State::InDNABlock;
-                    if flag_is_not_set(CONFIG, MERGE_DNA_CHUNKS) {
-                        self.clear_chunk();
+                    if !self.finished && ((1u64 << self.pos_in_block) & self.block.is_dna) != 0 {
+                        if flag_is_not_set(CONFIG, MERGE_DNA_CHUNKS) {
+                            self.clear_chunk();
+                        }
+                        self.dna_range.start = self.global_pos();
+                        self.state = State::InDNABlock;
+                    } else {
+                        self.state = State::Restart;
                     }
-                    self.dna_range.start = self.global_pos();
                 }
                 State::InDNABlock => {
                     if self.skip_to_non_dna() {
                         self.finished = true;
                         self.dna_range.end = self.global_pos();
-                        self.state = State::EndDNA;
+                        self.state = State::Restart;
+                        if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
+                            self.prepare_return();
+                            return Some(Event::DnaChunk(self.dna_range.clone()));
+                        }
                         continue;
                     }
                     self.dna_range.end = self.global_pos();
                     if self.skip_to_dna_or_split_or_header() {
                         self.finished = true;
-                        self.state = State::EndDNA;
+                        self.state = State::Restart;
+                        if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
+                            self.prepare_return();
+                            return Some(Event::DnaChunk(self.dna_range.clone()));
+                        }
                         continue;
                     }
                     if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
@@ -647,15 +658,21 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                     }
                     if ((1 << self.pos_in_block) & self.block.is_dna) != 0 {
                         self.state = State::InDNABlock;
+                    } else if !self.finished
+                        && flag_is_not_set(CONFIG, RETURN_DNA_CHUNK)
+                        && ((1 << self.pos_in_block) & self.block.header) != 0
+                    {
+                        self.state = State::Header;
+                        if flag_is_set(CONFIG, RETURN_RECORD) {
+                            self.prepare_return();
+                            return Some(Event::Record(self.record_start..self.global_pos()));
+                        }
                     } else {
-                        self.state = State::EndDNA;
-                    }
-                }
-                State::EndDNA => {
-                    self.state = State::Restart;
-                    if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
-                        self.prepare_return();
-                        return Some(Event::DnaChunk(self.dna_range.clone()));
+                        self.state = State::Restart;
+                        if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
+                            self.prepare_return();
+                            return Some(Event::DnaChunk(self.dna_range.clone()));
+                        }
                     }
                 }
             }

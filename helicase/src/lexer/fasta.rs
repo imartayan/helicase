@@ -22,6 +22,7 @@ pub(crate) struct FastaBitmask {
 #[derive(Default, PartialEq)]
 pub struct FastaChunk {
     pub len: usize,
+    pub newline: u64,
     pub header: u64,
     pub split: u64,
     pub is_dna: u64,
@@ -78,6 +79,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaLexer<'a, CON
                 };
                 FastaChunk {
                     len: chunk.len(),
+                    newline: mask.line_feeds,
                     header,
                     split,
                     is_dna,

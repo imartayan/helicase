@@ -125,9 +125,11 @@ impl PackedDNA {
     #[inline(always)]
     pub fn into_packed_seq_vec(mut self) -> PackedSeqVec {
         let len = self.len();
-        let data_len = self.bits.len() * BITS_PER_BLOCK / 8;
-        let data_cap = self.bits.capacity() * BITS_PER_BLOCK / 8;
-        let data = self.bits.as_mut_ptr() as *mut u8;
+        let mut bits = std::mem::take(&mut self.bits);
+        let data_len = bits.len() * BITS_PER_BLOCK / 8;
+        let data_cap = bits.capacity() * BITS_PER_BLOCK / 8;
+        let data = bits.as_mut_ptr() as *mut u8;
+        std::mem::forget(bits);
         let seq = unsafe { Vec::from_raw_parts(data, data_len, data_cap) };
         PackedSeqVec::from_raw_parts(seq, len)
     }

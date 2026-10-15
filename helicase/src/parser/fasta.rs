@@ -60,13 +60,20 @@ pub struct FastaParser<'a, const CONFIG: Config, I: InputData<'a>> {
     cur_mask_non_actg: BitMask,
     cur_mask_n: BitMask,
     dna_len: usize,
+    pending_error: Option<io::Error>,
 }
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
     fn from_lexer(mut lexer: FastaLexer<'a, CONFIG, I>) -> Self {
         let mut finished: bool = false;
+        let mut pending_error = None;
         let first = match lexer.next() {
-            Some(c) => c,
+            Some(Ok(c)) => c,
+            Some(Err(e)) => {
+                finished = true;
+                pending_error = Some(e);
+                FastaChunk::default()
+            }
             None => {
                 finished = true;
                 FastaChunk::default()
@@ -89,6 +96,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             cur_mask_non_actg: BitMask::new(),
             cur_mask_n: BitMask::new(),
             dna_len: 0,
+            pending_error,
         }
     }
 }
@@ -302,6 +310,11 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastaParser<
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
     #[inline(always)]
+    fn return_error_or_none(&mut self) -> Option<Event> {
+        self.pending_error.take().map(Event::IoError)
+    }
+
+    #[inline(always)]
     const fn global_pos(&self) -> usize {
         64 * self.block_counter + self.pos_in_block
     }
@@ -343,7 +356,11 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
         let mut position = self.block.header & mask;
         while position == 0 {
             self.block = match self.lexer.next() {
-                Some(b) => b,
+                Some(Ok(b)) => b,
+                Some(Err(e)) => {
+                    self.pending_error = Some(e);
+                    return true;
+                }
                 None => {
                     return true;
                 }
@@ -362,7 +379,11 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
         let mut position = (self.block.is_dna | self.block.header) & mask;
         while position == 0 {
             self.block = match self.lexer.next() {
-                Some(b) => b,
+                Some(Ok(b)) => b,
+                Some(Err(e)) => {
+                    self.pending_error = Some(e);
+                    return true;
+                }
                 None => {
                     return true;
                 }
@@ -388,7 +409,11 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
                 self.lexer.input.make_room(self.header_range.start);
             }
             self.block = match self.lexer.next() {
-                Some(b) => b,
+                Some(Ok(b)) => b,
+                Some(Err(e)) => {
+                    self.pending_error = Some(e);
+                    return true;
+                }
                 None => {
                     return true;
                 }
@@ -446,7 +471,12 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             }
             self.make_room_record();
             self.block = match self.lexer.next() {
-                Some(b) => b,
+                Some(Ok(b)) => b,
+                Some(Err(e)) => {
+                    self.pending_error = Some(e);
+                    self.pos_in_block = self.block.len;
+                    return true;
+                }
                 None => {
                     self.pos_in_block = self.block.len;
                     return true;
@@ -504,7 +534,12 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             // Keep the record anchor in the buffer if the zero-copy fast path is active.
             self.make_room_record();
             self.block = match self.lexer.next() {
-                Some(b) => b,
+                Some(Ok(b)) => b,
+                Some(Err(e)) => {
+                    self.pending_error = Some(e);
+                    self.pos_in_block = self.block.len;
+                    return true;
+                }
                 None => {
                     self.pos_in_block = self.block.len;
                     return true;
@@ -528,7 +563,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
             match &self.state {
                 State::Start => {
                     if self.finished {
-                        return None;
+                        return self.return_error_or_none();
                     }
                     self.finished = self.skip_to_start_header();
                     if self.block.header != 0 {
@@ -542,7 +577,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                             self.prepare_return();
                             return Some(Event::Record(self.record_start..self.global_pos()));
                         }
-                        continue;
+                        return self.return_error_or_none();
                     }
                     self.finished = self.skip_to_header_or_dna();
                     if (1u64 << self.pos_in_block & self.block.header) != 0 {

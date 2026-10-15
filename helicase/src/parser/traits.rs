@@ -68,10 +68,10 @@ pub trait HelicaseParser {
     /// This will trigger a new allocation.
     fn get_mask_non_actg_owned(&mut self) -> BitMask;
 
-    /// Get a reference to the bitmask marking non-ACTG bases.
+    /// Get a reference to the bitmask marking N bases.
     fn get_mask_n(&self) -> &BitMask;
 
-    /// Get an owned version of the bitmask marking non-ACTG bases.
+    /// Get an owned version of the bitmask marking N bases.
     /// This will trigger a new allocation.
     fn get_mask_n_owned(&mut self) -> BitMask;
 

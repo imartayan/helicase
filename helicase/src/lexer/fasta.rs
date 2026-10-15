@@ -60,32 +60,34 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Lexer for FastaLexer<'a, CONFIG
 }
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaLexer<'a, CONFIG, I> {
-    type Item = FastaChunk;
+    type Item = io::Result<FastaChunk>;
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
-        self.input.next().map(|chunk| {
-            let mask = extract_fasta_bitmask::<CONFIG>(chunk);
-            let non_lf = !mask.line_feeds;
-            let c = self.carry.add(mask.open_bracket, non_lf);
-            let header = (c ^ non_lf) | mask.open_bracket;
-            let is_dna = mask.is_dna & !header & non_lf;
-            let split = if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
-                !header & !is_dna & non_lf
-            } else {
-                0
-            };
-            FastaChunk {
-                len: chunk.len(),
-                header,
-                split,
-                is_dna,
-                two_bits: mask.two_bits,
-                high_bit: mask.high_bit,
-                low_bit: mask.low_bit,
-                mask_non_actg: mask.mask_non_actg & !mask.line_feeds,
-                mask_n: mask.mask_n,
-            }
+        self.input.next().map(|res| {
+            res.map(|chunk| {
+                let mask = extract_fasta_bitmask::<CONFIG>(chunk);
+                let non_lf = !mask.line_feeds;
+                let c = self.carry.add(mask.open_bracket, non_lf);
+                let header = (c ^ non_lf) | mask.open_bracket;
+                let is_dna = mask.is_dna & !header & non_lf;
+                let split = if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
+                    !header & !is_dna & non_lf
+                } else {
+                    0
+                };
+                FastaChunk {
+                    len: chunk.len(),
+                    header,
+                    split,
+                    is_dna,
+                    two_bits: mask.two_bits,
+                    high_bit: mask.high_bit,
+                    low_bit: mask.low_bit,
+                    mask_non_actg: mask.mask_non_actg & !mask.line_feeds,
+                    mask_n: mask.mask_n,
+                }
+            })
         })
     }
 }
@@ -123,6 +125,7 @@ mod tests {
         let f = FastaLexer::<CONFIG_COLUMNAR, _>::from_slice(fasta.as_bytes())
             .unwrap()
             .next()
+            .unwrap()
             .unwrap();
         format!("{f}")
     }

@@ -1,4 +1,4 @@
-use std::fmt::{self, Write};
+use core::fmt::{self, Write};
 
 #[cfg(feature = "packed-seq")]
 use packed_seq::{PackedSeq, PackedSeqVec};
@@ -113,7 +113,7 @@ impl PackedDNA {
         let len = self.len();
         let data = self.bits.as_ptr() as *const u8;
         let data_len = self.bits.len() * BITS_PER_BLOCK / 8;
-        let seq = unsafe { std::slice::from_raw_parts(data, data_len) };
+        let seq = unsafe { core::slice::from_raw_parts(data, data_len) };
         PackedSeq::from_raw_parts(seq, 0, len)
     }
 
@@ -125,11 +125,11 @@ impl PackedDNA {
     #[inline(always)]
     pub fn into_packed_seq_vec(mut self) -> PackedSeqVec {
         let len = self.len();
-        let mut bits = std::mem::take(&mut self.bits);
+        let mut bits = core::mem::take(&mut self.bits);
         let data_len = bits.len() * BITS_PER_BLOCK / 8;
         let data_cap = bits.capacity() * BITS_PER_BLOCK / 8;
         let data = bits.as_mut_ptr() as *mut u8;
-        std::mem::forget(bits);
+        core::mem::forget(bits);
         let seq = unsafe { Vec::from_raw_parts(data, data_len, data_cap) };
         PackedSeqVec::from_raw_parts(seq, len)
     }

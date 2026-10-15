@@ -84,12 +84,14 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqLexer<'a, CONFIG, I> {
 }
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqLexer<'a, CONFIG, I> {
-    type Item = FastqChunk;
+    type Item = io::Result<FastqChunk>;
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
-        self.input
-            .next()
-            .map(|chunk| FastqChunk::from_mask(chunk.len(), extract_fastq_bitmask::<CONFIG>(chunk)))
+        self.input.next().map(|res| {
+            res.map(|chunk| {
+                FastqChunk::from_mask(chunk.len(), extract_fastq_bitmask::<CONFIG>(chunk))
+            })
+        })
     }
 }

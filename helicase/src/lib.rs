@@ -115,6 +115,10 @@
 //!             Event::Record(_) => {
 //!                 // all chunks of this record have been processed
 //!             }
+//!             Event::IoError(err) => {
+//!                 eprintln!("I/O error: {err}");
+//!                 break;
+//!             }
 //!         }
 //!     }
 //! }

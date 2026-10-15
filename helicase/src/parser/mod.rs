@@ -20,7 +20,9 @@ pub enum Format {
     Fastq,
 }
 
+#[derive(Debug)]
 pub enum Event {
     Record(Range<usize>),
     DnaChunk(Range<usize>),
+    IoError(std::io::Error),
 }

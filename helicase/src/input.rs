@@ -11,7 +11,7 @@ use std::path::Path;
 const BUFFER_DEFAULT_SIZE: usize = 1 << 17;
 const BUFFER_DOUBLE_UNTIL: usize = 1 << 24;
 
-pub trait InputData<'a>: Iterator<Item = &'a [u8]> {
+pub trait InputData<'a>: Iterator<Item = io::Result<&'a [u8]>> {
     const RANDOM_ACCESS: bool;
 
     /// Returns the first byte of the (uncompressed when possible) input.
@@ -111,34 +111,41 @@ pub struct SliceInput<'a> {
 }
 
 impl<'a> SliceInput<'a> {
-    pub fn new(data: &'a [u8]) -> Self {
-        assert!(!data.is_empty());
+    pub fn new(data: &'a [u8]) -> io::Result<Self> {
+        if data.is_empty() {
+            return Err(io::Error::other("Input data is empty"));
+        }
         let mut last_block = [0; 64];
         last_block[..data.len() % 64].copy_from_slice(&data[(data.len() / 64) * 64..]);
-        Self {
+        Ok(Self {
             data,
             pos: 0,
             first_byte: data[0],
             last_block,
-        }
+        })
     }
 }
 
 impl<'a> Iterator for SliceInput<'a> {
-    type Item = &'a [u8];
+    type Item = io::Result<&'a [u8]>;
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         let pos = self.pos;
         self.pos += 64;
         if pos + 64 <= self.data.len() {
-            unsafe { Some(std::slice::from_raw_parts(self.data.as_ptr().add(pos), 64)) }
+            unsafe {
+                Some(Ok(core::slice::from_raw_parts(
+                    self.data.as_ptr().add(pos),
+                    64,
+                )))
+            }
         } else if pos < self.data.len() {
             unsafe {
-                Some(std::slice::from_raw_parts(
+                Some(Ok(core::slice::from_raw_parts(
                     self.last_block.as_ptr(),
                     self.data.len() % 64,
-                ))
+                )))
             }
         } else {
             None
@@ -157,9 +164,9 @@ impl<'a> InputData<'a> for SliceInput<'a> {
     #[inline(always)]
     fn current_block(&self) -> &[u8] {
         if 64 <= self.pos && self.pos <= self.data.len() {
-            unsafe { std::slice::from_raw_parts(self.data.as_ptr().add(self.pos - 64), 64) }
+            unsafe { core::slice::from_raw_parts(self.data.as_ptr().add(self.pos - 64), 64) }
         } else {
-            unsafe { std::slice::from_raw_parts(self.last_block.as_ptr(), self.data.len() % 64) }
+            unsafe { core::slice::from_raw_parts(self.last_block.as_ptr(), self.data.len() % 64) }
         }
     }
 
@@ -199,7 +206,7 @@ pub trait FromSlice<'a>: FromInputData<'a, SliceInput<'a>> {
     /// It does not support transparent decompression.
     #[inline(always)]
     fn from_slice(data: &'a [u8]) -> io::Result<Self> {
-        Self::from_input(SliceInput::new(data))
+        Self::from_input(SliceInput::new(data)?)
     }
 }
 
@@ -219,16 +226,16 @@ impl<'a> MmapInput<'a> {
         // To enforce this, we keep the file in the struct.
         let file = File::open(path)?;
         let _mmap = unsafe { Mmap::map(&file)? };
-        let data = unsafe { std::slice::from_raw_parts(_mmap.as_ptr(), _mmap.len()) };
+        let data = unsafe { core::slice::from_raw_parts(_mmap.as_ptr(), _mmap.len()) };
         Ok(Self {
-            slice: SliceInput::new(data),
+            slice: SliceInput::new(data)?,
             _mmap,
         })
     }
 }
 
 impl<'a> Iterator for MmapInput<'a> {
-    type Item = &'a [u8];
+    type Item = io::Result<&'a [u8]>;
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
@@ -293,16 +300,16 @@ pub struct RamFileInput {
 impl RamFileInput {
     pub fn new<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         let _vec = std::fs::read(path)?;
-        let data = unsafe { std::slice::from_raw_parts(_vec.as_ptr(), _vec.len()) };
+        let data = unsafe { core::slice::from_raw_parts(_vec.as_ptr(), _vec.len()) };
         Ok(Self {
-            slice: SliceInput::new(data),
+            slice: SliceInput::new(data)?,
             _vec,
         })
     }
 }
 
 impl Iterator for RamFileInput {
-    type Item = &'static [u8];
+    type Item = io::Result<&'static [u8]>;
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
@@ -364,35 +371,44 @@ pub struct ReaderInput<'a, R: Read + Send + 'a> {
     offset: usize,
     first_byte: u8,
     decoder: AnyDecoder<R>,
+    pending_err: Option<io::Error>,
+    errored: bool,
     _phantom: PhantomData<&'a ()>,
 }
 
 impl<'a, R: Read + Send + 'a> ReaderInput<'a, R> {
-    pub fn new(reader: R) -> Self {
+    pub fn new(reader: R) -> io::Result<Self> {
         let mut decoder = AnyDecoder::new(reader);
         let mut data = vec![0; BUFFER_DEFAULT_SIZE];
-        let len = decoder
-            .read(&mut data[..64])
-            .expect("Error while reading data");
-        let first_byte = data[0];
-        Self {
+        let len = decoder.read(&mut data[..64])?;
+        let first_byte = if len > 0 { data[0] } else { 0 };
+        Ok(Self {
             data,
             len,
             pos: 0,
             offset: 0,
             first_byte,
             decoder,
+            pending_err: None,
+            errored: false,
             _phantom: PhantomData,
-        }
+        })
     }
 }
 
 impl<'a, R: Read + Send + 'a> Iterator for ReaderInput<'a, R> {
-    type Item = &'a [u8];
+    type Item = io::Result<&'a [u8]>;
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
+        if self.errored {
+            return None;
+        }
         if self.pos >= self.len {
+            if let Some(err) = self.pending_err.take() {
+                self.errored = true;
+                return Some(Err(err));
+            }
             // Save state so we can restore it on EOF, keeping the buffer valid for
             // zero-copy callers (e.g. get_dna_string) that run after next() returns None.
             let saved_offset = self.offset;
@@ -402,14 +418,22 @@ impl<'a, R: Read + Send + 'a> Iterator for ReaderInput<'a, R> {
             self.pos = 0;
             self.len = 0;
             while self.len < self.data.len() {
-                let n = self
-                    .decoder
-                    .read(&mut self.data[self.len..])
-                    .expect("Error while reading data");
-                if n == 0 {
-                    break;
+                match self.decoder.read(&mut self.data[self.len..]) {
+                    Ok(0) => break,
+                    Ok(n) => self.len += n,
+                    Err(e) => {
+                        if self.len == 0 {
+                            self.offset = saved_offset;
+                            self.pos = saved_pos;
+                            self.len = saved_len;
+                            self.errored = true;
+                            return Some(Err(e));
+                        } else {
+                            self.pending_err = Some(e);
+                            break;
+                        }
+                    }
                 }
-                self.len += n;
             }
             if self.len == 0 {
                 // EOF: roll back so buffer() still returns the last valid window.
@@ -424,13 +448,18 @@ impl<'a, R: Read + Send + 'a> Iterator for ReaderInput<'a, R> {
         let pos = self.pos;
         self.pos += 64;
         if pos + 64 <= self.len {
-            unsafe { Some(std::slice::from_raw_parts(self.data.as_ptr().add(pos), 64)) }
+            unsafe {
+                Some(Ok(core::slice::from_raw_parts(
+                    self.data.as_ptr().add(pos),
+                    64,
+                )))
+            }
         } else {
             unsafe {
-                Some(std::slice::from_raw_parts(
+                Some(Ok(core::slice::from_raw_parts(
                     self.data.as_ptr().add(pos),
-                    self.len % 64,
-                ))
+                    self.len - pos,
+                )))
             }
         }
     }
@@ -447,10 +476,10 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
     #[inline(always)]
     fn current_block(&self) -> &[u8] {
         if 64 <= self.pos && self.pos <= self.len {
-            unsafe { std::slice::from_raw_parts(self.data.as_ptr().add(self.pos - 64), 64) }
+            unsafe { core::slice::from_raw_parts(self.data.as_ptr().add(self.pos - 64), 64) }
         } else {
             unsafe {
-                std::slice::from_raw_parts(
+                core::slice::from_raw_parts(
                     self.data.as_ptr().add((self.len / 64) * 64),
                     self.len % 64,
                 )
@@ -509,14 +538,14 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
             self.data.resize(new_size, 0);
         }
         while self.len < self.data.len() {
-            let n = self
-                .decoder
-                .read(&mut self.data[self.len..])
-                .expect("Error while reading data");
-            if n == 0 {
-                break;
+            match self.decoder.read(&mut self.data[self.len..]) {
+                Ok(0) => break,
+                Ok(n) => self.len += n,
+                Err(e) => {
+                    self.pending_err = Some(e);
+                    break;
+                }
             }
-            self.len += n;
         }
         let padded = self.len.next_multiple_of(64);
         self.data[self.len..padded].fill(0);
@@ -525,11 +554,14 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
     #[inline(always)]
     fn grow_buffer(&mut self, additional: usize) {
         self.data.resize(self.len + additional, 0);
-        let n = self
-            .decoder
-            .read(&mut self.data[self.len..])
-            .expect("Error while reading data");
-        self.len += n;
+        match self.decoder.read(&mut self.data[self.len..]) {
+            Ok(n) => {
+                self.len += n;
+            }
+            Err(e) => {
+                self.pending_err = Some(e);
+            }
+        }
         let padded_len = self.len.next_multiple_of(64);
         self.data[self.len..padded_len].fill(0);
     }
@@ -562,7 +594,7 @@ pub trait FromReader<'a, R: Read + Send + 'a>: FromInputData<'a, ReaderInput<'a,
     /// It supports transparent decompression.
     #[inline(always)]
     fn from_reader(reader: R) -> io::Result<Self> {
-        Self::from_input(ReaderInput::new(reader))
+        Self::from_input(ReaderInput::new(reader)?)
     }
 }
 
@@ -577,13 +609,13 @@ pub struct FileInput {
 impl FileInput {
     pub fn new<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         Ok(Self {
-            reader: ReaderInput::new(File::open(path)?),
+            reader: ReaderInput::new(File::open(path)?)?,
         })
     }
 }
 
 impl Iterator for FileInput {
-    type Item = &'static [u8];
+    type Item = io::Result<&'static [u8]>;
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
@@ -660,16 +692,15 @@ pub struct StdinInput {
 }
 
 impl StdinInput {
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
-        Self {
-            reader: ReaderInput::new(stdin()),
-        }
+    pub fn new() -> io::Result<Self> {
+        Ok(Self {
+            reader: ReaderInput::new(stdin())?,
+        })
     }
 }
 
 impl Iterator for StdinInput {
-    type Item = &'static [u8];
+    type Item = io::Result<&'static [u8]>;
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
@@ -731,7 +762,7 @@ pub trait FromStdin: FromInputData<'static, StdinInput> {
     /// It supports transparent decompression.
     #[inline(always)]
     fn from_stdin() -> io::Result<Self> {
-        Self::from_input(StdinInput::new())
+        Self::from_input(StdinInput::new()?)
     }
 }
 

@@ -1,4 +1,4 @@
-use std::fmt::{self, Write};
+use core::fmt::{self, Write};
 
 type T = u64;
 const BITS_PER_BP: usize = 1;

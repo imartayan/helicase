@@ -51,13 +51,20 @@ pub struct FastqParser<'a, const CONFIG: Config, I: InputData<'a>> {
     cur_mask_non_actg: BitMask,
     cur_mask_n: BitMask,
     dna_len: usize,
+    pending_error: Option<io::Error>,
 }
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
     fn from_lexer(mut lexer: FastqLexer<'a, CONFIG, I>) -> Self {
         let mut finished: bool = false;
+        let mut pending_error = None;
         let block = match lexer.next() {
-            Some(c) => c,
+            Some(Ok(c)) => c,
+            Some(Err(e)) => {
+                finished = true;
+                pending_error = Some(e);
+                FastqChunk::default()
+            }
             None => {
                 finished = true;
                 FastqChunk::default()
@@ -80,6 +87,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
             cur_mask_non_actg: BitMask::new(),
             cur_mask_n: BitMask::new(),
             dna_len: 0,
+            pending_error,
         }
     }
 }
@@ -318,6 +326,11 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
     #[inline(always)]
+    fn return_error_or_none(&mut self) -> Option<Event> {
+        self.pending_error.take().map(Event::IoError)
+    }
+
+    #[inline(always)]
     const fn global_pos(&self) -> usize {
         64 * self.block_counter + self.pos_in_block
     }
@@ -328,10 +341,14 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
             self.pos_in_block += 1;
         } else {
             match self.lexer.next() {
-                Some(b) => {
+                Some(Ok(b)) => {
                     self.block = b;
                     self.block_counter += 1;
                     self.pos_in_block = 0;
+                }
+                Some(Err(e)) => {
+                    self.pending_error = Some(e);
+                    self.finished = true;
                 }
                 None => self.finished = true,
             };
@@ -436,7 +453,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                     // HEADER
                     self.increment_pos();
                     if self.finished {
-                        return None;
+                        return self.return_error_or_none();
                     }
                     self.record_start = self.global_pos() - 1;
                     if flag_is_not_set(CONFIG, MERGE_RECORDS) {
@@ -453,10 +470,15 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                             self.lexer.input.make_room(self.header_range.start);
                         }
                         self.block = match self.lexer.next() {
-                            Some(b) => b,
+                            Some(Ok(b)) => b,
+                            Some(Err(e)) => {
+                                self.finished = true;
+                                self.pending_error = Some(e);
+                                return self.return_error_or_none();
+                            }
                             None => {
                                 self.finished = true;
-                                return None;
+                                return self.return_error_or_none();
                             }
                         };
                         self.block_counter += 1;
@@ -487,10 +509,15 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         let mut position = (self.block.is_dna | self.block.newline) & mask;
                         while position == 0 {
                             self.block = match self.lexer.next() {
-                                Some(b) => b,
+                                Some(Ok(b)) => b,
+                                Some(Err(e)) => {
+                                    self.finished = true;
+                                    self.pending_error = Some(e);
+                                    return self.return_error_or_none();
+                                }
                                 None => {
                                     self.finished = true;
-                                    return None;
+                                    return self.return_error_or_none();
                                 }
                             };
                             self.block_counter += 1;
@@ -552,10 +579,15 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                             self.dna_len += self.block.len - self.pos_in_block;
                         }
                         self.block = match self.lexer.next() {
-                            Some(b) => b,
+                            Some(Ok(b)) => b,
+                            Some(Err(e)) => {
+                                self.finished = true;
+                                self.pending_error = Some(e);
+                                return self.return_error_or_none();
+                            }
                             None => {
                                 self.finished = true;
-                                return None;
+                                return self.return_error_or_none();
                             }
                         };
                         self.block_counter += 1;
@@ -617,10 +649,15 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                     while self.block.newline == 0 {
                         self.make_room_record();
                         self.block = match self.lexer.next() {
-                            Some(b) => b,
+                            Some(Ok(b)) => b,
+                            Some(Err(e)) => {
+                                self.finished = true;
+                                self.pending_error = Some(e);
+                                return self.return_error_or_none();
+                            }
                             None => {
                                 self.finished = true;
-                                return None;
+                                return self.return_error_or_none();
                             }
                         };
                         self.block_counter += 1;
@@ -664,7 +701,12 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         self.make_room_record();
                         self.make_room_quality();
                         self.block = match self.lexer.next() {
-                            Some(b) => b,
+                            Some(Ok(b)) => b,
+                            Some(Err(e)) => {
+                                self.pending_error = Some(e);
+                                self.finished = true;
+                                break;
+                            }
                             None => {
                                 self.finished = true;
                                 break; // return record

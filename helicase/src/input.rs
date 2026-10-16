@@ -38,7 +38,7 @@ pub trait InputData<'a>: Iterator<Item = io::Result<&'a [u8]>> {
     ///
     /// This is not available for reader-based implementations.
     #[inline(always)]
-    fn data(&self) -> &[u8] {
+    fn data(&self) -> &'a [u8] {
         assert!(Self::RANDOM_ACCESS);
         unimplemented!()
     }
@@ -94,6 +94,13 @@ pub trait InputData<'a>: Iterator<Item = io::Result<&'a [u8]>> {
     /// This is only relevant for reader-based implementations.
     #[doc(hidden)]
     fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)>;
+
+    /// Seek internal buffer position to the start of the block after `block_idx`.
+    ///
+    /// This is only relevant for random-access implementations.
+    #[doc(hidden)]
+    #[inline(always)]
+    fn seek_block(&mut self, _block_idx: usize) {}
 }
 
 pub trait FromInputData<'a, I: InputData<'a>>: Sized {
@@ -171,7 +178,7 @@ impl<'a> InputData<'a> for SliceInput<'a> {
     }
 
     #[inline(always)]
-    fn data(&self) -> &[u8] {
+    fn data(&self) -> &'a [u8] {
         self.data
     }
 
@@ -198,6 +205,11 @@ impl<'a> InputData<'a> for SliceInput<'a> {
         let block_len = block_end - block_start;
         self.pos = block_start + 64;
         Some((delta_blocks, pos_in_block, block_len))
+    }
+
+    #[inline(always)]
+    fn seek_block(&mut self, block_idx: usize) {
+        self.pos = (block_idx + 1) * 64;
     }
 }
 
@@ -257,7 +269,7 @@ impl<'a> InputData<'a> for MmapInput<'a> {
     }
 
     #[inline(always)]
-    fn data(&self) -> &[u8] {
+    fn data(&self) -> &'a [u8] {
         self.slice.data()
     }
 
@@ -274,6 +286,11 @@ impl<'a> InputData<'a> for MmapInput<'a> {
     #[inline(always)]
     fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)> {
         self.slice.skip_to_newline()
+    }
+
+    #[inline(always)]
+    fn seek_block(&mut self, block_idx: usize) {
+        self.slice.seek_block(block_idx);
     }
 }
 
@@ -331,7 +348,7 @@ impl InputData<'static> for RamFileInput {
     }
 
     #[inline(always)]
-    fn data(&self) -> &[u8] {
+    fn data(&self) -> &'static [u8] {
         self.slice.data()
     }
 
@@ -348,6 +365,11 @@ impl InputData<'static> for RamFileInput {
     #[inline(always)]
     fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)> {
         self.slice.skip_to_newline()
+    }
+
+    #[inline(always)]
+    fn seek_block(&mut self, block_idx: usize) {
+        self.slice.seek_block(block_idx);
     }
 }
 

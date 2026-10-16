@@ -362,9 +362,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
         self.line_count += 1;
     }
 
-    #[inline(always)]
-    fn prepare_return(&mut self) {}
-
     /// Earliest file offset that must stay in the buffer for zero-copy access.
     #[inline(always)]
     fn anchor(&self) -> usize {
@@ -659,7 +656,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         self.consume_newline();
                     }
                     if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
-                        self.prepare_return();
                         return Some(Event::DnaChunk(self.dna_range.clone()));
                     }
                 }
@@ -741,7 +737,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                     self.make_room_quality_end();
                     self.consume_newline();
                     if flag_is_set(CONFIG, RETURN_RECORD) {
-                        self.prepare_return();
                         return Some(Event::Record(self.record_start..self.global_pos()));
                     }
                 }

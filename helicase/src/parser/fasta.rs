@@ -318,9 +318,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
     }
 
     #[inline(always)]
-    fn prepare_return(&mut self) {}
-
-    #[inline(always)]
     fn anchor(&self) -> usize {
         if flag_is_set(CONFIG, COMPUTE_HEADER) {
             self.header_range.start
@@ -439,11 +436,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             if flag_is_set(CONFIG, RETURN_RECORD) {
                 self.state = State::EmitRecord;
             }
-            self.prepare_return();
             return Some(Event::DnaChunk(self.dna_range.clone()));
         }
         if flag_is_set(CONFIG, RETURN_RECORD) {
-            self.prepare_return();
             return Some(Event::Record(self.record_start..self.global_pos()));
         }
         self.return_error_or_none()
@@ -460,7 +455,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                 State::EmitRecord => {
                     self.state = State::Header;
                     if flag_is_set(CONFIG, RETURN_RECORD) {
-                        self.prepare_return();
                         return Some(Event::Record(self.record_start..self.global_pos()));
                     }
                 }
@@ -538,7 +532,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                     if self.finished {
                         self.state = State::Header;
                         if flag_is_set(CONFIG, RETURN_RECORD) {
-                            self.prepare_return();
                             return Some(Event::Record(self.record_start..self.global_pos()));
                         }
                         return self.return_error_or_none();
@@ -547,7 +540,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                     if self.current_byte() == b'>' {
                         self.state = State::Header;
                         if flag_is_set(CONFIG, RETURN_RECORD) {
-                            self.prepare_return();
                             return Some(Event::Record(self.record_start..self.global_pos()));
                         }
                         continue;
@@ -581,7 +573,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                         if self.finished {
                             self.state = State::Header;
                             if flag_is_set(CONFIG, RETURN_RECORD) {
-                                self.prepare_return();
                                 return Some(Event::Record(self.record_start..self.global_pos()));
                             }
                             return self.return_error_or_none();
@@ -720,7 +711,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                         {
                             // Stopped at non-ACTG within line
                             if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
-                                self.prepare_return();
                                 return Some(Event::DnaChunk(self.dna_range.clone()));
                             }
                             break 'dna_line;
@@ -748,11 +738,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                                 if flag_is_set(CONFIG, RETURN_RECORD) {
                                     self.state = State::EmitRecord;
                                 }
-                                self.prepare_return();
                                 return Some(Event::DnaChunk(self.dna_range.clone()));
                             }
                             if flag_is_set(CONFIG, RETURN_RECORD) {
-                                self.prepare_return();
                                 return Some(Event::Record(self.record_start..self.global_pos()));
                             }
                             break 'dna_line;
@@ -763,7 +751,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                             && ((1 << self.pos_in_block) & self.block.is_dna) == 0
                         {
                             if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
-                                self.prepare_return();
                                 return Some(Event::DnaChunk(self.dna_range.clone()));
                             }
                             break 'dna_line;
@@ -774,9 +761,102 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                             && self.contiguous_dna
                             && !merge_chunks
                         {
+                            self.contiguous_dna = false;
                             if I::RANDOM_ACCESS {
                                 let dna_chunk = &self.lexer.input.data()[self.dna_range.clone()];
                                 self.cur_dna_string.extend_from_slice(dna_chunk);
+
+                                if flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
+                                    && flag_is_not_set(CONFIG, COMPUTE_DNA_PACKED)
+                                    && flag_is_not_set(CONFIG, COMPUTE_DNA_COLUMNAR)
+                                    && flag_is_not_set(CONFIG, COMPUTE_MASK_NON_ACTG)
+                                    && flag_is_not_set(CONFIG, COMPUTE_MASK_N)
+                                {
+                                    let data = self.lexer.input.data();
+                                    let line_width = self.dna_range.len();
+                                    let next_line_start = self.global_pos();
+                                    let newline_len =
+                                        next_line_start.saturating_sub(self.dna_range.end);
+                                    if line_width > 0 && newline_len > 0 {
+                                        let line_stride = line_width + newline_len;
+                                        let expected_newline_offset = line_width + newline_len - 1;
+                                        if next_line_start + line_stride <= data.len()
+                                            && data[next_line_start] != b'>'
+                                            && (newline_len == 1
+                                                || data[next_line_start + line_width] == b'\r')
+                                            && memchr::memchr(
+                                                b'\n',
+                                                &data[next_line_start
+                                                    ..next_line_start + line_stride],
+                                            ) == Some(expected_newline_offset)
+                                        {
+                                            let mut curr_pos = next_line_start;
+                                            let estimated_dna_len =
+                                                (data.len() - curr_pos) / line_stride * line_width;
+                                            self.cur_dna_string.reserve(estimated_dna_len);
+                                            let mut lines_read = 0;
+                                            while curr_pos + line_stride <= data.len()
+                                                && data[curr_pos] != b'>'
+                                                && (newline_len == 1
+                                                    || data[curr_pos + line_width] == b'\r')
+                                                && memchr::memchr(
+                                                    b'\n',
+                                                    &data[curr_pos..curr_pos + line_stride],
+                                                ) == Some(expected_newline_offset)
+                                            {
+                                                self.cur_dna_string.extend_from_slice(
+                                                    &data[curr_pos..curr_pos + line_width],
+                                                );
+                                                curr_pos += line_stride;
+                                                lines_read += 1;
+                                            }
+                                            if lines_read > 0 {
+                                                if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
+                                                    self.dna_len += lines_read * line_width;
+                                                }
+                                                while curr_pos < data.len()
+                                                    && (data[curr_pos] == b'\n'
+                                                        || data[curr_pos] == b'\r')
+                                                {
+                                                    curr_pos += 1;
+                                                }
+                                                self.dna_range.start = curr_pos;
+                                                self.dna_range.end = curr_pos;
+                                                self.block_counter = curr_pos / 64;
+                                                self.pos_in_block = curr_pos % 64;
+                                                self.lexer.input.seek_block(self.block_counter);
+                                                if curr_pos >= data.len() {
+                                                    self.finished = true;
+                                                    return self.finish_record_eof();
+                                                }
+                                                let block_len = 64.min(
+                                                    data.len()
+                                                        .saturating_sub(self.block_counter * 64),
+                                                );
+                                                self.block =
+                                                    self.lexer.scan_current_block(block_len);
+
+                                                if self.current_byte() == b'>' {
+                                                    self.state = State::Header;
+                                                    if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
+                                                        if flag_is_set(CONFIG, RETURN_RECORD) {
+                                                            self.state = State::EmitRecord;
+                                                        }
+                                                        return Some(Event::DnaChunk(
+                                                            self.dna_range.clone(),
+                                                        ));
+                                                    }
+                                                    if flag_is_set(CONFIG, RETURN_RECORD) {
+                                                        return Some(Event::Record(
+                                                            self.record_start..self.global_pos(),
+                                                        ));
+                                                    }
+                                                    break 'dna_line;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             } else {
                                 let buf_off = self.lexer.input.buffer_offset();
                                 let start = self.dna_range.start - buf_off;
@@ -784,7 +864,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                                 self.cur_dna_string
                                     .extend_from_slice(&self.lexer.input.buffer()[start..end]);
                             }
-                            self.contiguous_dna = false;
                         }
                     }
                 }

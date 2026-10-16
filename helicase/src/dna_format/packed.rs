@@ -102,6 +102,63 @@ impl PackedDNA {
     }
 
     #[inline(always)]
+    pub fn append_block_aligned(&mut self, packed: u128) {
+        let lo = packed as u64;
+        let hi = (packed >> 64) as u64;
+        self.num_bits += 128;
+        let bits = self.bits.get_mut();
+        let len = bits.len();
+        if len + 2 > bits.capacity() {
+            bits.reserve(128);
+        }
+        unsafe {
+            let ptr = bits.as_mut_ptr().add(len);
+            ptr.write(lo);
+            ptr.add(1).write(hi);
+            bits.set_len(len + 2);
+        }
+    }
+
+    #[inline(always)]
+    pub fn reserve_aligned_blocks(&mut self, q: usize) {
+        let bits = self.bits.get_mut();
+        bits.reserve(2 * q + 2);
+    }
+
+    /// Reserve space for `q` 64-byte blocks (2*q u64 words), advance `num_bits` and `len`,
+    /// and return a raw pointer to the destination words.
+    ///
+    /// # Safety
+    ///
+    /// The caller must write valid values to all `2 * q` `u64` words starting at the returned pointer.
+    #[inline(always)]
+    pub unsafe fn append_aligned_blocks_ptr(&mut self, q: usize) -> *mut u64 {
+        let bits = self.bits.get_mut();
+        let len = bits.len();
+        bits.reserve(2 * q + 2);
+        self.num_bits += 128 * q;
+        unsafe {
+            bits.set_len(len + 2 * q);
+            bits.as_mut_ptr().add(len)
+        }
+    }
+
+    #[inline(always)]
+    pub fn append_block_aligned_unchecked(&mut self, packed: u128) {
+        let lo = packed as u64;
+        let hi = (packed >> 64) as u64;
+        self.num_bits += 128;
+        let bits = self.bits.get_mut();
+        let len = bits.len();
+        unsafe {
+            let ptr = bits.as_mut_ptr().add(len);
+            ptr.write(lo);
+            ptr.add(1).write(hi);
+            bits.set_len(len + 2);
+        }
+    }
+
+    #[inline(always)]
     pub fn append(&mut self, packed: u128, num_bits: usize) {
         if num_bits == 0 {
             return;

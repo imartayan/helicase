@@ -3,7 +3,7 @@ use crate::config::{advanced::*, *};
 use crate::dna_format::*;
 use crate::input::*;
 use crate::lexer::*;
-use crate::simd::extract_fasta_bitmask;
+use crate::simd::{extract_dna_bitmask, extract_fasta_bitmask};
 
 use core::mem::swap;
 use core::ops::Range;
@@ -451,7 +451,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
+        'parser_loop: loop {
             match self.state {
                 State::EmitRecord => {
                     self.state = State::Header;
@@ -640,6 +640,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                                 }
                             }
                             let mut block = self.block;
+                            let mut dna_blocks: usize = 0;
                             while position == 0 {
                                 if copy_str && !I::RANDOM_ACCESS {
                                     let dna_chunk = self.lexer.input.current_block();
@@ -647,6 +648,406 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                                 }
                                 self.make_room_record();
                                 self.append_dna_block_from(block);
+                                dna_blocks += 1;
+
+                                if dna_blocks == 16
+                                    && I::RANDOM_ACCESS
+                                    && self.contiguous_dna
+                                    && !merge_chunks
+                                {
+                                    let data = self.lexer.input.data();
+                                    let mut curr_pos = (self.block_counter + 1) * 64;
+                                    if curr_pos < data.len() {
+                                        let newline_offset =
+                                            memchr::memchr(b'\n', &data[curr_pos..]);
+                                        let raw_len =
+                                            newline_offset.unwrap_or(data.len() - curr_pos);
+                                        let mut rem_len = raw_len;
+                                        if newline_offset.is_some()
+                                            && rem_len > 0
+                                            && data[curr_pos + rem_len - 1] == b'\r'
+                                        {
+                                            rem_len -= 1;
+                                        }
+
+                                        let mut next_pos = curr_pos + raw_len;
+                                        if newline_offset.is_some() {
+                                            next_pos += 1;
+                                        }
+                                        while next_pos < data.len()
+                                            && (data[next_pos] == b'\n' || data[next_pos] == b'\r')
+                                        {
+                                            next_pos += 1;
+                                        }
+                                        let is_complete_unwrapped_record =
+                                            next_pos >= data.len() || data[next_pos] == b'>';
+
+                                        if is_complete_unwrapped_record {
+                                            let need_packed =
+                                                flag_is_set(CONFIG, COMPUTE_DNA_PACKED);
+                                            let need_columnar =
+                                                flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR);
+                                            let need_mask_non_actg =
+                                                flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG);
+                                            let need_mask_n = flag_is_set(CONFIG, COMPUTE_MASK_N);
+                                            let need_len = flag_is_set(CONFIG, COMPUTE_DNA_LEN);
+                                            let is_keep = flag_is_not_set(CONFIG, SPLIT_NON_ACTG);
+
+                                            let any_packing = need_packed
+                                                || need_columnar
+                                                || need_mask_non_actg
+                                                || need_mask_n;
+
+                                            if !any_packing && is_keep {
+                                                if need_len {
+                                                    self.dna_len += rem_len;
+                                                }
+                                                self.dna_range.end = curr_pos + rem_len;
+                                                self.block_counter = next_pos / 64;
+                                                self.pos_in_block = next_pos % 64;
+                                                self.lexer.input.seek_block(self.block_counter);
+                                                if next_pos >= data.len() {
+                                                    self.finished = true;
+                                                    return self.finish_record_eof();
+                                                }
+                                                let block_len = 64.min(
+                                                    data.len()
+                                                        .saturating_sub(self.block_counter * 64),
+                                                );
+                                                self.block =
+                                                    self.lexer.scan_current_block(block_len);
+
+                                                self.state = State::Header;
+                                                if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
+                                                    if flag_is_set(CONFIG, RETURN_RECORD) {
+                                                        self.state = State::EmitRecord;
+                                                    }
+                                                    return Some(Event::DnaChunk(
+                                                        self.dna_range.clone(),
+                                                    ));
+                                                }
+                                                if flag_is_set(CONFIG, RETURN_RECORD) {
+                                                    return Some(Event::Record(
+                                                        self.record_start..self.global_pos(),
+                                                    ));
+                                                }
+                                                continue 'parser_loop;
+                                            }
+
+                                            // Align bitpacker to 32 bases (64 bits)
+                                            let rem_bases = self.cur_dna_packed.len() % 32;
+                                            let needed_bases =
+                                                if rem_bases == 0 { 0 } else { 32 - rem_bases };
+
+                                            let mut can_bulk = true;
+                                            if needed_bases > 0 && rem_len >= needed_bases {
+                                                let rem_data =
+                                                    &data[curr_pos..curr_pos + needed_bases];
+                                                let m = if curr_pos + 64 <= data.len() {
+                                                    extract_dna_bitmask::<CONFIG>(
+                                                        &data[curr_pos..curr_pos + 64],
+                                                    )
+                                                } else {
+                                                    let mut tmp = [b'A'; 64];
+                                                    tmp[..needed_bases].copy_from_slice(rem_data);
+                                                    extract_dna_bitmask::<CONFIG>(&tmp)
+                                                };
+
+                                                let n_mask = (1u64 << needed_bases) - 1;
+                                                if !is_keep && (m.is_dna & n_mask) != n_mask {
+                                                    can_bulk = false;
+                                                } else {
+                                                    if need_packed {
+                                                        let n_bits = 2 * needed_bases;
+                                                        let two_bits_mask = (1u128 << n_bits) - 1;
+                                                        self.cur_dna_packed.append(
+                                                            m.two_bits & two_bits_mask,
+                                                            n_bits,
+                                                        );
+                                                    }
+                                                    if need_columnar {
+                                                        self.cur_dna_columnar.append(
+                                                            m.high_bit & n_mask,
+                                                            m.low_bit & n_mask,
+                                                            needed_bases,
+                                                        );
+                                                    }
+                                                    if need_mask_non_actg {
+                                                        self.cur_mask_non_actg.append(
+                                                            m.mask_non_actg & n_mask,
+                                                            needed_bases,
+                                                        );
+                                                    }
+                                                    if need_mask_n {
+                                                        self.cur_mask_n.append(
+                                                            m.mask_n & n_mask,
+                                                            needed_bases,
+                                                        );
+                                                    }
+                                                    if need_len {
+                                                        self.dna_len += needed_bases;
+                                                    }
+                                                    curr_pos += needed_bases;
+                                                    rem_len -= needed_bases;
+                                                }
+                                            }
+
+                                            if can_bulk {
+                                                let q = rem_len / 64;
+                                                let r = rem_len % 64;
+
+                                                if need_packed {
+                                                    self.cur_dna_packed.reserve_aligned_blocks(q);
+                                                }
+                                                if need_columnar {
+                                                    self.cur_dna_columnar.reserve_aligned_blocks(q);
+                                                }
+                                                if need_mask_non_actg {
+                                                    self.cur_mask_non_actg
+                                                        .reserve_aligned_blocks(q);
+                                                }
+                                                if need_mask_n {
+                                                    self.cur_mask_n.reserve_aligned_blocks(q);
+                                                }
+
+                                                let mut stopped_early = false;
+                                                let mut processed_blocks = 0;
+
+                                                if need_packed
+                                                    && !need_columnar
+                                                    && !need_mask_non_actg
+                                                    && !need_mask_n
+                                                    && is_keep
+                                                {
+                                                    let out_ptr = unsafe {
+                                                        self.cur_dna_packed
+                                                            .append_aligned_blocks_ptr(q)
+                                                    };
+                                                    let q4 = q / 4;
+                                                    for k in 0..q4 {
+                                                        let base_offset = curr_pos + 256 * k;
+                                                        let m0 = extract_dna_bitmask::<CONFIG>(
+                                                            &data[base_offset..base_offset + 64],
+                                                        );
+                                                        let m1 = extract_dna_bitmask::<CONFIG>(
+                                                            &data[base_offset + 64
+                                                                ..base_offset + 128],
+                                                        );
+                                                        let m2 = extract_dna_bitmask::<CONFIG>(
+                                                            &data[base_offset + 128
+                                                                ..base_offset + 192],
+                                                        );
+                                                        let m3 = extract_dna_bitmask::<CONFIG>(
+                                                            &data[base_offset + 192
+                                                                ..base_offset + 256],
+                                                        );
+                                                        unsafe {
+                                                            let p = out_ptr.add(8 * k);
+                                                            p.write(m0.two_bits as u64);
+                                                            p.add(1)
+                                                                .write((m0.two_bits >> 64) as u64);
+                                                            p.add(2).write(m1.two_bits as u64);
+                                                            p.add(3)
+                                                                .write((m1.two_bits >> 64) as u64);
+                                                            p.add(4).write(m2.two_bits as u64);
+                                                            p.add(5)
+                                                                .write((m2.two_bits >> 64) as u64);
+                                                            p.add(6).write(m3.two_bits as u64);
+                                                            p.add(7)
+                                                                .write((m3.two_bits >> 64) as u64);
+                                                        }
+                                                    }
+                                                    for k in (q4 * 4)..q {
+                                                        let block_start = curr_pos + 64 * k;
+                                                        let m = extract_dna_bitmask::<CONFIG>(
+                                                            &data[block_start..block_start + 64],
+                                                        );
+                                                        unsafe {
+                                                            let p = out_ptr.add(2 * k);
+                                                            p.write(m.two_bits as u64);
+                                                            p.add(1)
+                                                                .write((m.two_bits >> 64) as u64);
+                                                        }
+                                                    }
+                                                    processed_blocks = q;
+                                                } else {
+                                                    for k in 0..q {
+                                                        let block_start = curr_pos + 64 * k;
+                                                        let block_data =
+                                                            &data[block_start..block_start + 64];
+                                                        let m = extract_dna_bitmask::<CONFIG>(
+                                                            block_data,
+                                                        );
+
+                                                        if !is_keep && m.is_dna != !0 {
+                                                            stopped_early = true;
+                                                            break;
+                                                        }
+
+                                                        if need_packed {
+                                                            self.cur_dna_packed
+                                                                .append_block_aligned_unchecked(
+                                                                    m.two_bits,
+                                                                );
+                                                        }
+                                                        if need_columnar {
+                                                            self.cur_dna_columnar
+                                                                .append_block_aligned_unchecked(
+                                                                    m.high_bit, m.low_bit,
+                                                                );
+                                                        }
+                                                        if need_mask_non_actg {
+                                                            self.cur_mask_non_actg
+                                                                .append_block_aligned_unchecked(
+                                                                    m.mask_non_actg,
+                                                                );
+                                                        }
+                                                        if need_mask_n {
+                                                            self.cur_mask_n
+                                                                .append_block_aligned_unchecked(
+                                                                    m.mask_n,
+                                                                );
+                                                        }
+                                                        processed_blocks += 1;
+                                                    }
+                                                }
+
+                                                if stopped_early {
+                                                    let processed_bytes = 64 * processed_blocks;
+                                                    if need_len {
+                                                        self.dna_len += processed_bytes;
+                                                    }
+                                                    let resume_pos = curr_pos + processed_bytes;
+                                                    self.dna_range.end = resume_pos;
+                                                    self.block_counter = resume_pos / 64;
+                                                    self.pos_in_block = resume_pos % 64;
+                                                    self.lexer.input.seek_block(self.block_counter);
+                                                    let block_len =
+                                                        64.min(data.len().saturating_sub(
+                                                            self.block_counter * 64,
+                                                        ));
+                                                    self.block =
+                                                        self.lexer.scan_current_block(block_len);
+                                                    break;
+                                                } else {
+                                                    let mut remainder_ok = true;
+                                                    if r > 0 {
+                                                        let rem_start = curr_pos + 64 * q;
+                                                        let rem_data =
+                                                            &data[rem_start..curr_pos + rem_len];
+                                                        let m = if rem_start + 64 <= data.len() {
+                                                            extract_dna_bitmask::<CONFIG>(
+                                                                &data[rem_start..rem_start + 64],
+                                                            )
+                                                        } else {
+                                                            let mut tmp = [b'A'; 64];
+                                                            tmp[..r].copy_from_slice(rem_data);
+                                                            extract_dna_bitmask::<CONFIG>(&tmp)
+                                                        };
+
+                                                        let r_mask = (1u64 << r) - 1;
+                                                        if !is_keep && (m.is_dna & r_mask) != r_mask
+                                                        {
+                                                            remainder_ok = false;
+                                                        } else {
+                                                            if need_packed {
+                                                                let r_bits = 2 * r;
+                                                                let two_bits_mask = if r_bits == 128
+                                                                {
+                                                                    !0
+                                                                } else {
+                                                                    (1u128 << r_bits) - 1
+                                                                };
+                                                                self.cur_dna_packed.append(
+                                                                    m.two_bits & two_bits_mask,
+                                                                    r_bits,
+                                                                );
+                                                            }
+                                                            if need_columnar {
+                                                                self.cur_dna_columnar.append(
+                                                                    m.high_bit & r_mask,
+                                                                    m.low_bit & r_mask,
+                                                                    r,
+                                                                );
+                                                            }
+                                                            if need_mask_non_actg {
+                                                                self.cur_mask_non_actg.append(
+                                                                    m.mask_non_actg & r_mask,
+                                                                    r,
+                                                                );
+                                                            }
+                                                            if need_mask_n {
+                                                                self.cur_mask_n
+                                                                    .append(m.mask_n & r_mask, r);
+                                                            }
+                                                        }
+                                                    }
+
+                                                    if !remainder_ok {
+                                                        let processed_bytes = 64 * q;
+                                                        if need_len {
+                                                            self.dna_len += processed_bytes;
+                                                        }
+                                                        let resume_pos = curr_pos + processed_bytes;
+                                                        self.dna_range.end = resume_pos;
+                                                        self.block_counter = resume_pos / 64;
+                                                        self.pos_in_block = resume_pos % 64;
+                                                        self.lexer
+                                                            .input
+                                                            .seek_block(self.block_counter);
+                                                        let block_len =
+                                                            64.min(data.len().saturating_sub(
+                                                                self.block_counter * 64,
+                                                            ));
+                                                        self.block = self
+                                                            .lexer
+                                                            .scan_current_block(block_len);
+                                                        break;
+                                                    } else {
+                                                        if need_len {
+                                                            self.dna_len += rem_len;
+                                                        }
+                                                        self.dna_range.end = curr_pos + rem_len;
+                                                        self.block_counter = next_pos / 64;
+                                                        self.pos_in_block = next_pos % 64;
+                                                        self.lexer
+                                                            .input
+                                                            .seek_block(self.block_counter);
+                                                        if next_pos >= data.len() {
+                                                            self.finished = true;
+                                                            return self.finish_record_eof();
+                                                        }
+                                                        let block_len =
+                                                            64.min(data.len().saturating_sub(
+                                                                self.block_counter * 64,
+                                                            ));
+                                                        self.block = self
+                                                            .lexer
+                                                            .scan_current_block(block_len);
+
+                                                        self.state = State::Header;
+                                                        if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
+                                                            if flag_is_set(CONFIG, RETURN_RECORD) {
+                                                                self.state = State::EmitRecord;
+                                                            }
+                                                            return Some(Event::DnaChunk(
+                                                                self.dna_range.clone(),
+                                                            ));
+                                                        }
+                                                        if flag_is_set(CONFIG, RETURN_RECORD) {
+                                                            return Some(Event::Record(
+                                                                self.record_start
+                                                                    ..self.global_pos(),
+                                                            ));
+                                                        }
+                                                        continue 'parser_loop;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
                                 block = match self.lexer.next() {
                                     Some(Ok(b)) => b,
                                     Some(Err(e)) => {

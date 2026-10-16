@@ -69,3 +69,33 @@ pub fn extract_fasta_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastaBitmask {
 pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
     extract_bitmask::<CONFIG, SCAN_MODE_DNA>(buf)
 }
+
+#[inline(always)]
+pub fn extract_dna_bitmask<const CONFIG: Config>(buf: &[u8]) -> Bitmask {
+    let mut is_dna = !0;
+    let mut two_bits = 0;
+    let mut high_bit = 0;
+    let mut low_bit = 0;
+    let mut mask_non_actg = 0;
+    let mut mask_n = 0;
+
+    for (i, &b) in buf.iter().enumerate() {
+        let (actg, non_actg, n) = bitpack_byte(b);
+        two_bits |= (actg as u128) << (2 * i);
+        high_bit |= ((actg >> 1) as u64) << i;
+        low_bit |= ((actg & 1) as u64) << i;
+        is_dna &= !((non_actg as u64) << i);
+        mask_non_actg |= (non_actg as u64) << i;
+        mask_n |= (n as u64) << i;
+    }
+
+    Bitmask {
+        line_feeds: 0,
+        is_dna,
+        two_bits,
+        high_bit,
+        low_bit,
+        mask_non_actg,
+        mask_n,
+    }
+}

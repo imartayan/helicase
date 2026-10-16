@@ -84,6 +84,29 @@ pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
 }
 
 #[inline(always)]
+pub fn extract_dna_bitmask<const CONFIG: Config>(buf: &[u8]) -> Bitmask {
+    unsafe {
+        let ptr = buf.as_ptr() as *const __m128i;
+        let v1 = _mm_loadu_si128(ptr);
+        let v2 = _mm_loadu_si128(ptr.add(1));
+        let v3 = _mm_loadu_si128(ptr.add(2));
+        let v4 = _mm_loadu_si128(ptr.add(3));
+        let (is_dna, two_bits, high_bit, low_bit, mask_non_actg, mask_n) =
+            bitpack_dna::<CONFIG>(v1, v2, v3, v4);
+
+        Bitmask {
+            line_feeds: 0,
+            is_dna,
+            two_bits,
+            high_bit,
+            low_bit,
+            mask_non_actg,
+            mask_n,
+        }
+    }
+}
+
+#[inline(always)]
 fn bitpack_dna<const CONFIG: Config>(
     v1: __m128i,
     v2: __m128i,

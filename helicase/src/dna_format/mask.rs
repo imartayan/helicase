@@ -45,6 +45,12 @@ impl BitMask {
     }
 
     #[inline(always)]
+    pub fn reserve(&mut self, additional_bases: usize) {
+        let additional_words = additional_bases / BP_PER_BLOCK + 2;
+        self.bits.reserve(additional_words);
+    }
+
+    #[inline(always)]
     pub fn clear(&mut self) {
         self.bits.clear();
         self.cur = 0;

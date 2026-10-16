@@ -63,6 +63,12 @@ impl PackedDNA {
     }
 
     #[inline(always)]
+    pub fn reserve(&mut self, additional_bases: usize) {
+        let additional_words = additional_bases / BP_PER_BLOCK + 2;
+        self.bits.get_mut().reserve(additional_words);
+    }
+
+    #[inline(always)]
     pub fn clear(&mut self) {
         self.bits.get_mut().clear();
         self.cur = 0;

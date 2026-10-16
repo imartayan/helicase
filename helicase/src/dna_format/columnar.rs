@@ -62,24 +62,52 @@ impl ColumnarDNA {
     }
 
     #[inline(always)]
+    pub fn append_block(&mut self, high: T, low: T) {
+        let rem = self.len % BITS_PER_BLOCK;
+        self.len += BITS_PER_BLOCK;
+        let len = self.high_bits.len();
+        if len + 1 > self.high_bits.capacity() {
+            self.high_bits.reserve(64);
+            self.low_bits.reserve(64);
+        }
+        unsafe {
+            let h_ptr = self.high_bits.as_mut_ptr().add(len);
+            let l_ptr = self.low_bits.as_mut_ptr().add(len);
+            if rem == 0 {
+                h_ptr.write(high);
+                l_ptr.write(low);
+            } else {
+                let inv = BITS_PER_BLOCK - rem;
+                h_ptr.write(self.cur_hi | (high << rem));
+                l_ptr.write(self.cur_lo | (low << rem));
+                self.cur_hi = high >> inv;
+                self.cur_lo = low >> inv;
+            }
+            self.high_bits.set_len(len + 1);
+            self.low_bits.set_len(len + 1);
+        }
+    }
+
+    #[inline(always)]
     pub fn append(&mut self, high: T, low: T, size: usize) {
         if size == 0 {
-            // should not happen?
             return;
         }
         let rem = self.len % BITS_PER_BLOCK;
         let mask = !0 >> (BITS_PER_BLOCK - size);
-        let shift_mask = ((rem > 0) as u64).wrapping_neg();
         self.len += size;
         let hi = high & mask;
         let lo = low & mask;
         if rem + size >= BITS_PER_BLOCK {
-            self.cur_hi |= high << rem;
-            self.cur_lo |= low << rem;
-            self.high_bits.push(self.cur_hi);
-            self.low_bits.push(self.cur_lo);
-            self.cur_hi = hi.wrapping_shr((BITS_PER_BLOCK - rem) as u32) & shift_mask;
-            self.cur_lo = lo.wrapping_shr((BITS_PER_BLOCK - rem) as u32) & shift_mask;
+            self.high_bits.push(self.cur_hi | (hi << rem));
+            self.low_bits.push(self.cur_lo | (lo << rem));
+            if rem > 0 {
+                self.cur_hi = hi >> (BITS_PER_BLOCK - rem);
+                self.cur_lo = lo >> (BITS_PER_BLOCK - rem);
+            } else {
+                self.cur_hi = 0;
+                self.cur_lo = 0;
+            }
         } else {
             self.cur_hi |= hi << rem;
             self.cur_lo |= lo << rem;
@@ -121,7 +149,7 @@ impl ColumnarDNA {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn push_ascii(&mut self, s: &[u8]) {
         for &ch in s {
             let (cur_hi, cur_lo) = match ch {
@@ -135,7 +163,7 @@ impl ColumnarDNA {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn push_str(&mut self, s: &str) {
         self.push_ascii(s.as_bytes());
     }
@@ -281,5 +309,22 @@ mod tests {
 
         assert_eq!(v.len(), 128);
         assert_eq!(v.to_string(), "T".repeat(64) + &"C".repeat(64));
+    }
+
+    #[test]
+    fn append_block_aligned_and_unaligned() {
+        let mut aligned = ColumnarDNA::new();
+        aligned.append_block(!0u64, 0u64); // 64 T
+        aligned.append_block(0u64, !0u64); // 64 C
+        assert_eq!(aligned.to_string(), "T".repeat(64) + &"C".repeat(64));
+
+        let mut unaligned = ColumnarDNA::new();
+        unaligned.append(0b111, 0b111, 3); // 3 G
+        unaligned.append_block(!0u64, 0u64); // 64 T
+        unaligned.append_block(0u64, !0u64); // 64 C
+        assert_eq!(
+            unaligned.to_string(),
+            "GGG".to_string() + &"T".repeat(64) + &"C".repeat(64)
+        );
     }
 }

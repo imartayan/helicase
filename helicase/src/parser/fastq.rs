@@ -363,14 +363,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
     }
 
     #[inline(always)]
-    fn prepare_return(&mut self) {
-        #[cfg(feature = "packed-seq")]
-        {
-            if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
-                self.cur_dna_packed.append_padding();
-            }
-        }
-    }
+    fn prepare_return(&mut self) {}
 
     /// Earliest file offset that must stay in the buffer for zero-copy access.
     #[inline(always)]
@@ -440,6 +433,50 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
             self.lexer.input.make_room(self.quality_range.start);
         }
     }
+    #[inline(always)]
+    fn append_dna_range(&mut self, start: usize, len: usize) {
+        if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
+            self.cur_dna_columnar.append(
+                self.block.high_bit >> start,
+                self.block.low_bit >> start,
+                len,
+            );
+        }
+        if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
+            self.cur_dna_packed
+                .append(self.block.two_bits >> (2 * start), 2 * len);
+        }
+        if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
+            self.cur_mask_non_actg
+                .append(self.block.mask_non_actg >> start, len);
+        }
+        if flag_is_set(CONFIG, COMPUTE_MASK_N) {
+            self.cur_mask_n.append(self.block.mask_n >> start, len);
+        }
+        if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
+            self.dna_len += len;
+        }
+    }
+
+    #[inline(always)]
+    fn append_dna_block_from(&mut self, block: FastqChunk) {
+        if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
+            self.cur_dna_columnar
+                .append_block(block.high_bit, block.low_bit);
+        }
+        if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
+            self.cur_dna_packed.append_block(block.two_bits);
+        }
+        if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
+            self.cur_mask_non_actg.append_block(block.mask_non_actg);
+        }
+        if flag_is_set(CONFIG, COMPUTE_MASK_N) {
+            self.cur_mask_n.append_block(block.mask_n);
+        }
+        if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
+            self.dna_len += 64;
+        }
+    }
 }
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CONFIG, I> {
@@ -469,7 +506,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         {
                             self.lexer.input.make_room(self.header_range.start);
                         }
-                        self.block = match self.lexer.next() {
+                        self.block = match self.lexer.next_in_header() {
                             Some(Ok(b)) => b,
                             Some(Err(e)) => {
                                 self.finished = true;
@@ -538,101 +575,83 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         self.clear_chunk();
                     }
                     self.dna_range.start = self.global_pos();
-                    let mut first_pos = self.pos_in_block;
-                    while position == 0 {
-                        if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
-                            && flag_is_set(CONFIG, SPLIT_NON_ACTG)
-                            && flag_is_set(CONFIG, MERGE_DNA_CHUNKS)
-                        {
-                            let dna_chunk = &self.lexer.input.current_block()[self.pos_in_block..];
+                    let merge_chunks = flag_is_set(CONFIG, COMPUTE_DNA_STRING)
+                        && flag_is_set(CONFIG, SPLIT_NON_ACTG)
+                        && flag_is_set(CONFIG, MERGE_DNA_CHUNKS);
+                    if position != 0 {
+                        let first_pos = self.pos_in_block;
+                        self.pos_in_block = position.trailing_zeros() as usize;
+                        if merge_chunks && !I::RANDOM_ACCESS {
+                            let dna_chunk =
+                                &self.lexer.input.current_block()[first_pos..self.pos_in_block];
                             self.cur_dna_string.extend_from_slice(dna_chunk);
                         }
-                        // For file-backed inputs: shift the record anchor to the front of
-                        // the buffer and refill so zero-copy access remains valid later.
-                        self.make_room_record();
-                        if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
-                            self.cur_dna_columnar.append(
-                                self.block.high_bit >> self.pos_in_block,
-                                self.block.low_bit >> self.pos_in_block,
-                                self.block.len - self.pos_in_block,
-                            );
-                        }
-                        if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
-                            self.cur_dna_packed.append(
-                                self.block.two_bits >> (2 * self.pos_in_block),
-                                2 * (self.block.len - self.pos_in_block),
-                            );
-                        }
-                        if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
-                            self.cur_mask_non_actg.append(
-                                self.block.mask_non_actg >> self.pos_in_block,
-                                self.block.len - self.pos_in_block,
-                            );
-                        }
-                        if flag_is_set(CONFIG, COMPUTE_MASK_N) {
-                            self.cur_mask_n.append(
-                                self.block.mask_n >> self.pos_in_block,
-                                self.block.len - self.pos_in_block,
-                            );
-                        }
-                        if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
-                            self.dna_len += self.block.len - self.pos_in_block;
-                        }
-                        self.block = match self.lexer.next() {
-                            Some(Ok(b)) => b,
-                            Some(Err(e)) => {
-                                self.finished = true;
-                                self.pending_error = Some(e);
-                                return self.return_error_or_none();
+                        self.append_dna_range(first_pos, self.pos_in_block - first_pos);
+                    } else {
+                        if self.pos_in_block > 0 {
+                            if merge_chunks && !I::RANDOM_ACCESS {
+                                let dna_chunk =
+                                    &self.lexer.input.current_block()[self.pos_in_block..];
+                                self.cur_dna_string.extend_from_slice(dna_chunk);
                             }
-                            None => {
-                                self.finished = true;
-                                return self.return_error_or_none();
+                            self.make_room_record();
+                            self.append_dna_range(self.pos_in_block, 64 - self.pos_in_block);
+                            self.block = match self.lexer.next() {
+                                Some(Ok(b)) => b,
+                                Some(Err(e)) => {
+                                    self.finished = true;
+                                    self.pending_error = Some(e);
+                                    return self.return_error_or_none();
+                                }
+                                None => {
+                                    self.finished = true;
+                                    return self.return_error_or_none();
+                                }
+                            };
+                            self.block_counter += 1;
+                            self.pos_in_block = 0;
+                            position = !self.block.is_dna;
+                        }
+                        let mut block = self.block;
+                        while position == 0 {
+                            if merge_chunks && !I::RANDOM_ACCESS {
+                                let dna_chunk = self.lexer.input.current_block();
+                                self.cur_dna_string.extend_from_slice(dna_chunk);
                             }
-                        };
-                        self.block_counter += 1;
-                        self.pos_in_block = 0;
-                        first_pos = 0;
-                        position = !self.block.is_dna;
-                    }
-                    self.pos_in_block = position.trailing_zeros() as usize;
-                    if flag_is_set(CONFIG, COMPUTE_DNA_STRING)
-                        && flag_is_set(CONFIG, SPLIT_NON_ACTG)
-                        && flag_is_set(CONFIG, MERGE_DNA_CHUNKS)
-                    {
-                        let dna_chunk =
-                            &self.lexer.input.current_block()[first_pos..self.pos_in_block];
-                        self.cur_dna_string.extend_from_slice(dna_chunk);
-                    }
-                    if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
-                        self.cur_dna_columnar.append(
-                            self.block.high_bit >> first_pos,
-                            self.block.low_bit >> first_pos,
-                            self.pos_in_block - first_pos,
-                        );
-                    }
-                    if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
-                        self.cur_dna_packed.append(
-                            self.block.two_bits >> (2 * first_pos),
-                            2 * (self.pos_in_block - first_pos),
-                        );
-                    }
-                    if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
-                        self.cur_mask_non_actg.append(
-                            self.block.mask_non_actg >> first_pos,
-                            self.pos_in_block - first_pos,
-                        );
-                    }
-                    if flag_is_set(CONFIG, COMPUTE_MASK_N) {
-                        self.cur_mask_n.append(
-                            self.block.mask_n >> first_pos,
-                            self.pos_in_block - first_pos,
-                        );
-                    }
-                    if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
-                        self.dna_len += self.pos_in_block - first_pos;
+                            // For file-backed inputs: shift the record anchor to the front of
+                            // the buffer and refill so zero-copy access remains valid later.
+                            self.make_room_record();
+                            self.append_dna_block_from(block);
+                            block = match self.lexer.next() {
+                                Some(Ok(b)) => b,
+                                Some(Err(e)) => {
+                                    self.block = block;
+                                    self.finished = true;
+                                    self.pending_error = Some(e);
+                                    return self.return_error_or_none();
+                                }
+                                None => {
+                                    self.block = block;
+                                    self.finished = true;
+                                    return self.return_error_or_none();
+                                }
+                            };
+                            self.block_counter += 1;
+                            position = !block.is_dna;
+                        }
+                        self.block = block;
+                        self.pos_in_block = position.trailing_zeros() as usize;
+                        if merge_chunks && !I::RANDOM_ACCESS {
+                            let dna_chunk = &self.lexer.input.current_block()[..self.pos_in_block];
+                            self.cur_dna_string.extend_from_slice(dna_chunk);
+                        }
+                        self.append_dna_range(0, self.pos_in_block);
                     }
                     self.dna_range.end = self.global_pos();
+                    if merge_chunks && I::RANDOM_ACCESS {
+                        self.cur_dna_string
+                            .extend_from_slice(&self.lexer.input.data()[self.dna_range.clone()]);
+                    }
                     self.make_room_record_end();
                     if flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
                         || ((1 << self.pos_in_block) & self.block.newline) != 0
@@ -648,7 +667,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                     // PLUS
                     while self.block.newline == 0 {
                         self.make_room_record();
-                        self.block = match self.lexer.next() {
+                        self.block = match self.lexer.next_in_non_dna() {
                             Some(Ok(b)) => b,
                             Some(Err(e)) => {
                                 self.finished = true;
@@ -675,11 +694,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                     // Fast path: skip the quality line with memchr, bypassing the
                     // block-by-block SIMD lexer.  Applies to all input types
                     // (random-access and reader-backed) and all output configs.
-                    // dna_range.len() == 0 when COMPUTE_DNA_STRING is not set,
-                    // which naturally disables the fast path for those configs.
                     // For reader-backed inputs, make_room before scanning if the
                     // buffer is exhausted (DNA anchor first, quality anchor second).
-                    if self.dna_range.len() >= 1024 && self.block.newline == 0 {
+                    if self.global_pos() - self.record_start >= 1024 && self.block.newline == 0 {
                         self.make_room_record();
                         self.make_room_quality();
                         if let Some((delta, nl_pos, bl_len)) = self.lexer.input.skip_to_newline() {
@@ -700,7 +717,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         // guard's is_end_of_buffer() check will be false (no double refill).
                         self.make_room_record();
                         self.make_room_quality();
-                        self.block = match self.lexer.next() {
+                        self.block = match self.lexer.next_in_non_dna() {
                             Some(Ok(b)) => b,
                             Some(Err(e)) => {
                                 self.pending_error = Some(e);

@@ -5,59 +5,80 @@ use crate::lexer::*;
 use core::arch::x86_64::*;
 use core::mem::transmute;
 
-const GREATER_THAN: __m256i = unsafe { transmute([b'>'; 32]) };
 const LINE_FEED: __m256i = unsafe { transmute([b'\n'; 32]) };
 const ASCII_N: __m256i = unsafe { transmute([b'N'; 32]) };
 const LUT_ACTG: __m256i = unsafe { transmute(*b"A_C_T_G_________A_C_T_G_________") };
 
+const NEEDS_DNA_MASKS: Config = COMPUTE_DNA_COLUMNAR
+    | COMPUTE_DNA_PACKED
+    | SPLIT_NON_ACTG
+    | COMPUTE_MASK_NON_ACTG
+    | COMPUTE_MASK_N;
+
 #[inline(always)]
-pub fn extract_fasta_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastaBitmask {
+pub fn extract_bitmask<const CONFIG: Config, const MODE: u8>(buf: &[u8]) -> Bitmask {
     unsafe {
         let ptr = buf.as_ptr() as *const __m256i;
         let v1 = _mm256_loadu_si256(ptr);
         let v2 = _mm256_loadu_si256(ptr.add(1));
 
-        let open_bracket = u8_mask(v1, v2, GREATER_THAN);
-        let line_feeds = u8_mask(v1, v2, LINE_FEED);
+        if MODE == SCAN_MODE_DNA || flag_is_not_set(CONFIG, NEEDS_DNA_MASKS) {
+            let (is_dna, two_bits, high_bit, low_bit, mask_non_actg, mask_n) =
+                bitpack_dna::<CONFIG>(v1, v2);
 
-        let (is_dna, two_bits, high_bit, low_bit, mask_non_actg, mask_n) =
-            bitpack_dna::<CONFIG>(v1, v2);
+            let line_feeds = if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
+                if is_dna == !0 {
+                    0
+                } else {
+                    u8_mask(v1, v2, LINE_FEED)
+                }
+            } else {
+                u8_mask(v1, v2, LINE_FEED)
+            };
 
-        FastaBitmask {
-            open_bracket,
-            line_feeds,
-            is_dna,
-            two_bits,
-            high_bit,
-            low_bit,
-            mask_non_actg,
-            mask_n,
+            Bitmask {
+                line_feeds,
+                is_dna,
+                two_bits,
+                high_bit,
+                low_bit,
+                mask_non_actg,
+                mask_n,
+            }
+        } else {
+            let line_feeds = u8_mask(v1, v2, LINE_FEED);
+            let skip_dna = if MODE == SCAN_MODE_QUALITY {
+                (line_feeds & line_feeds.wrapping_sub(1)) == 0
+            } else {
+                line_feeds == 0
+            };
+            let (is_dna, two_bits, high_bit, low_bit, mask_non_actg, mask_n) = if skip_dna {
+                (!0, 0, 0, 0, 0, 0)
+            } else {
+                bitpack_dna::<CONFIG>(v1, v2)
+            };
+
+            Bitmask {
+                line_feeds,
+                is_dna,
+                two_bits,
+                high_bit,
+                low_bit,
+                mask_non_actg,
+                mask_n,
+            }
         }
     }
 }
 
 #[inline(always)]
+pub fn extract_fasta_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastaBitmask {
+    extract_bitmask::<CONFIG, SCAN_MODE_DNA>(buf)
+}
+
+#[inline(always)]
 pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
-    unsafe {
-        let ptr = buf.as_ptr() as *const __m256i;
-        let v1 = _mm256_loadu_si256(ptr);
-        let v2 = _mm256_loadu_si256(ptr.add(1));
-
-        let line_feeds = u8_mask(v1, v2, LINE_FEED);
-
-        let (is_dna, two_bits, high_bit, low_bit, mask_non_actg, mask_n) =
-            bitpack_dna::<CONFIG>(v1, v2);
-
-        FastqBitmask {
-            line_feeds,
-            is_dna,
-            two_bits,
-            high_bit,
-            low_bit,
-            mask_non_actg,
-            mask_n,
-        }
-    }
+    extract_bitmask::<CONFIG, SCAN_MODE_DNA>(buf)
 }
 
 #[inline(always)]

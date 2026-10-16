@@ -186,7 +186,6 @@
 //! | `bz2`        | no      | bzip2 decompression |
 //! | `xz`         | no      | xz decompression |
 
-pub(crate) mod carrying_add;
 pub mod config;
 pub mod dna_format;
 pub mod input;
@@ -216,7 +215,7 @@ pub(crate) mod simd {
 }
 #[cfg(not(any(
     target_feature = "avx2",
-    target_feature = "sse3",
+    target_feature = "ssse3",
     target_feature = "neon"
 )))]
 #[deprecated(

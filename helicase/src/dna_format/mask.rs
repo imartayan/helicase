@@ -52,20 +52,42 @@ impl BitMask {
     }
 
     #[inline(always)]
+    pub fn append_block(&mut self, x: T) {
+        let rem = self.len % BITS_PER_BLOCK;
+        self.len += BITS_PER_BLOCK;
+        let len = self.bits.len();
+        if len + 1 > self.bits.capacity() {
+            self.bits.reserve(64);
+        }
+        unsafe {
+            let ptr = self.bits.as_mut_ptr().add(len);
+            if rem == 0 {
+                ptr.write(x);
+            } else {
+                let inv = BITS_PER_BLOCK - rem;
+                ptr.write(self.cur | (x << rem));
+                self.cur = x >> inv;
+            }
+            self.bits.set_len(len + 1);
+        }
+    }
+
+    #[inline(always)]
     pub fn append(&mut self, x: T, size: usize) {
         if size == 0 {
-            // should not happen?
             return;
         }
         let rem = self.len % BITS_PER_BLOCK;
         let mask = !0 >> (BITS_PER_BLOCK - size);
-        let shift_mask = ((rem > 0) as u64).wrapping_neg();
         self.len += size;
         let y = x & mask;
         if rem + size >= BITS_PER_BLOCK {
-            self.cur |= x << rem;
-            self.bits.push(self.cur);
-            self.cur = y.wrapping_shr((BITS_PER_BLOCK - rem) as u32) & shift_mask;
+            self.bits.push(self.cur | (y << rem));
+            self.cur = if rem > 0 {
+                y >> (BITS_PER_BLOCK - rem)
+            } else {
+                0
+            };
         } else {
             self.cur |= y << rem;
         }
@@ -130,5 +152,26 @@ mod tests {
         let got = m.get_all();
         assert!(got[..10].iter().all(|&b| b));
         assert!(got[10..].iter().all(|&b| !b));
+    }
+
+    #[test]
+    fn append_block_aligned_and_unaligned() {
+        let mut aligned = BitMask::new();
+        aligned.append_block(!0u64);
+        aligned.append_block(0u64);
+        let got = aligned.get_all();
+        assert_eq!(got.len(), 128);
+        assert!(got[..64].iter().all(|&b| b));
+        assert!(got[64..].iter().all(|&b| !b));
+
+        let mut unaligned = BitMask::new();
+        unaligned.append(!0u64, 10);
+        unaligned.append_block(0u64);
+        unaligned.append_block(!0u64);
+        let got = unaligned.get_all();
+        assert_eq!(got.len(), 138);
+        assert!(got[..10].iter().all(|&b| b));
+        assert!(got[10..74].iter().all(|&b| !b));
+        assert!(got[74..].iter().all(|&b| b));
     }
 }

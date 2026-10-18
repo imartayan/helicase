@@ -21,9 +21,22 @@ const NEEDS_DNA_MASKS: Config = COMPUTE_DNA_COLUMNAR
 pub fn extract_bitmask<const CONFIG: Config, const MODE: u8>(buf: &[u8]) -> Bitmask {
     unsafe {
         let ptr = buf.as_ptr();
-        let v = vld4q_u8(ptr);
 
-        if MODE == SCAN_MODE_DNA || flag_is_not_set(CONFIG, NEEDS_DNA_MASKS) {
+        if flag_is_not_set(CONFIG, NEEDS_DNA_MASKS) {
+            let line_feeds = extract_bitmask_contiguous(ptr);
+            return Bitmask {
+                line_feeds,
+                is_dna: !0,
+                two_bits: 0,
+                high_bit: 0,
+                low_bit: 0,
+                mask_non_actg: 0,
+                mask_n: 0,
+            };
+        }
+
+        if MODE == SCAN_MODE_DNA {
+            let v = vld4q_u8(ptr);
             let (is_dna, two_bits, high_bit, low_bit, mask_non_actg, mask_n) =
                 bitpack_dna::<CONFIG>(v);
 
@@ -47,7 +60,7 @@ pub fn extract_bitmask<const CONFIG: Config, const MODE: u8>(buf: &[u8]) -> Bitm
                 mask_n,
             }
         } else {
-            let line_feeds = movemask_64(map_8x16x4(v, |v| vceqq_u8(v, LINE_FEED)));
+            let line_feeds = extract_bitmask_contiguous(ptr);
             let skip_dna = if MODE == SCAN_MODE_QUALITY {
                 (line_feeds & line_feeds.wrapping_sub(1)) == 0
             } else {
@@ -56,6 +69,7 @@ pub fn extract_bitmask<const CONFIG: Config, const MODE: u8>(buf: &[u8]) -> Bitm
             let (is_dna, two_bits, high_bit, low_bit, mask_non_actg, mask_n) = if skip_dna {
                 (!0, 0, 0, 0, 0, 0)
             } else {
+                let v = vld4q_u8(ptr);
                 bitpack_dna::<CONFIG>(v)
             };
 
@@ -69,6 +83,23 @@ pub fn extract_bitmask<const CONFIG: Config, const MODE: u8>(buf: &[u8]) -> Bitm
                 mask_n,
             }
         }
+    }
+}
+
+#[inline(always)]
+unsafe fn extract_bitmask_contiguous(ptr: *const u8) -> u64 {
+    unsafe {
+        let q0 = vld1q_u8(ptr);
+        let q1 = vld1q_u8(ptr.add(16));
+        let q2 = vld1q_u8(ptr.add(32));
+        let q3 = vld1q_u8(ptr.add(48));
+
+        let eq0 = vceqq_u8(q0, LINE_FEED);
+        let eq1 = vceqq_u8(q1, LINE_FEED);
+        let eq2 = vceqq_u8(q2, LINE_FEED);
+        let eq3 = vceqq_u8(q3, LINE_FEED);
+
+        movemask_64_contiguous(eq0, eq1, eq2, eq3)
     }
 }
 
@@ -174,6 +205,7 @@ where
 
 // computing movemask is significantly more expensive than on x86
 
+/// Movemask for 4 de-interleaved 16-byte vector lanes (from `vld4q_u8`).
 #[inline(always)]
 fn movemask_64(v: uint8x16x4_t) -> u64 {
     // https://stackoverflow.com/questions/74722950/convert-vector-compare-mask-into-bit-mask-in-aarch64-simd-or-arm-neon/74748402#74748402
@@ -186,6 +218,25 @@ fn movemask_64(v: uint8x16x4_t) -> u64 {
             )),
             0,
         )
+    }
+}
+
+/// Movemask for 4 contiguous 16-byte vector lanes (from `vld1q_u8` / `ldp`).
+#[inline(always)]
+unsafe fn movemask_64_contiguous(
+    eq0: uint8x16_t,
+    eq1: uint8x16_t,
+    eq2: uint8x16_t,
+    eq3: uint8x16_t,
+) -> u64 {
+    unsafe {
+        let lo = vsriq_n_u8::<1>(vuzp2q_u8(eq0, eq1), vuzp1q_u8(eq0, eq1));
+        let hi = vsriq_n_u8::<1>(vuzp2q_u8(eq2, eq3), vuzp1q_u8(eq2, eq3));
+        let packed = vsriq_n_u8::<2>(vuzp2q_u8(lo, hi), vuzp1q_u8(lo, hi));
+        let lo_half = vget_low_u8(packed);
+        let hi_half = vget_high_u8(packed);
+        let final_packed = vsri_n_u8::<4>(vuzp2_u8(lo_half, hi_half), vuzp1_u8(lo_half, hi_half));
+        vget_lane_u64::<0>(vreinterpret_u64_u8(final_packed))
     }
 }
 
@@ -211,6 +262,22 @@ mod tests {
             let v = vld4q_u8(buf.as_ptr());
             let mask = map_8x16x4(v, |v| vceqq_u8(v, GREATER_THAN));
             let res = movemask_64(mask);
+            assert_eq!(
+                0b0100010000000000010001000100010001000100000000000100100100010001,
+                res
+            );
+        }
+    }
+
+    #[test]
+    fn movemask_contiguous_test() {
+        unsafe {
+            let buf = *b">CGT>CGT>CG>CG>CGTACGTACGT>CGT>CGT>CGT>CGT>CGT>CGTACGTACGT>CGT>A";
+            let eq0 = vceqq_u8(vld1q_u8(buf.as_ptr()), GREATER_THAN);
+            let eq1 = vceqq_u8(vld1q_u8(buf.as_ptr().add(16)), GREATER_THAN);
+            let eq2 = vceqq_u8(vld1q_u8(buf.as_ptr().add(32)), GREATER_THAN);
+            let eq3 = vceqq_u8(vld1q_u8(buf.as_ptr().add(48)), GREATER_THAN);
+            let res = movemask_64_contiguous(eq0, eq1, eq2, eq3);
             assert_eq!(
                 0b0100010000000000010001000100010001000100000000000100100100010001,
                 res

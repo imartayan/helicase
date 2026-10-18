@@ -6,10 +6,10 @@
 use super::*;
 use crate::config::*;
 use crate::input::*;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Finds the exact byte index of the first FASTA record (`>`) starting at or after `approx_pos`.
 fn find_fasta_record_start(data: &[u8], approx_pos: usize) -> usize {
@@ -186,10 +186,18 @@ where
         return Ok(init());
     }
 
+    if chunks.len() == 1 {
+        let mut state = init();
+        let parser = FastxParser::from_slice(data)?;
+        process(&mut state, parser);
+        return Ok(state);
+    }
+
+    let worker_threads = threads.min(chunks.len());
     let next_chunk = AtomicUsize::new(0);
 
     let results = std::thread::scope(|scope| {
-        let handles: Vec<_> = (0..threads)
+        let handles: Vec<_> = (0..worker_threads)
             .map(|_| {
                 scope.spawn(|| {
                     let mut state = init();
@@ -424,7 +432,7 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
 
     /// Enables zero-copy memory mapping (`mmap`) for maximum throughput on local SSD/NVMe.
     #[inline]
-    pub fn mmap(mut self) -> Self {
+    pub const fn mmap(mut self) -> Self {
         if let ParallelSource::File {
             ref mut use_mmap, ..
         } = self.source
@@ -436,7 +444,7 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
 
     /// Enables multi-reader mode (default for files: no mmap, 128 KiB buffer per thread).
     #[inline]
-    pub fn reader(mut self) -> Self {
+    pub const fn reader(mut self) -> Self {
         if let ParallelSource::File {
             ref mut use_mmap, ..
         } = self.source
@@ -554,12 +562,13 @@ where
         return Ok(state);
     }
 
+    let worker_threads = num_threads.min(chunks.len());
     let next_chunk = AtomicUsize::new(0);
     let init = &init;
     let process = &process;
 
     let results = std::thread::scope(|scope| {
-        let handles: Vec<_> = (0..num_threads)
+        let handles: Vec<_> = (0..worker_threads)
             .map(|_| {
                 scope.spawn(|| -> io::Result<State> {
                     let mut state = init();

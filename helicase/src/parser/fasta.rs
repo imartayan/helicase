@@ -271,7 +271,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
     }
 
     #[inline(always)]
-    fn anchor(&self, line_start: usize) -> usize {
+    const fn anchor(&self, line_start: usize) -> usize {
         if flag_is_set(CONFIG, COMPUTE_HEADER) {
             self.header_range.start
         } else if self.contiguous_dna {

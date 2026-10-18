@@ -294,7 +294,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
     }
 
     #[inline(always)]
-    fn anchor(&self) -> usize {
+    const fn anchor(&self) -> usize {
         if flag_is_set(CONFIG, COMPUTE_HEADER) {
             self.header_range.start
         } else {

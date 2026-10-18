@@ -7,7 +7,7 @@ use core::mem::swap;
 /// Unified container managing on-the-fly 2-bit bitpacking representations
 /// across FASTA and FASTQ parsers.
 #[derive(Default)]
-pub(crate) struct DnaBitpackers {
+pub struct DnaBitpackers {
     pub packed: PackedDNA,
     pub columnar: ColumnarDNA,
     pub mask_non_actg: BitMask,
@@ -144,35 +144,37 @@ impl DnaBitpackers {
         let r = rem_len % 64;
         let mut curr_pos = 0;
 
-        let mut processed_blocks = 0;
-        if need_packed && is_keep && !need_columnar && !need_mask_non_actg && !need_mask_n {
-            self.packed.pack_blocks::<CONFIG>(data, q);
-            processed_blocks = q;
-        } else {
-            for k in 0..q {
-                let block_start = 64 * k;
-                let block_data = &data[block_start..block_start + 64];
-                let m = extract_dna_bitmask::<CONFIG>(block_data);
+        let processed_blocks =
+            if need_packed && is_keep && !need_columnar && !need_mask_non_actg && !need_mask_n {
+                self.packed.pack_blocks::<CONFIG>(data, q);
+                q
+            } else {
+                let mut count = 0;
+                for k in 0..q {
+                    let block_start = 64 * k;
+                    let block_data = &data[block_start..block_start + 64];
+                    let m = extract_dna_bitmask::<CONFIG>(block_data);
 
-                if !is_keep && m.is_dna != !0 {
-                    break;
-                }
+                    if !is_keep && m.is_dna != !0 {
+                        break;
+                    }
 
-                if need_packed {
-                    self.packed.append_block(m.two_bits);
+                    if need_packed {
+                        self.packed.append_block(m.two_bits);
+                    }
+                    if need_columnar {
+                        self.columnar.append_block(m.high_bit, m.low_bit);
+                    }
+                    if need_mask_non_actg {
+                        self.mask_non_actg.append_block(m.mask_non_actg);
+                    }
+                    if need_mask_n {
+                        self.mask_n.append_block(m.mask_n);
+                    }
+                    count += 1;
                 }
-                if need_columnar {
-                    self.columnar.append_block(m.high_bit, m.low_bit);
-                }
-                if need_mask_non_actg {
-                    self.mask_non_actg.append_block(m.mask_non_actg);
-                }
-                if need_mask_n {
-                    self.mask_n.append_block(m.mask_n);
-                }
-                processed_blocks += 1;
-            }
-        }
+                count
+            };
 
         if processed_blocks < q {
             return 64 * processed_blocks;

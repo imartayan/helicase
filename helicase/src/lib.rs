@@ -186,6 +186,8 @@
 //! | `bz2`        | no      | bzip2 decompression |
 //! | `xz`         | no      | xz decompression |
 
+extern crate alloc;
+
 pub mod config;
 pub mod dna_format;
 pub mod input;

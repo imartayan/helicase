@@ -2,8 +2,8 @@ use super::*;
 use crate::config::*;
 use crate::input::*;
 
+use alloc::borrow::Cow;
 use paraseq::Record;
-use std::borrow::Cow;
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> Record for FastaParser<'a, CONFIG, I> {
     #[inline(always)]

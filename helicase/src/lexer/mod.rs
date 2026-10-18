@@ -38,7 +38,7 @@ pub use scan_mode::{
     DNA as SCAN_MODE_DNA, HEADER as SCAN_MODE_HEADER, QUALITY as SCAN_MODE_QUALITY,
 };
 
-pub(crate) struct Bitmask {
+pub struct Bitmask {
     pub line_feeds: u64,
     pub is_dna: u64,
     pub two_bits: u128,
@@ -48,7 +48,7 @@ pub(crate) struct Bitmask {
     pub mask_n: u64,
 }
 
-#[derive(Copy, Clone, Default, PartialEq)]
+#[derive(Copy, Clone, Default, PartialEq, Eq)]
 pub struct Chunk {
     pub len: usize,
     pub newline: u64,
@@ -62,7 +62,7 @@ pub struct Chunk {
 
 impl Chunk {
     #[inline(always)]
-    pub(crate) fn from_mask<const CONFIG: Config>(len: usize, mask: Bitmask) -> Self {
+    pub const fn from_mask<const CONFIG: Config>(len: usize, mask: Bitmask) -> Self {
         let is_dna = if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
             mask.is_dna
         } else if len < 64 {

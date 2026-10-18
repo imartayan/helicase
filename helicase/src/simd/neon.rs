@@ -73,16 +73,6 @@ pub fn extract_bitmask<const CONFIG: Config, const MODE: u8>(buf: &[u8]) -> Bitm
 }
 
 #[inline(always)]
-pub fn extract_fasta_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastaBitmask {
-    extract_bitmask::<CONFIG, SCAN_MODE_DNA>(buf)
-}
-
-#[inline(always)]
-pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
-    extract_bitmask::<CONFIG, SCAN_MODE_DNA>(buf)
-}
-
-#[inline(always)]
 pub fn extract_dna_bitmask<const CONFIG: Config>(buf: &[u8]) -> Bitmask {
     unsafe {
         let ptr = buf.as_ptr();

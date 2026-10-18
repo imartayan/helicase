@@ -1,8 +1,8 @@
 //! Input types and helpers.
 
 use core::marker::PhantomData;
+use core::ops::Range;
 use deko::read::AnyDecoder;
-use memchr::memchr;
 use memmap2::Mmap;
 use std::fs::File;
 use std::io::{self, Read, Stdin, stdin};
@@ -51,8 +51,16 @@ pub trait InputData<'a>: Iterator<Item = io::Result<&'a [u8]>> {
     /// Returns the offset of the buffer.
     ///
     /// This is only relevant for reader-based implementations.
+    #[inline(always)]
     fn buffer_offset(&self) -> usize {
         0
+    }
+
+    /// Returns a slice of the buffered data for the given global byte range.
+    #[inline(always)]
+    fn slice(&self, range: Range<usize>) -> &[u8] {
+        let off = self.buffer_offset();
+        &self.buffer()[range.start - off..range.end - off]
     }
 
     /// Returns `true` if we are reaching the end of the buffer.
@@ -67,37 +75,7 @@ pub trait InputData<'a>: Iterator<Item = io::Result<&'a [u8]>> {
     #[inline(always)]
     fn make_room(&mut self, _keep_from: usize) {}
 
-    /// Grow buffer and load `additional` new bytes.
-    ///
-    /// This is only relevant for reader-based implementations.
-    #[doc(hidden)]
-    #[inline(always)]
-    fn grow_buffer(&mut self, _additional: usize) {}
-
-    /// Scan the remaining buffer for the next `\n` byte without running the
-    /// SIMD lexer.  Advances the internal buffer position past the block that
-    /// contains the newline and returns `(delta_blocks, pos_in_block,
-    /// block_len)`:
-    ///
-    /// - `delta_blocks`: number of full 64-byte blocks skipped *before* the
-    ///   newline block (i.e. `block_counter` should increase by `delta_blocks + 1`).
-    /// - `pos_in_block`: byte offset of `\n` within the newline-containing block.
-    /// - `block_len`: number of valid bytes in the newline-containing block
-    ///   (`64` for a full block, less for the final partial block).
-    ///
-    /// Returns `None` if no `\n` is found in the remaining buffered data
-    /// (caller should fall back to the block-by-block lexer loop).
-    ///
-    /// The caller is responsible for re-running the SIMD scan on `current_block()`
-    /// to obtain fresh `is_dna`, `newline`, and other bitmasks after this call.
-    ///
-    /// This is only relevant for reader-based implementations.
-    #[doc(hidden)]
-    fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)>;
-
     /// Seek internal buffer position to the start of the block after `block_idx`.
-    ///
-    /// This is only relevant for random-access implementations.
     #[doc(hidden)]
     #[inline(always)]
     fn seek_block(&mut self, _block_idx: usize) {}
@@ -106,6 +84,68 @@ pub trait InputData<'a>: Iterator<Item = io::Result<&'a [u8]>> {
 pub trait FromInputData<'a, I: InputData<'a>>: Sized {
     /// Build the struct from a type implementing [`InputData`].
     fn from_input(input: I) -> io::Result<Self>;
+}
+
+macro_rules! delegate_input {
+    ($ty:ident $(<$lt:lifetime>)?, $item_lt:lifetime, $field:ident, $ra:expr) => {
+        impl $(<$lt>)? Iterator for $ty $(<$lt>)? {
+            type Item = io::Result<&$item_lt [u8]>;
+
+            #[inline(always)]
+            fn next(&mut self) -> Option<Self::Item> {
+                self.$field.next()
+            }
+        }
+
+        impl $(<$lt>)? InputData<$item_lt> for $ty $(<$lt>)? {
+            const RANDOM_ACCESS: bool = $ra;
+
+            #[inline(always)]
+            fn first_byte(&self) -> u8 {
+                self.$field.first_byte()
+            }
+
+            #[inline(always)]
+            fn current_block(&self) -> &[u8] {
+                self.$field.current_block()
+            }
+
+            #[inline(always)]
+            fn compression_format(&mut self) -> io::Result<Option<deko::Format>> {
+                self.$field.compression_format()
+            }
+
+            #[inline(always)]
+            fn data(&self) -> &$item_lt [u8] {
+                self.$field.data()
+            }
+
+            #[inline(always)]
+            fn buffer(&self) -> &[u8] {
+                self.$field.buffer()
+            }
+
+            #[inline(always)]
+            fn buffer_offset(&self) -> usize {
+                self.$field.buffer_offset()
+            }
+
+            #[inline(always)]
+            fn is_end_of_buffer(&self) -> bool {
+                self.$field.is_end_of_buffer()
+            }
+
+            #[inline(always)]
+            fn make_room(&mut self, keep_from: usize) {
+                self.$field.make_room(keep_from);
+            }
+
+            #[inline(always)]
+            fn seek_block(&mut self, block_idx: usize) {
+                self.$field.seek_block(block_idx);
+            }
+        }
+    };
 }
 
 /// Slice input.
@@ -193,21 +233,6 @@ impl<'a> InputData<'a> for SliceInput<'a> {
     }
 
     #[inline(always)]
-    fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)> {
-        if self.pos >= self.data.len() {
-            return None;
-        }
-        let p = memchr(b'\n', &self.data[self.pos..])?;
-        let delta_blocks = p / 64;
-        let pos_in_block = p % 64;
-        let block_start = self.pos + delta_blocks * 64;
-        let block_end = (block_start + 64).min(self.data.len());
-        let block_len = block_end - block_start;
-        self.pos = block_start + 64;
-        Some((delta_blocks, pos_in_block, block_len))
-    }
-
-    #[inline(always)]
     fn seek_block(&mut self, block_idx: usize) {
         self.pos = (block_idx + 1) * 64;
     }
@@ -246,53 +271,7 @@ impl<'a> MmapInput<'a> {
     }
 }
 
-impl<'a> Iterator for MmapInput<'a> {
-    type Item = io::Result<&'a [u8]>;
-
-    #[inline(always)]
-    fn next(&mut self) -> Option<Self::Item> {
-        self.slice.next()
-    }
-}
-
-impl<'a> InputData<'a> for MmapInput<'a> {
-    const RANDOM_ACCESS: bool = true;
-
-    #[inline(always)]
-    fn first_byte(&self) -> u8 {
-        self.slice.first_byte()
-    }
-
-    #[inline(always)]
-    fn current_block(&self) -> &[u8] {
-        self.slice.current_block()
-    }
-
-    #[inline(always)]
-    fn data(&self) -> &'a [u8] {
-        self.slice.data()
-    }
-
-    #[inline(always)]
-    fn buffer(&self) -> &[u8] {
-        self.slice.buffer()
-    }
-
-    #[inline(always)]
-    fn is_end_of_buffer(&self) -> bool {
-        self.slice.is_end_of_buffer()
-    }
-
-    #[inline(always)]
-    fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)> {
-        self.slice.skip_to_newline()
-    }
-
-    #[inline(always)]
-    fn seek_block(&mut self, block_idx: usize) {
-        self.slice.seek_block(block_idx);
-    }
-}
+delegate_input!(MmapInput<'a>, 'a, slice, true);
 
 pub trait FromMmap<'a>: FromInputData<'a, MmapInput<'a>> {
     /// Build the struct from a memory-mapped file.
@@ -325,53 +304,7 @@ impl RamFileInput {
     }
 }
 
-impl Iterator for RamFileInput {
-    type Item = io::Result<&'static [u8]>;
-
-    #[inline(always)]
-    fn next(&mut self) -> Option<Self::Item> {
-        self.slice.next()
-    }
-}
-
-impl InputData<'static> for RamFileInput {
-    const RANDOM_ACCESS: bool = true;
-
-    #[inline(always)]
-    fn first_byte(&self) -> u8 {
-        self.slice.first_byte()
-    }
-
-    #[inline(always)]
-    fn current_block(&self) -> &[u8] {
-        self.slice.current_block()
-    }
-
-    #[inline(always)]
-    fn data(&self) -> &'static [u8] {
-        self.slice.data()
-    }
-
-    #[inline(always)]
-    fn buffer(&self) -> &[u8] {
-        self.slice.buffer()
-    }
-
-    #[inline(always)]
-    fn is_end_of_buffer(&self) -> bool {
-        self.slice.is_end_of_buffer()
-    }
-
-    #[inline(always)]
-    fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)> {
-        self.slice.skip_to_newline()
-    }
-
-    #[inline(always)]
-    fn seek_block(&mut self, block_idx: usize) {
-        self.slice.seek_block(block_idx);
-    }
-}
+delegate_input!(RamFileInput, 'static, slice, true);
 
 pub trait FromRamFile: FromInputData<'static, RamFileInput> {
     /// Build the struct from a file entirely loaded in RAM, this is only recommended for small files.
@@ -399,30 +332,48 @@ pub struct ReaderInput<'a, R: Read + Send + 'a> {
 }
 
 impl<'a, R: Read + Send + 'a> ReaderInput<'a, R> {
+    fn fill_buffer(&mut self) {
+        while self.pending_err.is_none() && self.len < self.data.len() {
+            match self.decoder.read(&mut self.data[self.len..]) {
+                Ok(0) => break,
+                Ok(n) => self.len += n,
+                Err(e) => {
+                    self.pending_err = Some(e);
+                    break;
+                }
+            }
+        }
+        let padded = self.len.next_multiple_of(64);
+        self.data[self.len..padded].fill(0);
+    }
+
     pub fn new(reader: R) -> io::Result<Self> {
-        let mut decoder = AnyDecoder::new(reader);
-        let mut data = vec![0; BUFFER_DEFAULT_SIZE];
-        let len = decoder.read(&mut data[..64])?;
-        let first_byte = if len > 0 { data[0] } else { 0 };
-        Ok(Self {
-            data,
-            len,
+        let mut s = Self {
+            data: vec![0; BUFFER_DEFAULT_SIZE],
+            len: 0,
             pos: 0,
             offset: 0,
-            first_byte,
-            decoder,
+            first_byte: 0,
+            decoder: AnyDecoder::new(reader),
             pending_err: None,
             errored: false,
             _phantom: PhantomData,
-        })
+        };
+        s.fill_buffer();
+        if s.len == 0
+            && let Some(e) = s.pending_err.take()
+        {
+            return Err(e);
+        }
+        if s.len > 0 {
+            s.first_byte = s.data[0];
+        }
+        Ok(s)
     }
-}
 
-impl<'a, R: Read + Send + 'a> Iterator for ReaderInput<'a, R> {
-    type Item = io::Result<&'a [u8]>;
-
-    #[inline(always)]
-    fn next(&mut self) -> Option<Self::Item> {
+    #[cold]
+    #[inline(never)]
+    fn next_slow(&mut self) -> Option<io::Result<&'a [u8]>> {
         if self.errored {
             return None;
         }
@@ -433,57 +384,49 @@ impl<'a, R: Read + Send + 'a> Iterator for ReaderInput<'a, R> {
             }
             // Save state so we can restore it on EOF, keeping the buffer valid for
             // zero-copy callers (e.g. get_dna_string) that run after next() returns None.
-            let saved_offset = self.offset;
-            let saved_pos = self.pos;
-            let saved_len = self.len;
+            let (saved_offset, saved_pos, saved_len) = (self.offset, self.pos, self.len);
             self.offset += self.len;
             self.pos = 0;
             self.len = 0;
-            while self.len < self.data.len() {
-                match self.decoder.read(&mut self.data[self.len..]) {
-                    Ok(0) => break,
-                    Ok(n) => self.len += n,
-                    Err(e) => {
-                        if self.len == 0 {
-                            self.offset = saved_offset;
-                            self.pos = saved_pos;
-                            self.len = saved_len;
-                            self.errored = true;
-                            return Some(Err(e));
-                        } else {
-                            self.pending_err = Some(e);
-                            break;
-                        }
-                    }
-                }
-            }
+            self.fill_buffer();
             if self.len == 0 {
-                // EOF: roll back so buffer() still returns the last valid window.
-                self.offset = saved_offset;
-                self.pos = saved_pos;
-                self.len = saved_len;
+                // EOF or error: roll back so buffer() still returns the last valid window.
+                (self.offset, self.pos, self.len) = (saved_offset, saved_pos, saved_len);
+                if let Some(err) = self.pending_err.take() {
+                    self.errored = true;
+                    return Some(Err(err));
+                }
                 return None;
             }
-            let padded_len = self.len.next_multiple_of(64);
-            self.data[self.len..padded_len].fill(0);
         }
         let pos = self.pos;
         self.pos += 64;
+        let len = (self.len - pos).min(64);
+        unsafe {
+            Some(Ok(core::slice::from_raw_parts(
+                self.data.as_ptr().add(pos),
+                len,
+            )))
+        }
+    }
+}
+
+impl<'a, R: Read + Send + 'a> Iterator for ReaderInput<'a, R> {
+    type Item = io::Result<&'a [u8]>;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        let pos = self.pos;
         if pos + 64 <= self.len {
-            unsafe {
+            self.pos = pos + 64;
+            return unsafe {
                 Some(Ok(core::slice::from_raw_parts(
                     self.data.as_ptr().add(pos),
                     64,
                 )))
-            }
-        } else {
-            unsafe {
-                Some(Ok(core::slice::from_raw_parts(
-                    self.data.as_ptr().add(pos),
-                    self.len - pos,
-                )))
-            }
+            };
         }
+        self.next_slow()
     }
 }
 
@@ -497,16 +440,7 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
 
     #[inline(always)]
     fn current_block(&self) -> &[u8] {
-        if 64 <= self.pos && self.pos <= self.len {
-            unsafe { core::slice::from_raw_parts(self.data.as_ptr().add(self.pos - 64), 64) }
-        } else {
-            unsafe {
-                core::slice::from_raw_parts(
-                    self.data.as_ptr().add((self.len / 64) * 64),
-                    self.len % 64,
-                )
-            }
-        }
+        unsafe { core::slice::from_raw_parts(self.data.as_ptr().add(self.pos - 64), 64) }
     }
 
     #[inline(always)]
@@ -534,24 +468,18 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
         self.pos >= self.len
     }
 
-    #[inline(always)]
+    #[cold]
+    #[inline(never)]
     fn make_room(&mut self, keep_from: usize) {
         // Round the shift down to a 64-byte multiple so that `pos` (which is
-        // always a multiple of 64) stays aligned after the copy.  A non-aligned
-        // shift would leave `pos` non-aligned, causing `next()` to emit 0-length
-        // sentinel blocks at buffer boundaries and desynchronise the parser.
-        let shift = keep_from.saturating_sub(self.offset);
-        let aligned_shift = (shift / 64) * 64;
+        // always a multiple of 64) stays aligned after the copy.
+        let aligned_shift = (keep_from.saturating_sub(self.offset) / 64) * 64;
         if aligned_shift > 0 {
             self.data.copy_within(aligned_shift..self.len, 0);
             self.len -= aligned_shift;
             self.pos -= aligned_shift;
             self.offset += aligned_shift;
-        } else {
-            // The shift is smaller than 64 bytes (or keep_from is already behind
-            // the buffer start).  Grow the buffer instead so there is room to
-            // refill without overwriting data we still need.
-            // Policy mirrors needletail: double until 8 MiB, then +8 MiB per step.
+        } else if self.len == self.data.len() {
             let new_size = if self.data.len() < BUFFER_DOUBLE_UNTIL {
                 self.data.len() * 2
             } else {
@@ -559,55 +487,12 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
             };
             self.data.resize(new_size, 0);
         }
-        while self.len < self.data.len() {
-            match self.decoder.read(&mut self.data[self.len..]) {
-                Ok(0) => break,
-                Ok(n) => self.len += n,
-                Err(e) => {
-                    self.pending_err = Some(e);
-                    break;
-                }
-            }
-        }
-        let padded = self.len.next_multiple_of(64);
-        self.data[self.len..padded].fill(0);
+        self.fill_buffer();
     }
 
     #[inline(always)]
-    fn grow_buffer(&mut self, additional: usize) {
-        self.data.resize(self.len + additional, 0);
-        match self.decoder.read(&mut self.data[self.len..]) {
-            Ok(n) => {
-                self.len += n;
-            }
-            Err(e) => {
-                self.pending_err = Some(e);
-            }
-        }
-        let padded_len = self.len.next_multiple_of(64);
-        self.data[self.len..padded_len].fill(0);
-    }
-
-    #[inline(always)]
-    fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)> {
-        // self.pos is always a multiple of 64 and points to the start of the
-        // next block that would be returned by Iterator::next().  Scan from
-        // there through the end of valid data for '\n'.
-        if self.pos >= self.len {
-            return None;
-        }
-        let p = memchr(b'\n', &self.data[self.pos..self.len])?;
-        // p is a byte offset from self.pos.
-        let delta_blocks = p / 64; // full 64-byte blocks before the \n block
-        let pos_in_block = p % 64; // position of \n within its block
-        let block_start = self.pos + delta_blocks * 64;
-        let block_end = (block_start + 64).min(self.len);
-        let block_len = block_end - block_start;
-        // Advance past the block that contains the newline so the next
-        // Iterator::next() call (from consume_newline to increment_pos) will
-        // correctly load the block that follows the quality line.
-        self.pos = block_start + 64;
-        Some((delta_blocks, pos_in_block, block_len))
+    fn seek_block(&mut self, block_idx: usize) {
+        self.pos = (block_idx + 1) * 64 - self.offset;
     }
 }
 
@@ -636,63 +521,7 @@ impl FileInput {
     }
 }
 
-impl Iterator for FileInput {
-    type Item = io::Result<&'static [u8]>;
-
-    #[inline(always)]
-    fn next(&mut self) -> Option<Self::Item> {
-        self.reader.next()
-    }
-}
-
-impl InputData<'static> for FileInput {
-    const RANDOM_ACCESS: bool = false;
-
-    #[inline(always)]
-    fn first_byte(&self) -> u8 {
-        self.reader.first_byte()
-    }
-
-    #[inline(always)]
-    fn current_block(&self) -> &[u8] {
-        self.reader.current_block()
-    }
-
-    #[inline(always)]
-    fn compression_format(&mut self) -> io::Result<Option<deko::Format>> {
-        self.reader.compression_format()
-    }
-
-    #[inline(always)]
-    fn buffer(&self) -> &[u8] {
-        self.reader.buffer()
-    }
-
-    #[inline(always)]
-    fn buffer_offset(&self) -> usize {
-        self.reader.buffer_offset()
-    }
-
-    #[inline(always)]
-    fn is_end_of_buffer(&self) -> bool {
-        self.reader.is_end_of_buffer()
-    }
-
-    #[inline(always)]
-    fn make_room(&mut self, keep_from: usize) {
-        self.reader.make_room(keep_from)
-    }
-
-    #[inline(always)]
-    fn grow_buffer(&mut self, additional: usize) {
-        self.reader.grow_buffer(additional)
-    }
-
-    #[inline(always)]
-    fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)> {
-        self.reader.skip_to_newline()
-    }
-}
+delegate_input!(FileInput, 'static, reader, false);
 
 pub trait FromFile: FromInputData<'static, FileInput> {
     /// Build the struct from a file.
@@ -721,63 +550,7 @@ impl StdinInput {
     }
 }
 
-impl Iterator for StdinInput {
-    type Item = io::Result<&'static [u8]>;
-
-    #[inline(always)]
-    fn next(&mut self) -> Option<Self::Item> {
-        self.reader.next()
-    }
-}
-
-impl InputData<'static> for StdinInput {
-    const RANDOM_ACCESS: bool = false;
-
-    #[inline(always)]
-    fn first_byte(&self) -> u8 {
-        self.reader.first_byte()
-    }
-
-    #[inline(always)]
-    fn current_block(&self) -> &[u8] {
-        self.reader.current_block()
-    }
-
-    #[inline(always)]
-    fn compression_format(&mut self) -> io::Result<Option<deko::Format>> {
-        self.reader.compression_format()
-    }
-
-    #[inline(always)]
-    fn buffer(&self) -> &[u8] {
-        self.reader.buffer()
-    }
-
-    #[inline(always)]
-    fn buffer_offset(&self) -> usize {
-        self.reader.buffer_offset()
-    }
-
-    #[inline(always)]
-    fn is_end_of_buffer(&self) -> bool {
-        self.reader.is_end_of_buffer()
-    }
-
-    #[inline(always)]
-    fn make_room(&mut self, keep_from: usize) {
-        self.reader.make_room(keep_from)
-    }
-
-    #[inline(always)]
-    fn grow_buffer(&mut self, additional: usize) {
-        self.reader.grow_buffer(additional)
-    }
-
-    #[inline(always)]
-    fn skip_to_newline(&mut self) -> Option<(usize, usize, usize)> {
-        self.reader.skip_to_newline()
-    }
-}
+delegate_input!(StdinInput, 'static, reader, false);
 
 pub trait FromStdin: FromInputData<'static, StdinInput> {
     /// Build the struct from stdin.

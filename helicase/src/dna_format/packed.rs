@@ -102,13 +102,40 @@ impl PackedDNA {
     }
 
     #[inline(always)]
-    pub fn bits_mut(&mut self) -> &mut Vec<u64> {
-        self.bits.get_mut()
-    }
-
-    #[inline(always)]
-    pub fn add_bits(&mut self, bits: usize) {
-        self.num_bits += bits;
+    pub(crate) fn pack_blocks<const CONFIG: crate::config::Config>(
+        &mut self,
+        data: &[u8],
+        q: usize,
+    ) {
+        let rem = self.num_bits % BITS_PER_BLOCK;
+        self.num_bits += 128 * q;
+        let bits = self.bits.get_mut();
+        let start_len = bits.len();
+        unsafe {
+            bits.set_len(start_len + 2 * q);
+            let mut p = bits.as_mut_ptr().add(start_len);
+            if rem == 0 {
+                for k in 0..q {
+                    let m = crate::simd::extract_dna_bitmask::<CONFIG>(&data[64 * k..64 * (k + 1)]);
+                    p.write(m.two_bits as u64);
+                    p.add(1).write((m.two_bits >> 64) as u64);
+                    p = p.add(2);
+                }
+            } else {
+                let inv = BITS_PER_BLOCK - rem;
+                let mut cur = self.cur;
+                for k in 0..q {
+                    let m = crate::simd::extract_dna_bitmask::<CONFIG>(&data[64 * k..64 * (k + 1)]);
+                    let lo = m.two_bits as u64;
+                    let hi = (m.two_bits >> 64) as u64;
+                    p.write(cur | (lo << rem));
+                    p.add(1).write((lo >> inv) | (hi << rem));
+                    cur = hi >> inv;
+                    p = p.add(2);
+                }
+                self.cur = cur;
+            }
+        }
     }
 
     #[inline(always)]

@@ -146,20 +146,7 @@ impl DnaBitpackers {
 
         let mut processed_blocks = 0;
         if need_packed && is_keep && !need_columnar && !need_mask_non_actg && !need_mask_n {
-            let bits = self.packed.bits_mut();
-            let start_len = bits.len();
-            unsafe {
-                bits.set_len(start_len + 2 * q);
-                let mut p = bits.as_mut_ptr().add(start_len);
-                for k in 0..q {
-                    let block_data = &data[64 * k..64 * (k + 1)];
-                    let m = extract_dna_bitmask::<CONFIG>(block_data);
-                    p.write(m.two_bits as u64);
-                    p.add(1).write((m.two_bits >> 64) as u64);
-                    p = p.add(2);
-                }
-            }
-            self.packed.add_bits(128 * q);
+            self.packed.pack_blocks::<CONFIG>(data, q);
             processed_blocks = q;
         } else {
             for k in 0..q {
@@ -232,20 +219,4 @@ impl DnaBitpackers {
 
         curr_pos
     }
-}
-
-/// Finds the end of a line, returning `(rem_len, raw_len)` where `rem_len`
-/// excludes `\r` and `\n`, and `raw_len` is the offset to the newline.
-#[inline(always)]
-pub(crate) fn find_line_end(data: &[u8], curr_pos: usize) -> Option<(usize, usize)> {
-    if curr_pos >= data.len() {
-        return None;
-    }
-    let newline_offset = memchr::memchr(b'\n', &data[curr_pos..]);
-    let raw_len = newline_offset.unwrap_or(data.len() - curr_pos);
-    let mut rem_len = raw_len;
-    if newline_offset.is_some() && rem_len > 0 && data[curr_pos + rem_len - 1] == b'\r' {
-        rem_len -= 1;
-    }
-    Some((rem_len, raw_len))
 }

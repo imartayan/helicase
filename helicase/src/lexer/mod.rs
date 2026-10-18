@@ -1,12 +1,11 @@
 //! Lexer types, bitmasks, and scanning modes.
 
 use crate::config::{advanced::*, *};
-
-mod fasta;
-mod fastq;
-
-pub use fasta::*;
-pub use fastq::*;
+use crate::input::*;
+use crate::parser::DnaBitpackers;
+use crate::simd::extract_bitmask;
+use core::marker::PhantomData;
+use std::io;
 
 /// Context-aware scanning modes for 64-byte SIMD kernels.
 ///
@@ -86,5 +85,183 @@ impl Chunk {
             mask_non_actg,
             mask_n: mask.mask_n,
         }
+    }
+}
+
+pub struct Lexer<'a, const CONFIG: Config, I: InputData<'a>> {
+    pub(crate) input: I,
+    _phantom: PhantomData<&'a [u8]>,
+}
+
+impl<'a, const CONFIG: Config, I: InputData<'a>> FromInputData<'a, I> for Lexer<'a, CONFIG, I> {
+    fn from_input(input: I) -> io::Result<Self> {
+        Ok(Self {
+            input,
+            _phantom: PhantomData,
+        })
+    }
+}
+
+impl<'a, const CONFIG: Config, I: InputData<'a>> Lexer<'a, CONFIG, I> {
+    #[inline(always)]
+    pub(crate) fn scan_current_block(&self, len: usize) -> Chunk {
+        Chunk::from_mask::<CONFIG>(
+            len,
+            extract_bitmask::<CONFIG, SCAN_MODE_DNA>(self.input.current_block()),
+        )
+    }
+
+    #[inline(always)]
+    pub(crate) fn next_in_header(&mut self) -> Option<io::Result<Chunk>> {
+        self.input.next().map(|res| {
+            res.map(|chunk| {
+                Chunk::from_mask::<CONFIG>(
+                    chunk.len(),
+                    extract_bitmask::<CONFIG, SCAN_MODE_HEADER>(chunk),
+                )
+            })
+        })
+    }
+
+    #[inline(always)]
+    pub(crate) fn next_in_non_dna(&mut self) -> Option<io::Result<Chunk>> {
+        self.input.next().map(|res| {
+            res.map(|chunk| {
+                Chunk::from_mask::<CONFIG>(
+                    chunk.len(),
+                    extract_bitmask::<CONFIG, SCAN_MODE_QUALITY>(chunk),
+                )
+            })
+        })
+    }
+
+    #[inline(always)]
+    pub(crate) fn skip_long_dna(
+        &mut self,
+        bitpackers: &mut DnaBitpackers,
+        dna_len: &mut usize,
+        block_counter: &mut usize,
+        anchor: usize,
+        keep_anchor: bool,
+    ) {
+        let mut curr_pos = (*block_counter + 1) * 64;
+        loop {
+            let buf_off = self.input.buffer_offset();
+            let data = self.input.buffer();
+            let data_len = data.len();
+            if curr_pos < buf_off + data_len {
+                let local_curr = curr_pos - buf_off;
+                let nl_opt = memchr::memchr(b'\n', &data[local_curr..]);
+                let rem_len = match nl_opt {
+                    Some(nl_off) => nl_off,
+                    None if I::RANDOM_ACCESS => data_len - local_curr,
+                    None => (data_len - local_curr).saturating_sub(64),
+                };
+                let aligned_len = rem_len & !63;
+                if aligned_len > 0 {
+                    let packed_bytes =
+                        bitpackers.pack_contiguous::<CONFIG>(&data[local_curr..], aligned_len);
+                    if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
+                        *dna_len += packed_bytes;
+                    }
+                    curr_pos += packed_bytes;
+                    *block_counter = curr_pos / 64 - 1;
+                    self.input.seek_block(*block_counter);
+                    if packed_bytes < aligned_len {
+                        return;
+                    }
+                }
+                if nl_opt.is_some() || I::RANDOM_ACCESS {
+                    return;
+                }
+            }
+            if I::RANDOM_ACCESS {
+                return;
+            }
+            let prev_end = buf_off + data_len;
+            self.input
+                .make_room(if keep_anchor { anchor } else { curr_pos });
+            if self.input.buffer_offset() + self.input.buffer().len() <= prev_end {
+                return;
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn skip_quality_line(
+        &mut self,
+        target_pos: usize,
+        block_counter: &mut usize,
+        pos_in_block: &mut usize,
+        block: &mut Chunk,
+        anchor: usize,
+        keep_anchor: bool,
+    ) {
+        if !I::RANDOM_ACCESS {
+            let mut curr_pos = (*block_counter + 1) * 64;
+            while target_pos >= self.input.buffer_offset() + self.input.buffer().len() {
+                let buf_off = self.input.buffer_offset();
+                let data_len = self.input.buffer().len();
+                let skip_bytes = (data_len - (curr_pos - buf_off)).saturating_sub(64) & !63;
+                if skip_bytes > 0 {
+                    curr_pos += skip_bytes;
+                    *block_counter = curr_pos / 64 - 1;
+                    self.input.seek_block(*block_counter);
+                }
+                let prev_end = buf_off + data_len;
+                self.input
+                    .make_room(if keep_anchor { anchor } else { curr_pos });
+                if self.input.buffer_offset() + self.input.buffer().len() <= prev_end {
+                    return;
+                }
+            }
+        }
+        let buf_off = self.input.buffer_offset();
+        let data = self.input.buffer();
+        let data_len = data.len();
+        if target_pos < buf_off + data_len && data[target_pos - buf_off] == b'\n' {
+            *block_counter = target_pos / 64;
+            *pos_in_block = target_pos % 64;
+            self.input.seek_block(*block_counter);
+            let block_len = 64.min(buf_off + data_len - *block_counter * 64);
+            *block = Chunk::from_mask::<CONFIG>(
+                block_len,
+                extract_bitmask::<CONFIG, SCAN_MODE_QUALITY>(self.input.current_block()),
+            );
+        }
+    }
+}
+
+impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for Lexer<'a, CONFIG, I> {
+    type Item = io::Result<Chunk>;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.input.next().map(|res| {
+            res.map(|chunk| {
+                Chunk::from_mask::<CONFIG>(
+                    chunk.len(),
+                    extract_bitmask::<CONFIG, SCAN_MODE_DNA>(chunk),
+                )
+            })
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const CONFIG_COLUMNAR: Config = ParserOptions::default().dna_columnar().config();
+
+    #[test]
+    fn test_lexer() {
+        let fasta = b">head\nACGT\n";
+        let chunk = Lexer::<CONFIG_COLUMNAR, _>::from_slice(fasta)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert_eq!(chunk.len, 11);
+        assert_eq!(chunk.newline, (1 << 5) | (1 << 10));
     }
 }

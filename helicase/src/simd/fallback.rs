@@ -61,16 +61,6 @@ pub fn extract_bitmask<const CONFIG: Config, const _MODE: u8>(buf: &[u8]) -> Bit
 }
 
 #[inline(always)]
-pub fn extract_fasta_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastaBitmask {
-    extract_bitmask::<CONFIG, SCAN_MODE_DNA>(buf)
-}
-
-#[inline(always)]
-pub fn extract_fastq_bitmask<const CONFIG: Config>(buf: &[u8]) -> FastqBitmask {
-    extract_bitmask::<CONFIG, SCAN_MODE_DNA>(buf)
-}
-
-#[inline(always)]
 pub fn extract_dna_bitmask<const CONFIG: Config>(buf: &[u8]) -> Bitmask {
     let mut is_dna = !0;
     let mut two_bits = 0;

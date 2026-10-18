@@ -34,10 +34,10 @@ use std::io;
 /// }
 /// ```
 pub struct FastqParser<'a, const CONFIG: Config, I: InputData<'a>> {
-    lexer: FastqLexer<'a, CONFIG, I>,
+    lexer: Lexer<'a, CONFIG, I>,
     finished: bool,
     line_count: usize,
-    block: FastqChunk,
+    block: Chunk,
     block_counter: usize,
     pos_in_block: usize,
     header_range: Range<usize>,
@@ -51,7 +51,7 @@ pub struct FastqParser<'a, const CONFIG: Config, I: InputData<'a>> {
 }
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
-    fn from_lexer(mut lexer: FastqLexer<'a, CONFIG, I>) -> Self {
+    fn from_lexer(mut lexer: Lexer<'a, CONFIG, I>) -> Self {
         let mut finished: bool = false;
         let mut pending_error = None;
         let block = match lexer.next() {
@@ -59,11 +59,11 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
             Some(Err(e)) => {
                 finished = true;
                 pending_error = Some(e);
-                FastqChunk::default()
+                Chunk::default()
             }
             None => {
                 finished = true;
-                FastqChunk::default()
+                Chunk::default()
             }
         };
         Self {
@@ -89,7 +89,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FromInputData<'a, I>
     for FastqParser<'a, CONFIG, I>
 {
     fn from_input(input: I) -> io::Result<Self> {
-        let lexer = FastqLexer::from_input(input)?;
+        let lexer = Lexer::from_input(input)?;
         if lexer.input.first_byte() != b'@' {
             return Err(io::Error::other("Invalid record start, expected '@'"));
         }
@@ -124,26 +124,12 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
         if flag_is_not_set(CONFIG, COMPUTE_HEADER) {
             panic!("Parser config error: headers are ignored")
         }
-        if I::RANDOM_ACCESS {
-            &self.lexer.input.data()[self.header_range.clone()]
-        } else {
-            let off = self.lexer.input.buffer_offset();
-            &self.lexer.input.buffer()[self.header_range.start - off..self.header_range.end - off]
-        }
+        self.lexer.input.slice(self.header_range.clone())
     }
 
     #[inline(always)]
     fn get_header_owned(&mut self) -> Vec<u8> {
-        if flag_is_not_set(CONFIG, COMPUTE_HEADER) {
-            panic!("Parser config error: headers are ignored")
-        }
-        if I::RANDOM_ACCESS {
-            self.lexer.input.data()[self.header_range.clone()].to_vec()
-        } else {
-            let off = self.lexer.input.buffer_offset();
-            self.lexer.input.buffer()[self.header_range.start - off..self.header_range.end - off]
-                .to_vec()
-        }
+        self.get_header().to_vec()
     }
 
     #[inline(always)]
@@ -151,31 +137,12 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
         if flag_is_not_set(CONFIG, COMPUTE_QUALITY) {
             panic!("Parser config error: quality is ignored")
         }
-        if I::RANDOM_ACCESS {
-            Some(&self.lexer.input.data()[self.quality_range.clone()])
-        } else {
-            // Zero-copy: make_room guarantees quality lives at buf[start-off..end-off].
-            let off = self.lexer.input.buffer_offset();
-            let buf = self.lexer.input.buffer();
-            Some(&buf[self.quality_range.start - off..self.quality_range.end - off])
-        }
+        Some(self.lexer.input.slice(self.quality_range.clone()))
     }
 
     #[inline(always)]
     fn get_quality_owned(&mut self) -> Option<Vec<u8>> {
-        if flag_is_not_set(CONFIG, COMPUTE_QUALITY) {
-            panic!("Parser config error: quality is ignored")
-        }
-        if I::RANDOM_ACCESS {
-            Some(self.lexer.input.data()[self.quality_range.clone()].to_vec())
-        } else {
-            let off = self.lexer.input.buffer_offset();
-            Some(
-                self.lexer.input.buffer()
-                    [self.quality_range.start - off..self.quality_range.end - off]
-                    .to_vec(),
-            )
-        }
+        self.get_quality().map(|q| q.to_vec())
     }
 
     #[inline(always)]
@@ -183,16 +150,10 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
         if flag_is_not_set(CONFIG, COMPUTE_DNA_STRING) {
             panic!("Parser config error: dna_string is not enabled")
         }
-        // Zero-copy unless we're merging split chunks (non-contiguous in the buffer).
         if flag_is_set(CONFIG, SPLIT_NON_ACTG) && flag_is_set(CONFIG, MERGE_DNA_CHUNKS) {
-            return &self.cur_dna_string;
-        }
-        if I::RANDOM_ACCESS {
-            &self.lexer.input.data()[self.dna_range.clone()]
+            &self.cur_dna_string
         } else {
-            let off = self.lexer.input.buffer_offset();
-            let buf = self.lexer.input.buffer();
-            &buf[self.dna_range.start - off..self.dna_range.end - off]
+            self.lexer.input.slice(self.dna_range.clone())
         }
     }
 
@@ -204,13 +165,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
         if flag_is_set(CONFIG, SPLIT_NON_ACTG) && flag_is_set(CONFIG, MERGE_DNA_CHUNKS) {
             let mut res = Vec::with_capacity(self.cur_dna_string.capacity());
             swap(&mut res, &mut self.cur_dna_string);
-            return res;
-        }
-        if I::RANDOM_ACCESS {
-            self.lexer.input.data()[self.dna_range.clone()].to_vec()
+            res
         } else {
-            let off = self.lexer.input.buffer_offset();
-            self.lexer.input.buffer()[self.dna_range.start - off..self.dna_range.end - off].to_vec()
+            self.lexer.input.slice(self.dna_range.clone()).to_vec()
         }
     }
 
@@ -336,7 +293,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
         self.line_count += 1;
     }
 
-    /// Earliest file offset that must stay in the buffer for zero-copy access.
     #[inline(always)]
     fn anchor(&self) -> usize {
         if flag_is_set(CONFIG, COMPUTE_HEADER) {
@@ -346,13 +302,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
         }
     }
 
-    /// Keep the record anchor in the buffer inside a section loop.
-    /// CONFIG predicates are first so the call compiles away when not needed.
     #[inline(always)]
     fn make_room_record(&mut self) {
-        if (flag_is_set(CONFIG, COMPUTE_HEADER)
-            || (flag_is_set(CONFIG, COMPUTE_DNA_STRING)
-                && !(flag_is_set(CONFIG, SPLIT_NON_ACTG) && flag_is_set(CONFIG, MERGE_DNA_CHUNKS))))
+        if flag_is_set(CONFIG, COMPUTE_HEADER | COMPUTE_DNA_STRING)
             && !I::RANDOM_ACCESS
             && self.lexer.input.is_end_of_buffer()
         {
@@ -360,13 +312,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
         }
     }
 
-    /// Same as `make_room_record` but also requires being at the last byte of a
-    /// block so the *next* `lexer.next()` will load fresh data.
     #[inline(always)]
     fn make_room_record_end(&mut self) {
-        if (flag_is_set(CONFIG, COMPUTE_HEADER)
-            || (flag_is_set(CONFIG, COMPUTE_DNA_STRING)
-                && !(flag_is_set(CONFIG, SPLIT_NON_ACTG) && flag_is_set(CONFIG, MERGE_DNA_CHUNKS))))
+        if flag_is_set(CONFIG, COMPUTE_HEADER | COMPUTE_DNA_STRING)
             && !I::RANDOM_ACCESS
             && self.pos_in_block + 1 >= self.block.len
             && self.lexer.input.is_end_of_buffer()
@@ -375,14 +323,10 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
         }
     }
 
-    /// Keep quality in the buffer for configs without a record anchor
-    /// (no header, no contiguous zero-copy DNA).
     #[inline(always)]
     fn make_room_quality(&mut self) {
         if flag_is_set(CONFIG, COMPUTE_QUALITY)
-            && !flag_is_set(CONFIG, COMPUTE_HEADER)
-            && !(flag_is_set(CONFIG, COMPUTE_DNA_STRING)
-                && !(flag_is_set(CONFIG, SPLIT_NON_ACTG) && flag_is_set(CONFIG, MERGE_DNA_CHUNKS)))
+            && flag_is_not_set(CONFIG, COMPUTE_HEADER | COMPUTE_DNA_STRING)
             && !I::RANDOM_ACCESS
             && self.lexer.input.is_end_of_buffer()
         {
@@ -390,13 +334,10 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
         }
     }
 
-    /// Same as `make_room_quality` with the block-end check.
     #[inline(always)]
     fn make_room_quality_end(&mut self) {
         if flag_is_set(CONFIG, COMPUTE_QUALITY)
-            && !flag_is_set(CONFIG, COMPUTE_HEADER)
-            && !(flag_is_set(CONFIG, COMPUTE_DNA_STRING)
-                && !(flag_is_set(CONFIG, SPLIT_NON_ACTG) && flag_is_set(CONFIG, MERGE_DNA_CHUNKS)))
+            && flag_is_not_set(CONFIG, COMPUTE_HEADER | COMPUTE_DNA_STRING)
             && !I::RANDOM_ACCESS
             && self.pos_in_block + 1 >= self.block.len
             && self.lexer.input.is_end_of_buffer()
@@ -404,6 +345,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
             self.lexer.input.make_room(self.quality_range.start);
         }
     }
+
     #[inline(always)]
     fn append_dna_range(&mut self, start: usize, len: usize) {
         self.bitpackers
@@ -414,56 +356,11 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
     }
 
     #[inline(always)]
-    fn append_dna_block_from(&mut self, block: FastqChunk) {
+    fn append_dna_block_from(&mut self, block: Chunk) {
         self.bitpackers.append_block_from::<CONFIG>(&block);
         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
             self.dna_len += 64;
         }
-    }
-
-    #[inline(always)]
-    fn try_long_sequence(&mut self) -> Option<Option<Event>> {
-        let data = self.lexer.input.data();
-        let curr_pos = (self.block_counter + 1) * 64;
-        let (rem_len, raw_len) = find_line_end(data, curr_pos)?;
-        let next_pos = curr_pos + raw_len;
-
-        let need_len = flag_is_set(CONFIG, COMPUTE_DNA_LEN);
-        let packed_bytes = self
-            .bitpackers
-            .pack_contiguous::<CONFIG>(&data[curr_pos..], rem_len);
-        if need_len {
-            self.dna_len += packed_bytes;
-        }
-
-        if packed_bytes < rem_len {
-            let resume_pos = curr_pos + packed_bytes;
-            self.dna_range.end = resume_pos;
-            self.block_counter = resume_pos / 64;
-            self.pos_in_block = resume_pos % 64;
-            self.lexer.input.seek_block(self.block_counter);
-            let block_len = 64.min(data.len().saturating_sub(self.block_counter * 64));
-            self.block = self.lexer.scan_current_block(block_len);
-            return Some(None);
-        }
-
-        self.dna_range.end = curr_pos + rem_len;
-        self.block_counter = next_pos / 64;
-        self.pos_in_block = next_pos % 64;
-        self.lexer.input.seek_block(self.block_counter);
-        if next_pos >= data.len() {
-            self.finished = true;
-            return Some(self.return_error_or_none());
-        }
-        let block_len = 64.min(data.len().saturating_sub(self.block_counter * 64));
-        self.block = self.lexer.scan_current_block(block_len);
-        self.make_room_record_end();
-        self.consume_newline();
-
-        if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
-            return Some(Some(Event::DnaChunk(self.dna_range.clone())));
-        }
-        Some(None)
     }
 }
 
@@ -472,7 +369,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
-        'parser_loop: loop {
+        loop {
             match self.line_count % 4 {
                 0 => {
                     // HEADER
@@ -510,13 +407,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         self.pos_in_block = 0;
                     }
                     self.pos_in_block = self.block.newline.trailing_zeros() as usize;
-                    if flag_is_set(CONFIG, COMPUTE_HEADER) {
-                        self.header_range.end = self.global_pos();
-                    }
-                    // Zero-copy header: if the header newline is at the very end of the
-                    // buffer, consume_newline() -> increment_pos() -> lexer.next() would
-                    // reload the buffer (advancing buffer_offset past header_range.start).
-                    // Anchor the buffer at header_range.start first.
+                    self.header_range.end = self.global_pos();
                     if flag_is_set(CONFIG, COMPUTE_HEADER)
                         && !I::RANDOM_ACCESS
                         && self.pos_in_block + 1 >= self.block.len
@@ -529,10 +420,10 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                 1 => {
                     // SEQUENCE
                     if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
-                        // skip to dna or newline
                         let mask = !0 << self.pos_in_block;
                         let mut position = (self.block.is_dna | self.block.newline) & mask;
                         while position == 0 {
+                            self.make_room_record();
                             self.block = match self.lexer.next() {
                                 Some(Ok(b)) => b,
                                 Some(Err(e)) => {
@@ -551,12 +442,13 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         }
                         self.pos_in_block = position.trailing_zeros() as usize;
                         if ((1 << self.pos_in_block) & self.block.newline) != 0 {
+                            self.dna_range.end = self.global_pos();
+                            self.make_room_record_end();
                             self.consume_newline();
                             continue;
                         }
                     }
 
-                    // skip to non dna
                     let mask = !0 << self.pos_in_block;
                     let mut position = !self.block.is_dna & mask;
                     if flag_is_not_set(CONFIG, MERGE_DNA_CHUNKS) {
@@ -569,19 +461,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                     if position != 0 {
                         let first_pos = self.pos_in_block;
                         self.pos_in_block = position.trailing_zeros() as usize;
-                        if merge_chunks && !I::RANDOM_ACCESS {
-                            let dna_chunk =
-                                &self.lexer.input.current_block()[first_pos..self.pos_in_block];
-                            self.cur_dna_string.extend_from_slice(dna_chunk);
-                        }
                         self.append_dna_range(first_pos, self.pos_in_block - first_pos);
                     } else {
                         if self.pos_in_block > 0 {
-                            if merge_chunks && !I::RANDOM_ACCESS {
-                                let dna_chunk =
-                                    &self.lexer.input.current_block()[self.pos_in_block..];
-                                self.cur_dna_string.extend_from_slice(dna_chunk);
-                            }
                             self.make_room_record();
                             self.append_dna_range(self.pos_in_block, 64 - self.pos_in_block);
                             self.block = match self.lexer.next() {
@@ -603,25 +485,20 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         let mut block = self.block;
                         let mut dna_blocks: usize = 0;
                         while position == 0 {
-                            if merge_chunks && !I::RANDOM_ACCESS {
-                                let dna_chunk = self.lexer.input.current_block();
-                                self.cur_dna_string.extend_from_slice(dna_chunk);
-                            }
-                            // For file-backed inputs: shift the record anchor to the front of
-                            // the buffer and refill so zero-copy access remains valid later.
                             self.make_room_record();
                             self.append_dna_block_from(block);
                             dna_blocks += 1;
 
-                            if dna_blocks == 16
-                                && I::RANDOM_ACCESS
-                                && !merge_chunks
-                                && let Some(event_opt) = self.try_long_sequence()
-                            {
-                                if let Some(event) = event_opt {
-                                    return Some(event);
-                                }
-                                continue 'parser_loop;
+                            if dna_blocks == 16 && !merge_chunks {
+                                let anchor = self.anchor();
+                                self.lexer.skip_long_dna(
+                                    &mut self.bitpackers,
+                                    &mut self.dna_len,
+                                    &mut self.block_counter,
+                                    anchor,
+                                    flag_is_set(CONFIG, COMPUTE_HEADER | COMPUTE_DNA_STRING),
+                                );
+                                dna_blocks = 15;
                             }
                             block = match self.lexer.next() {
                                 Some(Ok(b)) => b,
@@ -642,16 +519,12 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         }
                         self.block = block;
                         self.pos_in_block = position.trailing_zeros() as usize;
-                        if merge_chunks && !I::RANDOM_ACCESS {
-                            let dna_chunk = &self.lexer.input.current_block()[..self.pos_in_block];
-                            self.cur_dna_string.extend_from_slice(dna_chunk);
-                        }
                         self.append_dna_range(0, self.pos_in_block);
                     }
                     self.dna_range.end = self.global_pos();
-                    if merge_chunks && I::RANDOM_ACCESS {
-                        self.cur_dna_string
-                            .extend_from_slice(&self.lexer.input.data()[self.dna_range.clone()]);
+                    if merge_chunks {
+                        let dna_chunk = self.lexer.input.slice(self.dna_range.clone());
+                        self.cur_dna_string.extend_from_slice(dna_chunk);
                     }
                     self.make_room_record_end();
                     if flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
@@ -688,33 +561,31 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                 }
                 3 => {
                     // QUALITY
+                    let qual_start = self.global_pos();
                     if flag_is_set(CONFIG, COMPUTE_QUALITY) {
-                        self.quality_range.start = self.global_pos();
+                        self.quality_range.start = qual_start;
                     }
-                    // Fast path: skip the quality line with memchr, bypassing the
-                    // block-by-block SIMD lexer.  Applies to all input types
-                    // (random-access and reader-backed) and all output configs.
-                    // For reader-backed inputs, make_room before scanning if the
-                    // buffer is exhausted (DNA anchor first, quality anchor second).
-                    if self.global_pos() - self.record_start >= 1024 && self.block.newline == 0 {
-                        self.make_room_record();
-                        self.make_room_quality();
-                        if let Some((delta, nl_pos, bl_len)) = self.lexer.input.skip_to_newline() {
-                            self.block_counter += delta + 1;
-                            self.pos_in_block = nl_pos;
-                            // Re-run SIMD on the block so that all bitmask fields
-                            // (newline, is_dna, two_bits, etc) are fresh.  The block
-                            // may contain `@`, the next header, and the start of DNA
-                            // after the quality '\n', so stale fields would corrupt
-                            // subsequent header and DNA parsing.
-                            self.block = self.lexer.scan_current_block(bl_len);
-                        }
-                        // None -> quality spans a buffer boundary; fall through to while loop.
+                    let target_pos = qual_start + self.dna_range.end - (self.header_range.end + 1);
+                    if target_pos / 64 > self.block_counter && self.block.newline == 0 {
+                        let keep_anchor = flag_is_set(
+                            CONFIG,
+                            COMPUTE_HEADER | COMPUTE_DNA_STRING | COMPUTE_QUALITY,
+                        );
+                        let anchor = if flag_is_set(CONFIG, COMPUTE_HEADER | COMPUTE_DNA_STRING) {
+                            self.anchor()
+                        } else {
+                            qual_start
+                        };
+                        self.lexer.skip_quality_line(
+                            target_pos,
+                            &mut self.block_counter,
+                            &mut self.pos_in_block,
+                            &mut self.block,
+                            anchor,
+                            keep_anchor,
+                        );
                     }
                     while self.block.newline == 0 {
-                        // Zero-copy anchoring: keep record (header/DNA/quality) in buffer.
-                        // Record guard fires first; if it refills the buffer the quality
-                        // guard's is_end_of_buffer() check will be false (no double refill).
                         self.make_room_record();
                         self.make_room_quality();
                         self.block = match self.lexer.next_in_non_dna() {
@@ -726,7 +597,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                             }
                             None => {
                                 self.finished = true;
-                                break; // return record
+                                break;
                             }
                         };
                         self.block_counter += 1;

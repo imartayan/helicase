@@ -96,44 +96,6 @@ impl ColumnarDNA {
     }
 
     #[inline(always)]
-    pub fn append_block_aligned(&mut self, high: T, low: T) {
-        self.len += BITS_PER_BLOCK;
-        let len = self.high_bits.len();
-        if len + 1 > self.high_bits.capacity() {
-            self.high_bits.reserve(64);
-            self.low_bits.reserve(64);
-        }
-        unsafe {
-            let h_ptr = self.high_bits.as_mut_ptr().add(len);
-            let l_ptr = self.low_bits.as_mut_ptr().add(len);
-            h_ptr.write(high);
-            l_ptr.write(low);
-            self.high_bits.set_len(len + 1);
-            self.low_bits.set_len(len + 1);
-        }
-    }
-
-    #[inline(always)]
-    pub fn reserve_aligned_blocks(&mut self, q: usize) {
-        self.high_bits.reserve(q + 1);
-        self.low_bits.reserve(q + 1);
-    }
-
-    #[inline(always)]
-    pub fn append_block_aligned_unchecked(&mut self, high: T, low: T) {
-        self.len += BITS_PER_BLOCK;
-        let len = self.high_bits.len();
-        unsafe {
-            let h_ptr = self.high_bits.as_mut_ptr().add(len);
-            let l_ptr = self.low_bits.as_mut_ptr().add(len);
-            h_ptr.write(high);
-            l_ptr.write(low);
-            self.high_bits.set_len(len + 1);
-            self.low_bits.set_len(len + 1);
-        }
-    }
-
-    #[inline(always)]
     pub fn append(&mut self, high: T, low: T, size: usize) {
         if size == 0 {
             return;

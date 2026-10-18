@@ -3,8 +3,6 @@ use crate::config::{advanced::*, *};
 use crate::dna_format::*;
 use crate::input::*;
 use crate::lexer::*;
-use crate::simd::extract_dna_bitmask;
-
 use core::mem::swap;
 use core::ops::Range;
 use std::io;
@@ -47,10 +45,7 @@ pub struct FastqParser<'a, const CONFIG: Config, I: InputData<'a>> {
     dna_range: Range<usize>,
     record_start: usize,
     cur_dna_string: Vec<u8>,
-    cur_dna_columnar: ColumnarDNA,
-    cur_dna_packed: PackedDNA,
-    cur_mask_non_actg: BitMask,
-    cur_mask_n: BitMask,
+    bitpackers: DnaBitpackers,
     dna_len: usize,
     pending_error: Option<io::Error>,
 }
@@ -83,10 +78,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
             dna_range: 0..0,
             record_start: 0,
             cur_dna_string: Vec::new(),
-            cur_dna_columnar: ColumnarDNA::new(),
-            cur_dna_packed: PackedDNA::new(),
-            cur_mask_non_actg: BitMask::new(),
-            cur_mask_n: BitMask::new(),
+            bitpackers: DnaBitpackers::new(),
             dna_len: 0,
             pending_error,
         }
@@ -121,18 +113,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
         if flag_is_set(CONFIG, COMPUTE_DNA_STRING) {
             self.cur_dna_string.clear();
         }
-        if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
-            self.cur_dna_columnar.clear();
-        }
-        if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
-            self.cur_dna_packed.clear();
-        }
-        if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
-            self.cur_mask_non_actg.clear();
-        }
-        if flag_is_set(CONFIG, COMPUTE_MASK_N) {
-            self.cur_mask_n.clear();
-        }
+        self.bitpackers.clear();
         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
             self.dna_len = 0;
         }
@@ -238,7 +219,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
         if flag_is_not_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
             panic!("Parser config error: dna_columnar is not enabled")
         }
-        &self.cur_dna_columnar
+        &self.bitpackers.columnar
     }
 
     #[inline(always)]
@@ -246,9 +227,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
         if flag_is_not_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
             panic!("Parser config error: dna_columnar is not enabled")
         }
-        let mut res = ColumnarDNA::with_capacity(self.cur_dna_columnar.capacity());
-        swap(&mut res, &mut self.cur_dna_columnar);
-        res
+        self.bitpackers.take_columnar()
     }
 
     #[inline(always)]
@@ -256,7 +235,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
         if flag_is_not_set(CONFIG, COMPUTE_DNA_PACKED) {
             panic!("Parser config error: dna_packed is not enabled")
         }
-        &self.cur_dna_packed
+        &self.bitpackers.packed
     }
 
     #[inline(always)]
@@ -264,9 +243,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
         if flag_is_not_set(CONFIG, COMPUTE_DNA_PACKED) {
             panic!("Parser config error: dna_packed is not enabled")
         }
-        let mut res = PackedDNA::with_capacity(self.cur_dna_packed.capacity());
-        swap(&mut res, &mut self.cur_dna_packed);
-        res
+        self.bitpackers.take_packed()
     }
 
     #[inline(always)]
@@ -274,7 +251,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
         if flag_is_not_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
             panic!("Parser config error: mask_non_actg is not enabled")
         }
-        &self.cur_mask_non_actg
+        &self.bitpackers.mask_non_actg
     }
 
     #[inline(always)]
@@ -282,9 +259,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
         if flag_is_not_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
             panic!("Parser config error: mask_non_actg is not enabled")
         }
-        let mut res = BitMask::with_capacity(self.cur_mask_non_actg.capacity());
-        swap(&mut res, &mut self.cur_mask_non_actg);
-        res
+        self.bitpackers.take_mask_non_actg()
     }
 
     #[inline(always)]
@@ -292,7 +267,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
         if flag_is_not_set(CONFIG, COMPUTE_MASK_N) {
             panic!("Parser config error: mask_n is not enabled")
         }
-        &self.cur_mask_n
+        &self.bitpackers.mask_n
     }
 
     #[inline(always)]
@@ -300,9 +275,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
         if flag_is_not_set(CONFIG, COMPUTE_MASK_N) {
             panic!("Parser config error: mask_n is not enabled")
         }
-        let mut res = BitMask::with_capacity(self.cur_mask_n.capacity());
-        swap(&mut res, &mut self.cur_mask_n);
-        res
+        self.bitpackers.take_mask_n()
     }
 
     #[inline(always)]
@@ -316,9 +289,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
                 self.dna_range.len()
             }
         } else if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
-            self.cur_dna_columnar.len()
+            self.bitpackers.columnar.len()
         } else if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
-            self.cur_dna_packed.len()
+            self.bitpackers.packed.len()
         } else {
             panic!("Parser config error: dna is ignored")
         }
@@ -433,24 +406,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
     }
     #[inline(always)]
     fn append_dna_range(&mut self, start: usize, len: usize) {
-        if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
-            self.cur_dna_columnar.append(
-                self.block.high_bit >> start,
-                self.block.low_bit >> start,
-                len,
-            );
-        }
-        if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
-            self.cur_dna_packed
-                .append(self.block.two_bits >> (2 * start), 2 * len);
-        }
-        if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
-            self.cur_mask_non_actg
-                .append(self.block.mask_non_actg >> start, len);
-        }
-        if flag_is_set(CONFIG, COMPUTE_MASK_N) {
-            self.cur_mask_n.append(self.block.mask_n >> start, len);
-        }
+        self.bitpackers
+            .append_range_from::<CONFIG>(&self.block, start, len);
         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
             self.dna_len += len;
         }
@@ -458,22 +415,55 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
 
     #[inline(always)]
     fn append_dna_block_from(&mut self, block: FastqChunk) {
-        if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
-            self.cur_dna_columnar
-                .append_block(block.high_bit, block.low_bit);
-        }
-        if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
-            self.cur_dna_packed.append_block(block.two_bits);
-        }
-        if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
-            self.cur_mask_non_actg.append_block(block.mask_non_actg);
-        }
-        if flag_is_set(CONFIG, COMPUTE_MASK_N) {
-            self.cur_mask_n.append_block(block.mask_n);
-        }
+        self.bitpackers.append_block_from::<CONFIG>(&block);
         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
             self.dna_len += 64;
         }
+    }
+
+    #[inline(always)]
+    fn try_long_sequence(&mut self) -> Option<Option<Event>> {
+        let data = self.lexer.input.data();
+        let curr_pos = (self.block_counter + 1) * 64;
+        let (rem_len, raw_len) = find_line_end(data, curr_pos)?;
+        let next_pos = curr_pos + raw_len;
+
+        let need_len = flag_is_set(CONFIG, COMPUTE_DNA_LEN);
+        let packed_bytes = self
+            .bitpackers
+            .pack_contiguous::<CONFIG>(&data[curr_pos..], rem_len);
+        if need_len {
+            self.dna_len += packed_bytes;
+        }
+
+        if packed_bytes < rem_len {
+            let resume_pos = curr_pos + packed_bytes;
+            self.dna_range.end = resume_pos;
+            self.block_counter = resume_pos / 64;
+            self.pos_in_block = resume_pos % 64;
+            self.lexer.input.seek_block(self.block_counter);
+            let block_len = 64.min(data.len().saturating_sub(self.block_counter * 64));
+            self.block = self.lexer.scan_current_block(block_len);
+            return Some(None);
+        }
+
+        self.dna_range.end = curr_pos + rem_len;
+        self.block_counter = next_pos / 64;
+        self.pos_in_block = next_pos % 64;
+        self.lexer.input.seek_block(self.block_counter);
+        if next_pos >= data.len() {
+            self.finished = true;
+            return Some(self.return_error_or_none());
+        }
+        let block_len = 64.min(data.len().saturating_sub(self.block_counter * 64));
+        self.block = self.lexer.scan_current_block(block_len);
+        self.make_room_record_end();
+        self.consume_newline();
+
+        if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
+            return Some(Some(Event::DnaChunk(self.dna_range.clone())));
+        }
+        Some(None)
     }
 }
 
@@ -623,128 +613,15 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                             self.append_dna_block_from(block);
                             dna_blocks += 1;
 
-                            if dna_blocks == 16 && I::RANDOM_ACCESS && !merge_chunks {
-                                let data = self.lexer.input.data();
-                                let mut curr_pos = (self.block_counter + 1) * 64;
-                                if curr_pos < data.len() {
-                                    let newline_offset = memchr::memchr(b'\n', &data[curr_pos..]);
-                                    let raw_len = newline_offset.unwrap_or(data.len() - curr_pos);
-                                    let mut rem_len = raw_len;
-                                    if newline_offset.is_some()
-                                        && rem_len > 0
-                                        && data[curr_pos + rem_len - 1] == b'\r'
-                                    {
-                                        rem_len -= 1;
-                                    }
-                                    let next_pos = curr_pos + raw_len;
-
-                                    let need_packed = flag_is_set(CONFIG, COMPUTE_DNA_PACKED);
-                                    let need_columnar = flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR);
-                                    let need_mask_non_actg =
-                                        flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG);
-                                    let need_mask_n = flag_is_set(CONFIG, COMPUTE_MASK_N);
-                                    let need_len = flag_is_set(CONFIG, COMPUTE_DNA_LEN);
-                                    let is_keep = flag_is_not_set(CONFIG, SPLIT_NON_ACTG);
-                                    let any_packing = need_packed
-                                        || need_columnar
-                                        || need_mask_non_actg
-                                        || need_mask_n;
-
-                                    if (!any_packing
-                                        || (need_packed
-                                            && !need_columnar
-                                            && !need_mask_non_actg
-                                            && !need_mask_n))
-                                        && is_keep
-                                    {
-                                        let seq_end = curr_pos + rem_len;
-                                        let total_rem_len = rem_len;
-                                        if need_packed {
-                                            let rem_bases = self.cur_dna_packed.len() % 32;
-                                            let needed_bases =
-                                                if rem_bases == 0 { 0 } else { 32 - rem_bases };
-                                            if needed_bases > 0 && rem_len >= needed_bases {
-                                                let rem_data =
-                                                    &data[curr_pos..curr_pos + needed_bases];
-                                                let m = if curr_pos + 64 <= data.len() {
-                                                    extract_dna_bitmask::<CONFIG>(
-                                                        &data[curr_pos..curr_pos + 64],
-                                                    )
-                                                } else {
-                                                    let mut tmp = [b'A'; 64];
-                                                    tmp[..needed_bases].copy_from_slice(rem_data);
-                                                    extract_dna_bitmask::<CONFIG>(&tmp)
-                                                };
-                                                let n_bits = 2 * needed_bases;
-                                                let two_bits_mask = if n_bits == 128 {
-                                                    !0
-                                                } else {
-                                                    (1u128 << n_bits) - 1
-                                                };
-                                                self.cur_dna_packed
-                                                    .append(m.two_bits & two_bits_mask, n_bits);
-                                                curr_pos += needed_bases;
-                                                rem_len -= needed_bases;
-                                            }
-
-                                            let q = rem_len / 64;
-                                            let r = rem_len % 64;
-                                            let out_ptr = unsafe {
-                                                self.cur_dna_packed.append_aligned_blocks_ptr(q)
-                                            };
-                                            unsafe {
-                                                bulk_pack_dna_blocks::<CONFIG>(
-                                                    &data[curr_pos..],
-                                                    q,
-                                                    out_ptr,
-                                                );
-                                            }
-                                            if r > 0 {
-                                                let rem_start = curr_pos + 64 * q;
-                                                let m = if rem_start + 64 <= data.len() {
-                                                    extract_dna_bitmask::<CONFIG>(
-                                                        &data[rem_start..rem_start + 64],
-                                                    )
-                                                } else {
-                                                    let mut tmp = [b'A'; 64];
-                                                    tmp[..r].copy_from_slice(
-                                                        &data[rem_start..curr_pos + rem_len],
-                                                    );
-                                                    extract_dna_bitmask::<CONFIG>(&tmp)
-                                                };
-                                                let r_bits = 2 * r;
-                                                let two_bits_mask = if r_bits == 128 {
-                                                    !0
-                                                } else {
-                                                    (1u128 << r_bits) - 1
-                                                };
-                                                self.cur_dna_packed
-                                                    .append(m.two_bits & two_bits_mask, r_bits);
-                                            }
-                                        }
-                                        if need_len {
-                                            self.dna_len += total_rem_len;
-                                        }
-                                        self.dna_range.end = seq_end;
-                                        self.block_counter = next_pos / 64;
-                                        self.pos_in_block = next_pos % 64;
-                                        self.lexer.input.seek_block(self.block_counter);
-                                        if next_pos >= data.len() {
-                                            self.finished = true;
-                                            return self.return_error_or_none();
-                                        }
-                                        let block_len = 64.min(
-                                            data.len().saturating_sub(self.block_counter * 64),
-                                        );
-                                        self.block = self.lexer.scan_current_block(block_len);
-                                        self.make_room_record_end();
-                                        self.consume_newline();
-                                        if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
-                                            return Some(Event::DnaChunk(self.dna_range.clone()));
-                                        }
-                                        continue 'parser_loop;
-                                    }
+                            if dna_blocks == 16
+                                && I::RANDOM_ACCESS
+                                && !merge_chunks
+                                && let Some(event_opt) = self.try_long_sequence()
+                            {
+                                if let Some(event) = event_opt {
+                                    return Some(event);
                                 }
+                                continue 'parser_loop;
                             }
                             block = match self.lexer.next() {
                                 Some(Ok(b)) => b,

@@ -4,6 +4,7 @@ mod bitpack;
 mod fasta;
 mod fastq;
 mod fastx;
+mod parallel;
 #[cfg(feature = "paraseq")]
 mod paraseq_traits;
 mod traits;
@@ -14,9 +15,10 @@ pub(crate) use bitpack::*;
 pub use fasta::*;
 pub use fastq::*;
 pub use fastx::*;
+pub use parallel::ParallelFastxParser;
 pub use traits::*;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
     Fasta,
     Fastq,

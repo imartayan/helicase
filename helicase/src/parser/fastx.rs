@@ -146,3 +146,19 @@ impl<'a, const CONFIG: Config> Iterator for FastxParser<'a, CONFIG> {
         self.0.next()
     }
 }
+
+impl<'a, const CONFIG: Config> FastxParser<'a, CONFIG> {
+    /// Creates a parallel parser for a file on disk.
+    #[inline]
+    pub fn parallel_file(
+        path: impl AsRef<std::path::Path>,
+    ) -> io::Result<ParallelFastxParser<'static, CONFIG>> {
+        ParallelFastxParser::<CONFIG>::from_file(path)
+    }
+
+    /// Creates a parallel parser for an in-memory byte slice.
+    #[inline]
+    pub fn parallel_slice(slice: &'a [u8]) -> ParallelFastxParser<'a, CONFIG> {
+        ParallelFastxParser::<CONFIG>::from_slice(slice)
+    }
+}

@@ -193,7 +193,7 @@ pub(crate) mod lexer;
 pub mod parser;
 
 pub use config::{Config, ParserOptions};
-pub use parser::{FastaParser, FastqParser, FastxParser, HelicaseParser};
+pub use parser::{FastaParser, FastqParser, FastxParser, HelicaseParser, ParallelFastxParser};
 
 #[cfg(target_feature = "avx2")]
 pub(crate) mod simd {

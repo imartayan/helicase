@@ -74,11 +74,7 @@ fn test_across_all_inputs(generator: FastxGen, test_id: &str) {
         encoder.finish().unwrap();
     }
 
-    // 3. RamFileInput
-    let from_ram = parse_all(FastxParser::<CONFIG>::from_file_in_ram(&raw_file_path).unwrap());
-    assert_eq!(from_slice, from_ram, "RamFileInput mismatch for {test_id}");
-
-    // 4. MmapInput
+    // 3. MmapInput
     let from_mmap = parse_all(FastxParser::<CONFIG>::from_file_mmap(&raw_file_path).unwrap());
     assert_eq!(from_slice, from_mmap, "MmapInput mismatch for {test_id}");
 

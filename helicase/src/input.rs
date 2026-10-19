@@ -5,7 +5,7 @@ use core::ops::Range;
 use deko::read::AnyDecoder;
 use memmap2::Mmap;
 use std::fs::File;
-use std::io::{self, Read, Stdin, stdin};
+use std::io::{self, Read};
 use std::path::Path;
 
 const BUFFER_DEFAULT_SIZE: usize = 1 << 17;
@@ -84,68 +84,6 @@ pub trait InputData<'a>: Iterator<Item = io::Result<&'a [u8]>> {
 pub trait FromInputData<'a, I: InputData<'a>>: Sized {
     /// Build the struct from a type implementing [`InputData`].
     fn from_input(input: I) -> io::Result<Self>;
-}
-
-macro_rules! delegate_input {
-    ($ty:ident $(<$lt:lifetime>)?, $item_lt:lifetime, $field:ident, $ra:expr) => {
-        impl $(<$lt>)? Iterator for $ty $(<$lt>)? {
-            type Item = io::Result<&$item_lt [u8]>;
-
-            #[inline(always)]
-            fn next(&mut self) -> Option<Self::Item> {
-                self.$field.next()
-            }
-        }
-
-        impl $(<$lt>)? InputData<$item_lt> for $ty $(<$lt>)? {
-            const RANDOM_ACCESS: bool = $ra;
-
-            #[inline(always)]
-            fn first_byte(&self) -> u8 {
-                self.$field.first_byte()
-            }
-
-            #[inline(always)]
-            fn current_block(&self) -> &[u8] {
-                self.$field.current_block()
-            }
-
-            #[inline(always)]
-            fn compression_format(&mut self) -> io::Result<Option<deko::Format>> {
-                self.$field.compression_format()
-            }
-
-            #[inline(always)]
-            fn data(&self) -> &$item_lt [u8] {
-                self.$field.data()
-            }
-
-            #[inline(always)]
-            fn buffer(&self) -> &[u8] {
-                self.$field.buffer()
-            }
-
-            #[inline(always)]
-            fn buffer_offset(&self) -> usize {
-                self.$field.buffer_offset()
-            }
-
-            #[inline(always)]
-            fn is_end_of_buffer(&self) -> bool {
-                self.$field.is_end_of_buffer()
-            }
-
-            #[inline(always)]
-            fn make_room(&mut self, keep_from: usize) {
-                self.$field.make_room(keep_from);
-            }
-
-            #[inline(always)]
-            fn seek_block(&mut self, block_idx: usize) {
-                self.$field.seek_block(block_idx);
-            }
-        }
-    };
 }
 
 /// Slice input.
@@ -271,7 +209,63 @@ impl<'a> MmapInput<'a> {
     }
 }
 
-delegate_input!(MmapInput<'a>, 'a, slice, true);
+impl<'a> Iterator for MmapInput<'a> {
+    type Item = io::Result<&'a [u8]>;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.slice.next()
+    }
+}
+
+impl<'a> InputData<'a> for MmapInput<'a> {
+    const RANDOM_ACCESS: bool = true;
+
+    #[inline(always)]
+    fn first_byte(&self) -> u8 {
+        self.slice.first_byte()
+    }
+
+    #[inline(always)]
+    fn current_block(&self) -> &[u8] {
+        self.slice.current_block()
+    }
+
+    #[inline(always)]
+    fn compression_format(&mut self) -> io::Result<Option<deko::Format>> {
+        self.slice.compression_format()
+    }
+
+    #[inline(always)]
+    fn data(&self) -> &'a [u8] {
+        self.slice.data()
+    }
+
+    #[inline(always)]
+    fn buffer(&self) -> &[u8] {
+        self.slice.buffer()
+    }
+
+    #[inline(always)]
+    fn buffer_offset(&self) -> usize {
+        self.slice.buffer_offset()
+    }
+
+    #[inline(always)]
+    fn is_end_of_buffer(&self) -> bool {
+        self.slice.is_end_of_buffer()
+    }
+
+    #[inline(always)]
+    fn make_room(&mut self, keep_from: usize) {
+        self.slice.make_room(keep_from);
+    }
+
+    #[inline(always)]
+    fn seek_block(&mut self, block_idx: usize) {
+        self.slice.seek_block(block_idx);
+    }
+}
 
 pub trait FromMmap<'a>: FromInputData<'a, MmapInput<'a>> {
     /// Build the struct from a memory-mapped file.
@@ -285,37 +279,6 @@ pub trait FromMmap<'a>: FromInputData<'a, MmapInput<'a>> {
 }
 
 impl<'a, F: FromInputData<'a, MmapInput<'a>>> FromMmap<'a> for F {}
-
-/// File entirely loaded in RAM, only recommended for small files.
-/// It does not support transparent decompression.
-pub struct RamFileInput {
-    slice: SliceInput<'static>,
-    _vec: Vec<u8>,
-}
-
-impl RamFileInput {
-    pub fn new<P: AsRef<Path>>(path: P) -> io::Result<Self> {
-        let _vec = std::fs::read(path)?;
-        let data = unsafe { core::slice::from_raw_parts(_vec.as_ptr(), _vec.len()) };
-        Ok(Self {
-            slice: SliceInput::new(data)?,
-            _vec,
-        })
-    }
-}
-
-delegate_input!(RamFileInput, 'static, slice, true);
-
-pub trait FromRamFile: FromInputData<'static, RamFileInput> {
-    /// Build the struct from a file entirely loaded in RAM, this is only recommended for small files.
-    /// It does not support transparent decompression.
-    #[inline(always)]
-    fn from_file_in_ram<P: AsRef<Path>>(path: P) -> io::Result<Self> {
-        Self::from_input(RamFileInput::new(path)?)
-    }
-}
-
-impl<F: FromInputData<'static, RamFileInput>> FromRamFile for F {}
 
 /// Reader input.
 /// It supports transparent decompression.
@@ -507,21 +470,16 @@ pub trait FromReader<'a, R: Read + Send + 'a>: FromInputData<'a, ReaderInput<'a,
 
 impl<'a, R: Read + Send + 'a, F: FromInputData<'a, ReaderInput<'a, R>>> FromReader<'a, R> for F {}
 
-/// File input.
+/// File input alias.
 /// It supports transparent decompression.
-pub struct FileInput {
-    reader: ReaderInput<'static, File>,
-}
+pub type FileInput = ReaderInput<'static, File>;
 
-impl FileInput {
-    pub fn new<P: AsRef<Path>>(path: P) -> io::Result<Self> {
-        Ok(Self {
-            reader: ReaderInput::new(File::open(path)?)?,
-        })
+impl ReaderInput<'static, File> {
+    /// Open a file for reading with transparent decompression.
+    pub fn open<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+        Self::new(File::open(path)?)
     }
 }
-
-delegate_input!(FileInput, 'static, reader, false);
 
 pub trait FromFile: FromInputData<'static, FileInput> {
     /// Build the struct from a file.
@@ -530,35 +488,8 @@ pub trait FromFile: FromInputData<'static, FileInput> {
     /// Also see [`from_file_mmap`](FromMmap::from_file_mmap) to use a memory-mapped file.
     #[inline(always)]
     fn from_file<P: AsRef<Path>>(path: P) -> io::Result<Self> {
-        Self::from_input(FileInput::new(path)?)
+        Self::from_input(FileInput::open(path)?)
     }
 }
 
 impl<F: FromInputData<'static, FileInput>> FromFile for F {}
-
-/// Stdin input.
-/// It supports transparent decompression.
-pub struct StdinInput {
-    reader: ReaderInput<'static, Stdin>,
-}
-
-impl StdinInput {
-    pub fn new() -> io::Result<Self> {
-        Ok(Self {
-            reader: ReaderInput::new(stdin())?,
-        })
-    }
-}
-
-delegate_input!(StdinInput, 'static, reader, false);
-
-pub trait FromStdin: FromInputData<'static, StdinInput> {
-    /// Build the struct from stdin.
-    /// It supports transparent decompression.
-    #[inline(always)]
-    fn from_stdin() -> io::Result<Self> {
-        Self::from_input(StdinInput::new()?)
-    }
-}
-
-impl<F: FromInputData<'static, StdinInput>> FromStdin for F {}

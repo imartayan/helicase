@@ -25,7 +25,7 @@ RUSTFLAGS="-C target-cpu=native" cargo run --release -F no-pdep
 
 ### Minimal example
 
-The main entry point is to define a configuration via `ParserOptions` and build a `FastxParser` with this configuration.
+The main entry point is to define a configuration via `ParserOptions` and build a `FastxParser`/`ParallelFastxParser` with this configuration.
 
 ```rust
 use helicase::input::*;
@@ -53,6 +53,11 @@ fn main() {
 }
 ```
 
+### Input
+
+Files are opened with `from_file` (which supports [transparent decompression](#crate-features)) or `from_file_mmap` (which only supports uncompressed data but can be faster).
+In-memory slices (`from_slice`) and generic streams (`from_reader`) are also supported.
+
 ### Adjusting the configuration
 
 The parser is configured at compile-time via `ParserOptions`.
@@ -74,19 +79,20 @@ Since each base is encoded using two bits, we have to handle non-ACTG bases diff
 Three options are available via `ParserOptions`:
 - `split_non_actg` splits the sequence at non-ACTG bases, yielding one `DnaChunk` event per contiguous ACTG run (default for bitpacked formats), and disables `Record` events by default to avoid processing each sequence twice.
 - `skip_non_actg` skips non-ACTG bases and merges the remaining chunks, yielding one `Record` event per record.
-- `keep_non_actg` keeps the non-ACTG bases and encodes them lossily, yielding one [`Record`](parser::Event::Record) event per record (default for string format).
+- `keep_non_actg` keeps the non-ACTG bases and encodes them lossily, yielding one `Record` event per record (default for string format).
 
 ### Events
 
 The parser is an iterator that yields `Event` values.
-An event signals a record boundary or a contiguous DNA chunk,
-but the data is always read from the parser itself via `get_header`, `get_dna_string`, etc.
+An event signals a record boundary, a contiguous DNA chunk, or an I/O error:
+- `Event::Record(range)`: emitted once per record boundary. The `range` gives the byte offsets `start..end` of the entire record. Enabled by `return_record` (on by default for string and lossy formats).
+- `Event::DnaChunk(range)`: emitted for each contiguous run of ACTG bases when non-ACTG characters are split. The `range` gives the byte offsets `start..end` of the chunk. Enabled by `return_dna_chunk` (on by default with `split_non_actg`, `dna_packed`, and `dna_columnar`).
+- `Event::IoError(err)`: emitted if an I/O or stream decompression error occurs during iteration.
 
-There are two kinds of event:
-- `Event::Record`: emitted once per record, after all of its DNA chunks. Enabled by `return_record` (on by default, off by default whenever non-ACTG bases are split, to avoid processing each sequence twice).
-- `Event::DnaChunk`: emitted for each contiguous ACTG run. Enabled by `return_dna_chunk` (on by default with `split_non_actg`).
+Sequence, header, and quality data are read directly from the parser methods (`get_header`, `get_dna_string`, `get_dna_packed`, `get_quality`, etc.).
 
-When both are active you need to match on the event to distinguish them:
+When both records and chunks are active (e.g. `dna_packed().return_record(true)`), match on the event to distinguish them:
+
 ```rust
 use helicase::input::*;
 use helicase::parser::Event;
@@ -95,25 +101,29 @@ use helicase::*;
 // dna_packed enables DnaChunk events; explicitly turn Record events back on.
 const CONFIG: Config = ParserOptions::default().dna_packed().return_record(true).config();
 
-fn main() {
-    let path = "...";
-    let mut parser = FastxParser::<CONFIG>::from_file(&path).expect("Cannot open file");
+fn main() -> std::io::Result<()> {
+    let mut parser = FastxParser::<CONFIG>::from_file("reads.fastq.gz")?;
 
     while let Some(event) = parser.next() {
         match event {
-            Event::DnaChunk(_) => {
+            Event::DnaChunk(range) => {
                 // one contiguous ACTG run is ready
                 let seq = parser.get_dna_packed();
             }
-            Event::Record(_) => {
+            Event::Record(range) => {
                 // all chunks of this record have been processed
+                let header = parser.get_header();
+            }
+            Event::IoError(err) => {
+                return Err(err);
             }
         }
     }
+    Ok(())
 }
 ```
 
-When only one type of event is active, the event value can be safely ignored:
+When only one type of event is active (such as the default configuration yielding `Event::Record`), the event value can be safely ignored:
 
 ```rust
 use helicase::input::*;
@@ -122,18 +132,17 @@ use helicase::*;
 // Default config: only Record events, one per record.
 const CONFIG: Config = ParserOptions::default().config();
 
-fn main() {
+fn main() -> std::io::Result<()> {
     let path = "...";
-    let mut parser = FastxParser::<CONFIG>::from_file(&path).expect("Cannot open file");
+    let mut parser = FastxParser::<CONFIG>::from_file(&path)?;
 
     while let Some(_event) = parser.next() {
         let header = parser.get_header();
         let seq = parser.get_dna_string();
     }
+    Ok(())
 }
 ```
-
-It is even possible to disable all events to process the entire file in one go, for instance if you simply want to count bases.
 
 ### Iterating over chunks of packed DNA
 
@@ -146,10 +155,9 @@ const CONFIG: Config = ParserOptions::default()
     .dna_packed()
     .config();
 
-fn main() {
+fn main() -> std::io::Result<()> {
     let path = "...";
-
-    let mut parser = FastxParser::<CONFIG>::from_file(&path).expect("Cannot open file");
+    let mut parser = FastxParser::<CONFIG>::from_file(&path)?;
 
     // iterate over each chunk of ACTG bases
     while let Some(_event) = parser.next() {
@@ -162,6 +170,52 @@ fn main() {
         // or directly get a PackedSeq (requires the packed-seq feature)
         // let packed_seq = parser.get_packed_seq();
     }
+    Ok(())
+}
+```
+
+### Parallel parsing
+
+For multi-threaded processing, `ParallelFastxParser` can parse files in parallel across worker threads.
+Like `FastxParser`, it can be created using `from_file` or `from_file_mmap` (see [Input](#input)).
+
+You drive the parsing loop directly on each thread with `for_each` or `reduce`:
+
+```rust
+use helicase::config::*;
+use helicase::*;
+
+const CONFIG: Config = ParserOptions::default().ignore_headers().config();
+
+fn main() -> std::io::Result<()> {
+    let path = "...";
+
+    // Process records in parallel across 8 threads using for_each
+    ParallelFastxParser::<CONFIG>::from_file(&path)?
+        .threads(8)
+        .for_each(|mut parser| {
+            while let Some(_event) = parser.next() {
+                let header = parser.get_header();
+                let seq = parser.get_dna_string();
+                // ...
+            }
+        })?;
+
+    // Sum total sequence length across 8 threads using reduce
+    let total_len: usize = ParallelFastxParser::<CONFIG>::from_file(&path)?
+        .threads(8)
+        .reduce(
+            |mut parser| {
+                let mut local_len = 0;
+                while let Some(_event) = parser.next() {
+                    local_len += parser.get_dna_string().len();
+                }
+                local_len
+            },
+            |acc, val| acc + val,
+        )?;
+
+    Ok(())
 }
 ```
 
@@ -173,36 +227,40 @@ The [PackedDNA format](#bitpacked-dna-formats) is compatible with [packed-seq](h
 
 This can be useful for [hashing *k*-mers](https://github.com/rust-seq/seq-hash) or [computing minimizers & syncmers](https://github.com/rust-seq/simd-minimizers).
 
-### No PDEP
-
-By default, this library uses [PDEP](https://en.wikipedia.org/wiki/X86_Bit_manipulation_instruction_set#Parallel_bit_deposit_and_extract) to compute the [PackedDNA format](#bitpacked-dna-formats).
-However, this instruction can be very slow on some CPUs (especially AMD CPUs prior to 2020).
-If you want an efficient implementation for these CPUs, we recommend using the `no-pdep` feature.
-
 ### Decompression
 
 This library supports transparent file decompression using [deko](https://github.com/igankevich/deko), you can choose the supported formats using the following features:
-- `bz2` for bzip2
 - `gz` for gzip (default)
-- `xz` for xz
 - `zstd` for zstd (default)
+- `bz2` for bzip2
+- `xz` for xz
+
+### No PDEP
+
+By default, this library uses [PDEP](https://en.wikipedia.org/wiki/X86_Bit_manipulation_instruction_set#Parallel_bit_deposit_and_extract) to compute the [PackedDNA format](#bitpacked-dna-formats).
+However, this instruction can be slow on some older CPUs (especially AMD CPUs prior to 2020).
+If you want an efficient implementation for these CPUs, we recommend using the `no-pdep` feature.
 
 ## Benchmarks
 
-Benchmarks against [needletail](https://github.com/onecodex/needletail) and [paraseq](https://github.com/noamteyssier/paraseq) are available in the `bench` directory.
-You can run them on any (possibly compressed) FASTA/FASTQ file using:
+A benchmark suite comparing Helicase against [needletail](https://github.com/onecodex/needletail) and [paraseq](https://github.com/noamteyssier/paraseq) is included.
+
+Run without arguments to execute benchmarks on built-in synthetic datasets:
 ```sh
-RUSTFLAGS="-C target-cpu=native" cargo r -r --bin bench -- <file>
+RUSTFLAGS="-C target-cpu=native" cargo bench
 ```
 
-For instance, you can run it on [this human genome](https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz), [these short reads](https://s3-us-west-2.amazonaws.com/human-pangenomics/NHGRI_UCSC_panel/HG002/hpp_HG002_NA24385_son_v1/ILMN/NIST_Illumina_2x250bps/D1_S1_L001_R2_007.fastq.gz) or [these long reads](https://s3-us-west-2.amazonaws.com/human-pangenomics/NHGRI_UCSC_panel/HG002/hpp_HG002_NA24385_son_v1/PacBio_HiFi/15kb/m54328_180928_230446.Q20.fastq).
-
-Note that the FASTQ files can easily be converted to FASTA using:
+Or benchmark on any custom (optionally compressed) FASTA/FASTQ file:
 ```sh
-RUSTFLAGS="-C target-cpu=native" cargo r -r --example fq_to_fa -- <file.fastq>
+RUSTFLAGS="-C target-cpu=native" cargo bench -- <file>
 ```
 
-More information in the [bench README](bench/README.md).
+You can test with public datasets such as:
+- [T2T Human Genome](https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz) (FASTA)
+- [Illumina short reads](https://s3-us-west-2.amazonaws.com/human-pangenomics/NHGRI_UCSC_panel/HG002/hpp_HG002_NA24385_son_v1/ILMN/NIST_Illumina_2x250bps/D1_S1_L001_R2_007.fastq.gz) (FASTQ)
+- [PacBio HiFi long reads](https://s3-us-west-2.amazonaws.com/human-pangenomics/NHGRI_UCSC_panel/HG002/hpp_HG002_NA24385_son_v1/PacBio_HiFi/15kb/m54328_180928_230446.Q20.fastq) (FASTQ)
+
+More options (parallel scaling, bitpacking comparisons, decompression, format) are documented in the [bench README](bench/README.md).
 
 ## Acknowledgements
 

@@ -20,6 +20,9 @@ pub trait Measurement {
     fn show_human<T: Display>(&self, label: &str, size: u64, result: Option<T>);
     fn show_csv<T: Display>(&self, label: &str, size: u64, result: Option<T>);
     fn show_csv_header(&self, show_result: bool);
+    fn throughput(&self, _size: u64) -> Option<(f64, f64)> {
+        None
+    }
 }
 
 pub struct BaseTime {
@@ -47,6 +50,15 @@ impl Measurement for BaseTime {
         let elapsed = start.elapsed().as_secs_f64();
         self.samples.push(elapsed);
         self.start = Some(Instant::now());
+    }
+
+    fn throughput(&self, size: u64) -> Option<(f64, f64)> {
+        let stats = stat(&self.samples)?;
+        let bytes = size as f64;
+        let gb = bytes / 1e9;
+        let throughput_mean = gb / stats.mean;
+        let throughput_stdev = gb * stats.stdev / (stats.mean * stats.mean);
+        Some((throughput_mean, throughput_stdev))
     }
 
     fn show_human<T: Display>(&self, label: &str, size: u64, result: Option<T>) {

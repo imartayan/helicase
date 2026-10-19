@@ -2,9 +2,13 @@
 name = "bench"
 version = "0.2.0"
 edition = "2024"
+autobenches = false
+autoexamples = false
 
 [dependencies]
-helicase = { path = "../helicase" }
+helicase = { path = "../helicase", features = ["packed-seq"] }
+packed-seq = { version = "5.0", default-features = false }
+fastx-gen = { path = "../fastx-gen" }
 clap = { version = "4.5", features = ["derive"] }
 colored = "3.0"
 needletail = { version = "0.7", default-features = false, features = [
@@ -15,11 +19,28 @@ niffler = { version = "3.0", default-features = false, features = [
     "gz",
     "zstd",
 ] }
-paraseq = { version = "0.4", default-features = false, features = ["niffler"] }
+paraseq = { version = "0.6", default-features = false, features = ["niffler"] }
 rayon = "1.12"
 regex = "1.12"
 simd-minimizers = { version = "3.0", features = ["scalar"], optional = true }
 sysinfo = "0.39"
+fearless_simd = { version = "1.1", optional = true }
+
+[lib]
+name = "bench"
+path = "src/lib.rs"
+bench = false
+
+[[bin]]
+name = "bench"
+path = "src/main.rs"
+bench = false
+
+[[bench]]
+name = "bench"
+harness = false
+path = "benches/bench.rs"
+test = false
 
 [target.'cfg(target_os = "linux")'.dependencies]
 perf-event2 = "0.7"
@@ -31,6 +52,3 @@ simd-minimizers = ["helicase/packed-seq", "dep:simd-minimizers"]
 name = "simd_mini"
 required-features = ["simd-minimizers"]
 
-[[example]]
-name = "validate_packed"
-required-features = ["simd-minimizers"]

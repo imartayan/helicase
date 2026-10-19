@@ -93,7 +93,7 @@ fn main() {
             } else {
                 vec![
                     format!("{}", path.display()),
-                    format!("{}", "ERR"),
+                    "ERR".to_string(),
                     "".to_string(),
                     "".to_string(),
                     "".to_string(),

@@ -129,6 +129,15 @@ impl Measurement for PerfMeasurement {
         self.branch_misses.reset().unwrap();
     }
 
+    fn throughput(&self, size: u64) -> Option<(f64, f64)> {
+        let stats = stat(&self.time)?;
+        let bytes = size as f64;
+        let gb = bytes / 1e9;
+        let throughput_mean = gb / stats.mean;
+        let throughput_stdev = gb * stats.stdev / (stats.mean * stats.mean);
+        Some((throughput_mean, throughput_stdev))
+    }
+
     fn show_human<T: Display>(&self, label: &str, size: u64, result: Option<T>) {
         let bytes = size as f64;
         let gb = bytes / 1e9;

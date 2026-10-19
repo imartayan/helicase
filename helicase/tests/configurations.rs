@@ -365,6 +365,26 @@ fn test_config_dna_len() {
 }
 
 #[test]
+fn test_config_dna_len_merge_records() {
+    use helicase::config::advanced::*;
+
+    const CFG: Config = COMPUTE_DNA_LEN | SPLIT_NON_ACTG | MERGE_DNA_CHUNKS | MERGE_RECORDS;
+
+    // FASTA: 3 records of 8 bp = 24 bp
+    let fasta_bytes = b">r1\nACGTACGT\n>r2\nTGCAACGT\n>r3\nACGTACGT\n";
+    let mut parser = FastxParser::<CFG>::from_slice(fasta_bytes).unwrap();
+    parser.next();
+    assert_eq!(parser.get_dna_len(), 24);
+
+    // FASTQ: 3 records of 8 bp = 24 bp
+    let fastq_bytes =
+        b"@r1\nACGTACGT\n+\nIIIIIIII\n@r2\nTGCAACGT\n+\nIIIIIIII\n@r3\nACGTACGT\n+\nIIIIIIII\n";
+    let mut parser = FastxParser::<CFG>::from_slice(fastq_bytes).unwrap();
+    parser.next();
+    assert_eq!(parser.get_dna_len(), 24);
+}
+
+#[test]
 fn test_config_ignore_headers() {
     let bytes = FastxGen::illumina(20).with_seed(101).generate_bytes();
     const CFG: Config = ParserOptions::default()

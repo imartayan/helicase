@@ -800,7 +800,10 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                         }
 
                         if self.current_byte() == b'>' {
-                            return self.emit_record_events();
+                            if let Some(event) = self.emit_record_events() {
+                                return Some(event);
+                            }
+                            continue 'parser_loop;
                         }
 
                         if flag_is_set(CONFIG, SPLIT_NON_ACTG)

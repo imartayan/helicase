@@ -63,11 +63,12 @@ pub fn bench_helicase_parallel(data: &[u8], threads: usize, repeat: usize) -> (f
         let total_len = ParallelFastxParser::<DNA_STRING>::from_slice(data)
             .threads(threads)
             .reduce(
-                || 0,
-                |acc, mut parser| {
+                |mut parser| {
+                    let mut len = 0;
                     while parser.next().is_some() {
-                        *acc += parser.get_dna_string().len();
+                        len += parser.get_dna_string().len();
                     }
+                    len
                 },
                 |a, b| a + b,
             )
@@ -90,11 +91,12 @@ pub fn bench_helicase_packed(data: &[u8], threads: usize, repeat: usize) -> (f64
         let total_len = ParallelFastxParser::<DNA_PACKED>::from_slice(data)
             .threads(threads)
             .reduce(
-                || 0,
-                |acc, mut parser| {
+                |mut parser| {
+                    let mut len = 0;
                     while parser.next().is_some() {
-                        *acc += parser.get_dna_packed().len();
+                        len += parser.get_dna_packed().len();
                     }
+                    len
                 },
                 |a, b| a + b,
             )
@@ -145,21 +147,23 @@ pub fn bench_helicase_file_parallel(
             .threads(threads);
         let total_len = if use_mmap {
             builder.mmap().reduce(
-                || 0,
-                |acc, mut parser| {
+                |mut parser| {
+                    let mut len = 0;
                     while parser.next().is_some() {
-                        *acc += parser.get_dna_string().len();
+                        len += parser.get_dna_string().len();
                     }
+                    len
                 },
                 |a, b| a + b,
             )
         } else {
             builder.reduce(
-                || 0,
-                |acc, mut parser| {
+                |mut parser| {
+                    let mut len = 0;
                     while parser.next().is_some() {
-                        *acc += parser.get_dna_string().len();
+                        len += parser.get_dna_string().len();
                     }
+                    len
                 },
                 |a, b| a + b,
             )

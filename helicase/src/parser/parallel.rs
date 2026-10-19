@@ -145,21 +145,19 @@ fn partition_chunks(data: &[u8], num_chunks: usize, format: Format) -> Vec<(usiz
 ///
 /// Uses an atomic work-stealing counter over fine-grained virtual chunks ($4\times$ oversubscribed)
 /// to achieve dynamic load balancing without cross-thread lock contention.
-fn par_for_each_chunk<const CONFIG: Config, State, Init, Process, Reduce>(
+fn par_for_each_chunk<const CONFIG: Config, State, Process, Reduce>(
     data: &[u8],
     num_threads: usize,
-    init: Init,
     process: Process,
     reduce: Reduce,
 ) -> io::Result<State>
 where
-    State: Send,
-    Init: Fn() -> State + Sync,
-    Process: Fn(&mut State, FastxParser<'_, CONFIG>) + Sync,
-    Reduce: Fn(State, State) -> State,
+    State: Send + Default,
+    Process: Fn(FastxParser<'_, CONFIG>) -> State + Sync,
+    Reduce: Fn(State, State) -> State + Sync,
 {
     if data.is_empty() {
-        return Ok(init());
+        return Ok(State::default());
     }
 
     let format = match data.first() {
@@ -174,33 +172,31 @@ where
 
     let threads = num_threads.max(1);
     if threads == 1 || data.len() < 32 * 1024 {
-        let mut state = init();
         let parser = FastxParser::from_slice(data)?;
-        process(&mut state, parser);
-        return Ok(state);
+        return Ok(process(parser));
     }
 
     let num_chunks = (threads * 4).min((data.len() / (16 * 1024)).max(1));
     let chunks = partition_chunks(data, num_chunks, format);
     if chunks.is_empty() {
-        return Ok(init());
+        return Ok(State::default());
     }
 
     if chunks.len() == 1 {
-        let mut state = init();
         let parser = FastxParser::from_slice(data)?;
-        process(&mut state, parser);
-        return Ok(state);
+        return Ok(process(parser));
     }
 
     let worker_threads = threads.min(chunks.len());
     let next_chunk = AtomicUsize::new(0);
+    let process = &process;
+    let reduce = &reduce;
 
     let results = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..worker_threads)
             .map(|_| {
                 scope.spawn(|| {
-                    let mut state = init();
+                    let mut thread_state: Option<State> = None;
                     loop {
                         let idx = next_chunk.fetch_add(1, Ordering::Relaxed);
                         if idx >= chunks.len() {
@@ -208,10 +204,14 @@ where
                         }
                         let (start, end) = chunks[idx];
                         if let Ok(parser) = FastxParser::from_slice(&data[start..end]) {
-                            process(&mut state, parser);
+                            let chunk_res = process(parser);
+                            thread_state = Some(match thread_state {
+                                Some(acc) => reduce(acc, chunk_res),
+                                None => chunk_res,
+                            });
                         }
                     }
-                    state
+                    thread_state
                 })
             })
             .collect();
@@ -222,12 +222,14 @@ where
             .collect::<Vec<_>>()
     });
 
-    let mut iter = results.into_iter();
-    let mut total = iter.next().unwrap_or_else(init);
-    for result in iter {
-        total = reduce(total, result);
+    let mut total: Option<State> = None;
+    for result in results.into_iter().flatten() {
+        total = Some(match total {
+            Some(acc) => reduce(acc, result),
+            None => result,
+        });
     }
-    Ok(total)
+    Ok(total.unwrap_or_default())
 }
 
 /// Probes a file to determine the record boundary starting at or after `approx_pos`.
@@ -365,11 +367,12 @@ enum ParallelSource<'a> {
 ///     let total_len = ParallelFastxParser::<CONFIG>::from_file(path)?
 ///         .threads(8)
 ///         .reduce(
-///             || 0,
-///             |acc, mut parser| {
+///             |mut parser| {
+///                 let mut len = 0;
 ///                 while let Some(_event) = parser.next() {
-///                     *acc += parser.get_dna_string().len();
+///                     len += parser.get_dna_string().len();
 ///                 }
+///                 len
 ///             },
 ///             |acc, val| acc + val,
 ///         )?;
@@ -465,43 +468,87 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
 
     /// Executes parallel processing across worker threads, allowing the caller to drive
     /// the parser loop directly on each chunk's [`FastxParser`], and combining thread results with `reduce`.
-    pub fn reduce<State, Init, Process, Reduce>(
+    ///
+    /// The reduction `State` type is inferred automatically from the return type of `process`,
+    /// and must implement [`Send`] and [`Default`]. Because empty inputs and initial thread
+    /// accumulators use [`Default::default()`], no initial state closure argument is required.
+    ///
+    /// # Examples
+    ///
+    /// **Summing sequence lengths:**
+    /// ```rust,no_run
+    /// use helicase::config::*;
+    /// use helicase::*;
+    ///
+    /// const CONFIG: Config = ParserOptions::default().config();
+    ///
+    /// # fn main() -> std::io::Result<()> {
+    /// let total_len = ParallelFastxParser::<CONFIG>::from_file("reads.fastq")?
+    ///     .threads(8)
+    ///     .reduce(
+    ///         |mut parser| {
+    ///             let mut len = 0;
+    ///             while parser.next().is_some() {
+    ///                 len += parser.get_dna_len();
+    ///             }
+    ///             len
+    ///         },
+    ///         |acc, val| acc + val,
+    ///     )?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// **Collecting per-record lengths in parallel:**
+    /// ```rust,no_run
+    /// use helicase::config::*;
+    /// use helicase::*;
+    ///
+    /// const CONFIG: Config = ParserOptions::default().ignore_headers().config();
+    ///
+    /// # fn main() -> std::io::Result<()> {
+    /// let lengths: Vec<usize> = ParallelFastxParser::<CONFIG>::from_file("reads.fastq")?
+    ///     .threads(8)
+    ///     .reduce(
+    ///         |mut parser| {
+    ///             let mut local = Vec::new();
+    ///             while parser.next().is_some() {
+    ///                 local.push(parser.get_dna_len());
+    ///             }
+    ///             local
+    ///         },
+    ///         |mut acc, chunk| {
+    ///             acc.extend(chunk);
+    ///             acc
+    ///         },
+    ///     )?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn reduce<State, Process, Reduce>(
         self,
-        init: Init,
         process: Process,
         reduce: Reduce,
     ) -> io::Result<State>
     where
-        State: Send,
-        Init: Fn() -> State + Sync,
-        Process: Fn(&mut State, FastxParser<'_, CONFIG>) + Sync,
-        Reduce: Fn(State, State) -> State,
+        State: Send + Default,
+        Process: Fn(FastxParser<'_, CONFIG>) -> State + Sync,
+        Reduce: Fn(State, State) -> State + Sync,
     {
         match self.source {
-            ParallelSource::Slice(slice) => par_for_each_chunk::<CONFIG, State, _, _, _>(
-                slice,
-                self.threads,
-                init,
-                process,
-                reduce,
-            ),
+            ParallelSource::Slice(slice) => {
+                par_for_each_chunk::<CONFIG, State, _, _>(slice, self.threads, process, reduce)
+            }
             ParallelSource::File { path, use_mmap } => {
                 if use_mmap {
                     let file = File::open(&path)?;
                     let mmap = unsafe { memmap2::Mmap::map(&file)? };
-                    par_for_each_chunk::<CONFIG, State, _, _, _>(
-                        &mmap,
-                        self.threads,
-                        init,
-                        process,
-                        reduce,
-                    )
+                    par_for_each_chunk::<CONFIG, State, _, _>(&mmap, self.threads, process, reduce)
                 } else {
-                    run_multi_reader::<CONFIG, State, _, _, _>(
+                    run_multi_reader::<CONFIG, State, _, _>(
                         &path,
                         self.threads,
                         self.chunks,
-                        init,
                         process,
                         reduce,
                     )
@@ -513,10 +560,8 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
                         "Warning: ParallelFastxParser currently processes streaming readers in single-threaded mode."
                     );
                 }
-                let mut state = init();
                 let parser = FastxParser::<CONFIG>::from_reader(reader)?;
-                process(&mut state, parser);
-                Ok(state)
+                Ok(process(parser))
             }
         }
     }
@@ -528,50 +573,46 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     where
         Process: Fn(FastxParser<'_, CONFIG>) + Sync,
     {
-        self.reduce(|| (), |(), parser| process(parser), |(), ()| ())
+        self.reduce(process, |(), ()| ())
     }
 }
 
-fn run_multi_reader<const CONFIG: Config, State, Init, Process, Reduce>(
+fn run_multi_reader<const CONFIG: Config, State, Process, Reduce>(
     path: &Path,
     num_threads: usize,
     custom_chunks: Option<usize>,
-    init: Init,
     process: Process,
     reduce: Reduce,
 ) -> io::Result<State>
 where
-    State: Send,
-    Init: Fn() -> State + Sync,
-    Process: Fn(&mut State, FastxParser<'_, CONFIG>) + Sync,
-    Reduce: Fn(State, State) -> State,
+    State: Send + Default,
+    Process: Fn(FastxParser<'_, CONFIG>) -> State + Sync,
+    Reduce: Fn(State, State) -> State + Sync,
 {
     let num_threads = num_threads.max(1);
     let num_chunks = custom_chunks.unwrap_or(num_threads * 4).max(1);
     let (_format, chunks) = partition_file_chunks(path, num_chunks)?;
 
     if chunks.is_empty() {
-        return Ok(init());
+        return Ok(State::default());
     }
 
     if num_threads == 1 || chunks.len() == 1 {
-        let mut state = init();
         let file = File::open(path)?;
         let parser = FastxParser::<CONFIG>::from_reader(file)?;
-        process(&mut state, parser);
-        return Ok(state);
+        return Ok(process(parser));
     }
 
     let worker_threads = num_threads.min(chunks.len());
     let next_chunk = AtomicUsize::new(0);
-    let init = &init;
     let process = &process;
+    let reduce = &reduce;
 
     let results = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..worker_threads)
             .map(|_| {
-                scope.spawn(|| -> io::Result<State> {
-                    let mut state = init();
+                scope.spawn(|| -> io::Result<Option<State>> {
+                    let mut thread_state: Option<State> = None;
                     let mut file = File::open(path)?;
 
                     loop {
@@ -584,9 +625,13 @@ where
                         file.seek(SeekFrom::Start(start))?;
                         let reader = (&mut file).take(take_len);
                         let parser = FastxParser::<CONFIG>::from_reader(reader)?;
-                        process(&mut state, parser);
+                        let chunk_res = process(parser);
+                        thread_state = Some(match thread_state {
+                            Some(acc) => reduce(acc, chunk_res),
+                            None => chunk_res,
+                        });
                     }
-                    Ok(state)
+                    Ok(thread_state)
                 })
             })
             .collect();
@@ -597,10 +642,14 @@ where
             .collect::<Vec<_>>()
     });
 
-    let mut iter = results.into_iter();
-    let mut total = iter.next().unwrap()?;
-    for result in iter {
-        total = reduce(total, result?);
+    let mut total: Option<State> = None;
+    for result in results {
+        if let Some(res) = result? {
+            total = Some(match total {
+                Some(acc) => reduce(acc, res),
+                None => res,
+            });
+        }
     }
-    Ok(total)
+    Ok(total.unwrap_or_default())
 }

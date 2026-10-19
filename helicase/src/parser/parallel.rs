@@ -340,7 +340,8 @@ fn default_threads() -> usize {
 
 enum ParallelSource<'a> {
     Slice(&'a [u8]),
-    File { path: PathBuf, use_mmap: bool },
+    File(PathBuf),
+    Mmap(PathBuf),
     Reader(Box<dyn Read + Send + 'a>),
 }
 
@@ -396,19 +397,32 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
         }
     }
 
-    /// Creates a parallel parser for a file on disk.
+    /// Creates a parallel parser for a file on disk using the streaming multi-reader engine.
     ///
-    /// By default, uses the multi-reader engine (positional reads with 128 KiB buffer per thread,
-    /// bounded to ~1 MB total RAM across 8 threads). To enable zero-copy memory mapping instead,
-    /// call [`.mmap()`](Self::mmap).
+    /// Reads records in parallel using positional reads with a 128 KiB buffer per thread,
+    /// bounding memory to ~1 MB total RAM across 8 threads.
+    ///
+    /// Also see [`from_file_mmap`](Self::from_file_mmap) for zero-copy memory mapping on local SSD/NVMe.
     pub fn from_file(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
         let _ = File::open(&path)?;
         Ok(Self {
-            source: ParallelSource::File {
-                path,
-                use_mmap: false,
-            },
+            source: ParallelSource::File(path),
+            threads: default_threads(),
+            chunks: None,
+        })
+    }
+
+    /// Creates a parallel parser for a file on disk using zero-copy memory mapping (`mmap`).
+    ///
+    /// Yields maximum throughput on local SSD/NVMe storage.
+    ///
+    /// Also see [`from_file`](Self::from_file) for streaming multi-reader mode with bounded memory.
+    pub fn from_file_mmap(path: impl AsRef<Path>) -> io::Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let _ = File::open(&path)?;
+        Ok(Self {
+            source: ParallelSource::Mmap(path),
             threads: default_threads(),
             chunks: None,
         })
@@ -430,30 +444,6 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     #[inline]
     pub fn threads(mut self, threads: usize) -> Self {
         self.threads = threads.max(1);
-        self
-    }
-
-    /// Enables zero-copy memory mapping (`mmap`) for maximum throughput on local SSD/NVMe.
-    #[inline]
-    pub const fn mmap(mut self) -> Self {
-        if let ParallelSource::File {
-            ref mut use_mmap, ..
-        } = self.source
-        {
-            *use_mmap = true;
-        }
-        self
-    }
-
-    /// Enables multi-reader mode (default for files: no mmap, 128 KiB buffer per thread).
-    #[inline]
-    pub const fn reader(mut self) -> Self {
-        if let ParallelSource::File {
-            ref mut use_mmap, ..
-        } = self.source
-        {
-            *use_mmap = false;
-        }
         self
     }
 
@@ -539,21 +529,18 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
             ParallelSource::Slice(slice) => {
                 par_for_each_chunk::<CONFIG, State, _, _>(slice, self.threads, process, reduce)
             }
-            ParallelSource::File { path, use_mmap } => {
-                if use_mmap {
-                    let file = File::open(&path)?;
-                    let mmap = unsafe { memmap2::Mmap::map(&file)? };
-                    par_for_each_chunk::<CONFIG, State, _, _>(&mmap, self.threads, process, reduce)
-                } else {
-                    run_multi_reader::<CONFIG, State, _, _>(
-                        &path,
-                        self.threads,
-                        self.chunks,
-                        process,
-                        reduce,
-                    )
-                }
+            ParallelSource::Mmap(path) => {
+                let file = File::open(&path)?;
+                let mmap = unsafe { memmap2::Mmap::map(&file)? };
+                par_for_each_chunk::<CONFIG, State, _, _>(&mmap, self.threads, process, reduce)
             }
+            ParallelSource::File(path) => run_multi_reader::<CONFIG, State, _, _>(
+                &path,
+                self.threads,
+                self.chunks,
+                process,
+                reduce,
+            ),
             ParallelSource::Reader(reader) => {
                 if self.threads > 1 {
                     eprintln!(

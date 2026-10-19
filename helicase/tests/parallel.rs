@@ -197,10 +197,9 @@ fn test_parallel_file_parsing() {
     }
 
     for threads in [1, 2, 4, 8] {
-        let par_len = ParallelFastxParser::<CONFIG_STR>::from_file(&path)
+        let par_len = ParallelFastxParser::<CONFIG_STR>::from_file_mmap(&path)
             .unwrap()
             .threads(threads)
-            .mmap()
             .reduce(
                 |mut parser| {
                     let mut len = 0;
@@ -240,7 +239,6 @@ fn test_parallel_multi_reader_file_parsing() {
         let par_len = ParallelFastxParser::<CONFIG_STR>::from_file(&fq_path)
             .unwrap()
             .threads(threads)
-            .reader()
             .reduce(
                 |mut parser| {
                     let mut len = 0;
@@ -277,7 +275,6 @@ fn test_parallel_multi_reader_file_parsing() {
         let par_len = ParallelFastxParser::<CONFIG_STR>::from_file(&fa_path)
             .unwrap()
             .threads(threads)
-            .reader()
             .reduce(
                 |mut parser| {
                     let mut len = 0;
@@ -354,11 +351,10 @@ fn test_parallel_fastx_parser_builder() {
         .unwrap();
     assert_eq!(file_records, 200);
 
-    // 3. from_file with .mmap() (zero-copy memory mapping)
-    let mmap_bp = ParallelFastxParser::<CONFIG_STR>::from_file(&path)
+    // 3. from_file_mmap (zero-copy memory mapping)
+    let mmap_bp = ParallelFastxParser::<CONFIG_STR>::from_file_mmap(&path)
         .unwrap()
         .threads(4)
-        .mmap()
         .reduce(
             |mut parser| {
                 let mut len = 0;
@@ -491,12 +487,11 @@ fn test_parallel_records_fewer_than_threads() {
             assert_eq!(slice_records, expected_records);
             assert_eq!(slice_bases, expected_bases);
 
-            // 2. from_file with reader() (multi-reader)
+            // 2. from_file (multi-reader)
             let (reader_records, reader_bases) =
                 ParallelFastxParser::<CONFIG_STR>::from_file(&test_file)
                     .unwrap()
                     .threads(thread_count)
-                    .reader()
                     .reduce(
                         |mut parser| {
                             let mut recs = 0;
@@ -513,13 +508,12 @@ fn test_parallel_records_fewer_than_threads() {
             assert_eq!(reader_records, expected_records);
             assert_eq!(reader_bases, expected_bases);
 
-            // 3. from_file with mmap()
+            // 3. from_file_mmap
             if !bytes.is_empty() {
                 let (mmap_records, mmap_bases) =
-                    ParallelFastxParser::<CONFIG_STR>::from_file(&test_file)
+                    ParallelFastxParser::<CONFIG_STR>::from_file_mmap(&test_file)
                         .unwrap()
                         .threads(thread_count)
-                        .mmap()
                         .reduce(
                             |mut parser| {
                                 let mut recs = 0;

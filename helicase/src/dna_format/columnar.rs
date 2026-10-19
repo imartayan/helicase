@@ -69,6 +69,24 @@ impl ColumnarDNA {
     }
 
     #[inline(always)]
+    pub fn pop_base(&mut self) {
+        if self.len > 0 {
+            let rem = self.len % BITS_PER_BLOCK;
+            self.len -= 1;
+            if rem == 0 {
+                if let Some(last_hi) = self.high_bits.pop() {
+                    let last_lo = self.low_bits.pop().unwrap();
+                    self.cur_hi = last_hi & ((1u64 << (BITS_PER_BLOCK - 1)) - 1);
+                    self.cur_lo = last_lo & ((1u64 << (BITS_PER_BLOCK - 1)) - 1);
+                }
+            } else {
+                self.cur_hi &= (1u64 << (rem - 1)) - 1;
+                self.cur_lo &= (1u64 << (rem - 1)) - 1;
+            }
+        }
+    }
+
+    #[inline(always)]
     pub fn append_block(&mut self, high: T, low: T) {
         let rem = self.len % BITS_PER_BLOCK;
         self.len += BITS_PER_BLOCK;
@@ -333,5 +351,22 @@ mod tests {
             unaligned.to_string(),
             "GGG".to_string() + &"T".repeat(64) + &"C".repeat(64)
         );
+    }
+
+    #[test]
+    fn test_pop_base() {
+        let mut v = ColumnarDNA::new();
+        v.append_block(!0u64, 0u64); // 64 T
+        assert_eq!(v.len(), 64);
+        v.pop_base();
+        assert_eq!(v.len(), 63);
+        assert_eq!(v.to_string(), "T".repeat(63));
+
+        // Pop across block boundary
+        v.append_block(0u64, !0u64); // 64 C
+        assert_eq!(v.len(), 63 + 64);
+        v.pop_base();
+        assert_eq!(v.len(), 63 + 63);
+        assert_eq!(v.to_string(), "T".repeat(63) + &"C".repeat(63));
     }
 }

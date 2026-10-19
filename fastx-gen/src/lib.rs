@@ -228,6 +228,12 @@ impl FastxGen {
         self
     }
 
+    /// Fluent builder method to enable or disable Windows CRLF line endings.
+    pub const fn with_crlf(mut self, crlf: bool) -> Self {
+        self.crlf = crlf;
+        self
+    }
+
     /// Sample length for a single record using mean_len and relative std_dev.
     pub fn sample_len(&self, rng: &mut Xoshiro256PlusPlus) -> usize {
         if self.std_dev > 0.0 {

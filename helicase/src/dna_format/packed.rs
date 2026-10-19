@@ -76,6 +76,22 @@ impl PackedDNA {
     }
 
     #[inline(always)]
+    pub fn pop_base(&mut self) {
+        if self.num_bits >= BITS_PER_BP {
+            let rem = self.num_bits % BITS_PER_BLOCK;
+            self.num_bits -= BITS_PER_BP;
+            let bits = self.bits.get_mut();
+            if rem == 0 {
+                if let Some(last) = bits.pop() {
+                    self.cur = last & ((1u64 << (BITS_PER_BLOCK - BITS_PER_BP)) - 1);
+                }
+            } else if rem >= BITS_PER_BP {
+                self.cur &= (1u64 << (rem - BITS_PER_BP)) - 1;
+            }
+        }
+    }
+
+    #[inline(always)]
     pub fn append_block(&mut self, packed: u128) {
         let lo = packed as u64;
         let hi = (packed >> 64) as u64;
@@ -379,5 +395,24 @@ mod tests {
             format!("{unaligned}"),
             "CCC".to_string() + &"A".repeat(64) + &"G".repeat(64)
         );
+    }
+
+    #[test]
+    fn test_pop_base() {
+        let (a_full, _) = encode(&"A".repeat(64));
+        let mut dna = PackedDNA::new();
+        dna.append_block(a_full);
+        assert_eq!(dna.len(), 64);
+        dna.pop_base();
+        assert_eq!(dna.len(), 63);
+        assert_eq!(format!("{dna}"), "A".repeat(63));
+
+        // Pop across block boundary
+        let (g_full, _) = encode(&"G".repeat(64));
+        dna.append_block(g_full);
+        assert_eq!(dna.len(), 63 + 64);
+        dna.pop_base();
+        assert_eq!(dna.len(), 63 + 63);
+        assert_eq!(format!("{dna}"), "A".repeat(63) + &"G".repeat(63));
     }
 }

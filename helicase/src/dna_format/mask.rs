@@ -58,6 +58,21 @@ impl BitMask {
     }
 
     #[inline(always)]
+    pub fn pop_base(&mut self) {
+        if self.len > 0 {
+            let rem = self.len % BITS_PER_BLOCK;
+            self.len -= 1;
+            if rem == 0 {
+                if let Some(last) = self.bits.pop() {
+                    self.cur = last & ((1u64 << (BITS_PER_BLOCK - 1)) - 1);
+                }
+            } else {
+                self.cur &= (1u64 << (rem - 1)) - 1;
+            }
+        }
+    }
+
+    #[inline(always)]
     pub fn append_block(&mut self, x: T) {
         let rem = self.len % BITS_PER_BLOCK;
         self.len += BITS_PER_BLOCK;
@@ -179,5 +194,24 @@ mod tests {
         assert!(got[..10].iter().all(|&b| b));
         assert!(got[10..74].iter().all(|&b| !b));
         assert!(got[74..].iter().all(|&b| b));
+    }
+
+    #[test]
+    fn test_pop_base() {
+        let mut m = BitMask::new();
+        m.append_block(!0u64);
+        assert_eq!(m.len(), 64);
+        m.pop_base();
+        assert_eq!(m.len(), 63);
+        assert!(m.get_all().iter().all(|&b| b));
+
+        // Pop across block boundary
+        m.append_block(0u64);
+        assert_eq!(m.len(), 63 + 64);
+        m.pop_base();
+        assert_eq!(m.len(), 63 + 63);
+        let got = m.get_all();
+        assert!(got[..63].iter().all(|&b| b));
+        assert!(got[63..].iter().all(|&b| !b));
     }
 }

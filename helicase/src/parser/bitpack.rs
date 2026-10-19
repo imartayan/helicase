@@ -29,6 +29,22 @@ impl DnaBitpackers {
     }
 
     #[inline(always)]
+    pub fn pop_base<const CONFIG: Config>(&mut self) {
+        if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
+            self.packed.pop_base();
+        }
+        if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
+            self.columnar.pop_base();
+        }
+        if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
+            self.mask_non_actg.pop_base();
+        }
+        if flag_is_set(CONFIG, COMPUTE_MASK_N) {
+            self.mask_n.pop_base();
+        }
+    }
+
+    #[inline(always)]
     pub fn reserve<const CONFIG: Config>(&mut self, additional: usize) {
         if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
             self.packed.reserve(additional);

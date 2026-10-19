@@ -187,6 +187,32 @@ mod fasta {
             assert_eq!(packed_len, string_len, "packed length mismatch");
         }
     }
+
+    #[test]
+    fn test_crlf_fasta() {
+        let crlf_data = b">seq1\r\nACGTACGT\r\n>seq2\r\nAAAA\r\nCCCC\r\nGGGG\r\n>seq3\r\nTTTT\r\n";
+        const CONFIG_ALL: Config = ParserOptions::default()
+            .compute_headers()
+            .dna_string()
+            .and_dna_packed()
+            .and_dna_columnar()
+            .keep_non_actg()
+            .config();
+
+        let mut parser = FastaParser::<CONFIG_ALL, _>::from_slice(crlf_data).unwrap();
+        let mut headers = Vec::new();
+        let mut seqs = Vec::new();
+        while let Some(_event) = parser.next() {
+            let hdr = String::from_utf8(parser.get_header().to_vec()).unwrap();
+            let dna = String::from_utf8(parser.get_dna_string().to_vec()).unwrap();
+            headers.push(hdr);
+            assert_eq!(parser.get_dna_packed().to_string(), dna);
+            assert_eq!(parser.get_dna_columnar().to_string(), dna);
+            seqs.push(dna);
+        }
+        assert_eq!(headers, vec!["seq1", "seq2", "seq3"]);
+        assert_eq!(seqs, vec!["ACGTACGT", "AAAACCCCGGGG", "TTTT"]);
+    }
 }
 
 mod fastq {
@@ -399,6 +425,80 @@ mod fastq {
             let packed_len = f.get_dna_packed().len();
             assert_eq!(packed_len, string_len, "packed length mismatch");
         }
+    }
+
+    #[test]
+    fn test_crlf_fastq() {
+        let crlf_data =
+            b"@read1\r\nACGTACGT\r\n+\r\nIIIIIIII\r\n@read2\r\nTTTTCCCC\r\n+\r\nJJJJJJJJ\r\n";
+        const CONFIG_ALL: Config = ParserOptions::default()
+            .compute_headers()
+            .dna_string()
+            .and_dna_packed()
+            .and_dna_columnar()
+            .keep_non_actg()
+            .compute_quality()
+            .config();
+
+        let mut parser = FastqParser::<CONFIG_ALL, _>::from_slice(crlf_data).unwrap();
+        let mut headers = Vec::new();
+        let mut seqs = Vec::new();
+        let mut quals = Vec::new();
+        while let Some(_event) = parser.next() {
+            headers.push(String::from_utf8(parser.get_header().to_vec()).unwrap());
+            let dna = String::from_utf8(parser.get_dna_string().to_vec()).unwrap();
+            quals.push(String::from_utf8(parser.get_quality().unwrap().to_vec()).unwrap());
+            assert_eq!(parser.get_dna_packed().to_string(), dna);
+            assert_eq!(parser.get_dna_columnar().to_string(), dna);
+            seqs.push(dna);
+        }
+        assert_eq!(headers, vec!["read1", "read2"]);
+        assert_eq!(seqs, vec!["ACGTACGT", "TTTTCCCC"]);
+        assert_eq!(quals, vec!["IIIIIIII", "JJJJJJJJ"]);
+    }
+
+    #[test]
+    fn test_crlf_fastq_split_non_actg() {
+        let crlf_data = b"@read1\r\nACGTNNACGT\r\n+\r\nIIIIIIIIII\r\n";
+        const CONFIG_SPLIT: Config = ParserOptions::default()
+            .compute_headers()
+            .dna_string()
+            .split_non_actg()
+            .config();
+
+        let mut parser = FastqParser::<CONFIG_SPLIT, _>::from_slice(crlf_data).unwrap();
+        let mut chunks = Vec::new();
+        while let Some(_event) = parser.next() {
+            chunks.push(String::from_utf8(parser.get_dna_string().to_vec()).unwrap());
+        }
+        assert_eq!(chunks, vec!["ACGT", "ACGT"]);
+    }
+
+    #[test]
+    fn test_crlf_block_boundary() {
+        // Construct header such that sequence ends with \r at byte 63 and \n at byte 64
+        let header_prefix = "A".repeat(57);
+        let fastq = format!("@{header_prefix}\r\nACG\r\n+\r\nIII\r\n");
+        const CONFIG_ALL: Config = ParserOptions::default()
+            .compute_headers()
+            .dna_string()
+            .and_dna_packed()
+            .and_dna_columnar()
+            .keep_non_actg()
+            .compute_quality()
+            .config();
+
+        let mut parser = FastqParser::<CONFIG_ALL, _>::from_slice(fastq.as_bytes()).unwrap();
+        let mut count = 0;
+        while let Some(_event) = parser.next() {
+            count += 1;
+            assert_eq!(parser.get_header(), header_prefix.as_bytes());
+            assert_eq!(parser.get_dna_string(), b"ACG");
+            assert_eq!(parser.get_quality(), Some(b"III".as_slice()));
+            assert_eq!(parser.get_dna_packed().to_string(), "ACG");
+            assert_eq!(parser.get_dna_columnar().to_string(), "ACG");
+        }
+        assert_eq!(count, 1);
     }
 }
 

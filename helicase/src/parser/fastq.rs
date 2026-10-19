@@ -48,6 +48,9 @@ pub struct FastqParser<'a, const CONFIG: Config, I: InputData<'a>> {
     bitpackers: DnaBitpackers,
     dna_len: usize,
     pending_error: Option<io::Error>,
+    crlf_len: usize,
+    crlf_detected: bool,
+    seq_start: usize,
     #[cfg(feature = "paraseq")]
     record_index: u64,
     #[cfg(feature = "paraseq")]
@@ -85,6 +88,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
             bitpackers: DnaBitpackers::new(),
             dna_len: 0,
             pending_error,
+            crlf_len: 0,
+            crlf_detected: false,
+            seq_start: 0,
             #[cfg(feature = "paraseq")]
             record_index: 0,
             #[cfg(feature = "paraseq")]
@@ -426,7 +432,14 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         self.pos_in_block = 0;
                     }
                     self.pos_in_block = self.block.newline.trailing_zeros() as usize;
-                    self.header_range.end = self.global_pos();
+                    let nl_pos = self.global_pos();
+                    if !self.crlf_detected {
+                        if nl_pos > 0 && self.lexer.input.slice(nl_pos - 1..nl_pos) == b"\r" {
+                            self.crlf_len = 1;
+                        }
+                        self.crlf_detected = true;
+                    }
+                    self.header_range.end = nl_pos.saturating_sub(self.crlf_len);
                     if flag_is_set(CONFIG, COMPUTE_HEADER)
                         && !I::RANDOM_ACCESS
                         && self.pos_in_block + 1 >= self.block.len
@@ -435,6 +448,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         self.lexer.input.make_room(self.header_range.start);
                     }
                     self.consume_newline();
+                    self.seq_start = self.global_pos();
                 }
                 1 => {
                     // SEQUENCE
@@ -461,7 +475,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         }
                         self.pos_in_block = position.trailing_zeros() as usize;
                         if ((1 << self.pos_in_block) & self.block.newline) != 0 {
-                            self.dna_range.end = self.global_pos();
+                            self.dna_range.end = self.global_pos().saturating_sub(self.crlf_len);
                             self.make_room_record_end();
                             self.consume_newline();
                             continue;
@@ -480,7 +494,12 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                     if position != 0 {
                         let first_pos = self.pos_in_block;
                         self.pos_in_block = position.trailing_zeros() as usize;
-                        self.append_dna_range(first_pos, self.pos_in_block - first_pos);
+                        let len = if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
+                            (self.pos_in_block - first_pos).saturating_sub(self.crlf_len)
+                        } else {
+                            self.pos_in_block - first_pos
+                        };
+                        self.append_dna_range(first_pos, len);
                     } else {
                         if self.pos_in_block > 0 {
                             self.make_room_record();
@@ -538,9 +557,27 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         }
                         self.block = block;
                         self.pos_in_block = position.trailing_zeros() as usize;
-                        self.append_dna_range(0, self.pos_in_block);
+                        if self.pos_in_block > 0 {
+                            let len = if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
+                                self.pos_in_block.saturating_sub(self.crlf_len)
+                            } else {
+                                self.pos_in_block
+                            };
+                            self.append_dna_range(0, len);
+                        } else if self.crlf_len == 1 && flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
+                            self.bitpackers.pop_base::<CONFIG>();
+                            if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
+                                self.dna_len -= 1;
+                            }
+                        }
                     }
-                    self.dna_range.end = self.global_pos();
+                    self.dna_range.end = self.global_pos().saturating_sub(
+                        if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
+                            self.crlf_len
+                        } else {
+                            0
+                        },
+                    );
                     if merge_chunks {
                         let dna_chunk = self.lexer.input.slice(self.dna_range.clone());
                         self.cur_dna_string.extend_from_slice(dna_chunk);
@@ -584,7 +621,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                     if flag_is_set(CONFIG, COMPUTE_QUALITY) {
                         self.quality_range.start = qual_start;
                     }
-                    let target_pos = qual_start + self.dna_range.end - (self.header_range.end + 1);
+                    let seq_len = self.dna_range.end.saturating_sub(self.seq_start);
+                    let target_pos = qual_start + seq_len + self.crlf_len;
                     if target_pos / 64 > self.block_counter && self.block.newline == 0 {
                         let keep_anchor = flag_is_set(
                             CONFIG,
@@ -625,7 +663,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                     self.pos_in_block = self.block.newline.trailing_zeros() as usize;
                     if flag_is_set(CONFIG, COMPUTE_QUALITY) {
                         self.pos_in_block = self.pos_in_block.min(self.block.len);
-                        self.quality_range.end = self.global_pos();
+                        self.quality_range.end = self.global_pos().saturating_sub(self.crlf_len);
                     }
                     self.make_room_record_end();
                     self.make_room_quality_end();

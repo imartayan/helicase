@@ -176,3 +176,48 @@ fn test_diff_fastq_at_in_qualities() {
             .with_seed(808),
     );
 }
+
+#[test]
+fn test_diff_fasta_crlf_unwrapped() {
+    run_differential_test(FastxGen::fasta(25, 300).with_crlf(true).with_seed(901));
+}
+
+#[test]
+fn test_diff_fasta_crlf_wrapped_60() {
+    run_differential_test(
+        FastxGen::wrapped_fasta(20, 500, 60)
+            .with_crlf(true)
+            .with_seed(902),
+    );
+}
+
+#[test]
+fn test_diff_fasta_crlf_wrapped_80() {
+    run_differential_test(
+        FastxGen::wrapped_fasta(20, 600, 80)
+            .with_crlf(true)
+            .with_seed(903),
+    );
+}
+
+#[test]
+fn test_diff_fastq_crlf_illumina() {
+    run_differential_test(FastxGen::illumina(50).with_crlf(true).with_seed(904));
+}
+
+#[test]
+fn test_diff_fastq_crlf_pacbio() {
+    run_differential_test(FastxGen::pacbio(5).with_crlf(true).with_seed(905));
+}
+
+#[test]
+fn test_diff_fastq_crlf_variable_len() {
+    run_differential_test(
+        FastxGen::illumina(40)
+            .with_mean_len(250)
+            .with_alphabet(Alphabet::DnaWithN)
+            .with_std_dev(0.25)
+            .with_crlf(true)
+            .with_seed(906),
+    );
+}

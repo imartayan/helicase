@@ -54,6 +54,8 @@ pub struct FastaParser<'a, const CONFIG: Config, I: InputData<'a>> {
     bitpackers: DnaBitpackers,
     dna_len: usize,
     pending_error: Option<io::Error>,
+    crlf_len: usize,
+    crlf_detected: bool,
     #[cfg(feature = "paraseq")]
     record_index: u64,
     #[cfg(feature = "paraseq")]
@@ -91,6 +93,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             bitpackers: DnaBitpackers::new(),
             dna_len: 0,
             pending_error,
+            crlf_len: 0,
+            crlf_detected: false,
             #[cfg(feature = "paraseq")]
             record_index: 0,
             #[cfg(feature = "paraseq")]
@@ -428,7 +432,16 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
                     self.pos_in_block = self.block.len;
                     self.finished = true;
                     if flag_is_set(CONFIG, COMPUTE_HEADER) {
-                        self.header_range.end = self.global_pos();
+                        let end_pos = self.global_pos();
+                        let crlf = if !self.crlf_detected
+                            && end_pos > 0
+                            && self.lexer.input.slice(end_pos - 1..end_pos) == b"\r"
+                        {
+                            1
+                        } else {
+                            self.crlf_len
+                        };
+                        self.header_range.end = end_pos.saturating_sub(crlf);
                     }
                     self.state = State::Sequence;
                     break;
@@ -441,8 +454,15 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
 
         if !self.finished {
             self.pos_in_block = position.trailing_zeros() as usize;
+            let nl_pos = self.global_pos();
+            if !self.crlf_detected {
+                if nl_pos > 0 && self.lexer.input.slice(nl_pos - 1..nl_pos) == b"\r" {
+                    self.crlf_len = 1;
+                }
+                self.crlf_detected = true;
+            }
             if flag_is_set(CONFIG, COMPUTE_HEADER) {
-                self.header_range.end = self.global_pos();
+                self.header_range.end = nl_pos.saturating_sub(self.crlf_len);
             }
             if flag_is_set(CONFIG, COMPUTE_HEADER)
                 && !I::RANDOM_ACCESS
@@ -658,11 +678,15 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                 }
                 State::Sequence => {
                     // Skip blank lines
-                    while !self.finished
-                        && (self.current_byte() == b'\n' || self.current_byte() == b'\r')
-                    {
-                        self.make_room_record_end(self.global_pos());
-                        self.consume_newline();
+                    while !self.finished {
+                        if self.current_byte() == b'\r' {
+                            self.increment_pos();
+                        } else if self.current_byte() == b'\n' {
+                            self.make_room_record_end(self.global_pos());
+                            self.consume_newline();
+                        } else {
+                            break;
+                        }
                     }
 
                     if self.finished {
@@ -697,7 +721,12 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                         if position != 0 {
                             let first_pos = self.pos_in_block;
                             self.pos_in_block = position.trailing_zeros() as usize;
-                            self.append_dna_range(first_pos, self.pos_in_block - first_pos);
+                            let len = if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
+                                (self.pos_in_block - first_pos).saturating_sub(self.crlf_len)
+                            } else {
+                                self.pos_in_block - first_pos
+                            };
+                            self.append_dna_range(first_pos, len);
                         } else {
                             if self.pos_in_block > 0 {
                                 self.make_room_record(line_start);
@@ -761,10 +790,34 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                             self.block = block;
                             if !self.finished {
                                 self.pos_in_block = position.trailing_zeros() as usize;
-                                self.append_dna_range(0, self.pos_in_block);
+                                if self.pos_in_block > 0 {
+                                    let len = if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
+                                        self.pos_in_block.saturating_sub(self.crlf_len)
+                                    } else {
+                                        self.pos_in_block
+                                    };
+                                    self.append_dna_range(0, len);
+                                } else if self.crlf_len == 1
+                                    && flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
+                                {
+                                    self.bitpackers.pop_base::<CONFIG>();
+                                    if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
+                                        self.dna_len -= 1;
+                                    }
+                                }
                             }
                         }
-                        self.dna_range.end = self.global_pos();
+                        if !self.finished {
+                            self.dna_range.end = self.global_pos().saturating_sub(
+                                if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
+                                    self.crlf_len
+                                } else {
+                                    0
+                                },
+                            );
+                        } else {
+                            self.dna_range.end = self.global_pos();
+                        }
                         if copy_str {
                             let dna_chunk = self.lexer.input.slice(line_start..self.dna_range.end);
                             self.cur_dna_string.extend_from_slice(dna_chunk);
@@ -807,11 +860,15 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                         self.make_room_record_end(line_start);
                         self.consume_newline();
 
-                        while !self.finished
-                            && (self.current_byte() == b'\n' || self.current_byte() == b'\r')
-                        {
-                            self.make_room_record_end(line_start);
-                            self.consume_newline();
+                        while !self.finished {
+                            if self.current_byte() == b'\r' {
+                                self.increment_pos();
+                            } else if self.current_byte() == b'\n' {
+                                self.make_room_record_end(line_start);
+                                self.consume_newline();
+                            } else {
+                                break;
+                            }
                         }
 
                         if self.finished {

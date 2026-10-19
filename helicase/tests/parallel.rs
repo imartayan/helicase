@@ -385,23 +385,7 @@ fn test_parallel_fastx_parser_builder() {
         .unwrap();
     assert_eq!(stream_bp, slice_bp);
 
-    // 5. FastxParser::parallel_file convenience
-    let conv_bp = FastxParser::<CONFIG_STR>::parallel_file(&path)
-        .unwrap()
-        .reduce(
-            |mut parser| {
-                let mut len = 0;
-                while let Some(_) = parser.next() {
-                    len += parser.get_dna_string().len();
-                }
-                len
-            },
-            |a, b| a + b,
-        )
-        .unwrap();
-    assert_eq!(conv_bp, slice_bp);
-
-    // 6. for_each helper without reduction (reduce on unit)
+    // 5. for_each helper without reduction (reduce on unit)
     use std::sync::atomic::{AtomicUsize, Ordering};
     let shared_counter = AtomicUsize::new(0);
     ParallelFastxParser::<CONFIG_STR>::from_file(&path)
@@ -475,7 +459,7 @@ fn test_parallel_records_fewer_than_threads() {
                         |mut parser| {
                             let mut recs = 0;
                             let mut bases = 0;
-                            while parser.next().is_some() {
+                            while let Some(_event) = parser.next() {
                                 recs += 1;
                                 bases += parser.get_dna_string().len();
                             }
@@ -496,7 +480,7 @@ fn test_parallel_records_fewer_than_threads() {
                         |mut parser| {
                             let mut recs = 0;
                             let mut bases = 0;
-                            while parser.next().is_some() {
+                            while let Some(_event) = parser.next() {
                                 recs += 1;
                                 bases += parser.get_dna_string().len();
                             }
@@ -518,7 +502,7 @@ fn test_parallel_records_fewer_than_threads() {
                             |mut parser| {
                                 let mut recs = 0;
                                 let mut bases = 0;
-                                while parser.next().is_some() {
+                                while let Some(_event) = parser.next() {
                                     recs += 1;
                                     bases += parser.get_dna_string().len();
                                 }

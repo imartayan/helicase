@@ -24,7 +24,7 @@ fn collect_record_lengths(
         .for_each(|mut parser| {
             LOCAL_BUF.with_borrow_mut(|buf| {
                 buf.clear(); // Reuses allocated capacity across chunks on this thread
-                while parser.next().is_some() {
+                while let Some(_event) = parser.next() {
                     buf.push(parser.get_dna_len());
                 }
                 dest.lock().unwrap().extend_from_slice(buf);

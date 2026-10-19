@@ -478,7 +478,7 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     ///     .reduce(
     ///         |mut parser| {
     ///             let mut len = 0;
-    ///             while parser.next().is_some() {
+    ///             while let Some(_event) = parser.next() {
     ///                 len += parser.get_dna_len();
     ///             }
     ///             len
@@ -502,7 +502,7 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     ///     .reduce(
     ///         |mut parser| {
     ///             let mut local = Vec::new();
-    ///             while parser.next().is_some() {
+    ///             while let Some(_event) = parser.next() {
     ///                 local.push(parser.get_dna_len());
     ///             }
     ///             local

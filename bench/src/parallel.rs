@@ -35,7 +35,16 @@ impl<R: paraseq::Record> ParallelProcessor<R> for ParaseqCounter {
     }
 }
 
-pub fn bench_helicase_single(data: &[u8], repeat: usize) -> (f64, usize) {
+pub fn bench_helicase_single(data: &[u8], repeat: usize, warmup: usize) -> (f64, usize) {
+    for _ in 0..warmup {
+        let mut parser = FastxParser::<DNA_STRING>::from_slice(data).unwrap();
+        let mut total_len = 0;
+        while parser.next().is_some() {
+            total_len += parser.get_dna_string().len();
+        }
+        std::hint::black_box(total_len);
+    }
+
     let mut last_len = 0;
     let mut times = Vec::with_capacity(repeat);
     for _ in 0..repeat {
@@ -55,7 +64,29 @@ pub fn bench_helicase_single(data: &[u8], repeat: usize) -> (f64, usize) {
     (gb_s, last_len)
 }
 
-pub fn bench_helicase_parallel(data: &[u8], threads: usize, repeat: usize) -> (f64, usize) {
+pub fn bench_helicase_parallel(
+    data: &[u8],
+    threads: usize,
+    repeat: usize,
+    warmup: usize,
+) -> (f64, usize) {
+    for _ in 0..warmup {
+        let total_len = ParallelFastxParser::<DNA_STRING>::from_slice(data)
+            .threads(threads)
+            .reduce(
+                |mut parser| {
+                    let mut len = 0;
+                    while parser.next().is_some() {
+                        len += parser.get_dna_string().len();
+                    }
+                    len
+                },
+                |a, b| a + b,
+            )
+            .unwrap();
+        std::hint::black_box(total_len);
+    }
+
     let mut last_len = 0;
     let mut times = Vec::with_capacity(repeat);
     for _ in 0..repeat {
@@ -83,7 +114,29 @@ pub fn bench_helicase_parallel(data: &[u8], threads: usize, repeat: usize) -> (f
     (gb_s, last_len)
 }
 
-pub fn bench_helicase_packed(data: &[u8], threads: usize, repeat: usize) -> (f64, usize) {
+pub fn bench_helicase_packed(
+    data: &[u8],
+    threads: usize,
+    repeat: usize,
+    warmup: usize,
+) -> (f64, usize) {
+    for _ in 0..warmup {
+        let total_len = ParallelFastxParser::<DNA_PACKED>::from_slice(data)
+            .threads(threads)
+            .reduce(
+                |mut parser| {
+                    let mut len = 0;
+                    while parser.next().is_some() {
+                        len += parser.get_dna_packed().len();
+                    }
+                    len
+                },
+                |a, b| a + b,
+            )
+            .unwrap();
+        std::hint::black_box(total_len);
+    }
+
     let mut last_len = 0;
     let mut times = Vec::with_capacity(repeat);
     for _ in 0..repeat {
@@ -111,7 +164,21 @@ pub fn bench_helicase_packed(data: &[u8], threads: usize, repeat: usize) -> (f64
     (gb_s, last_len)
 }
 
-pub fn bench_paraseq(data: &[u8], threads: usize, repeat: usize) -> Result<(f64, usize), String> {
+pub fn bench_paraseq(
+    data: &[u8],
+    threads: usize,
+    repeat: usize,
+    warmup: usize,
+) -> Result<(f64, usize), String> {
+    for _ in 0..warmup {
+        let reader = fastx::Reader::new(data).map_err(|e| e.to_string())?;
+        let mut counter = ParaseqCounter::default();
+        reader
+            .process_parallel(&mut counter, threads)
+            .map_err(|e| e.to_string())?;
+        std::hint::black_box(counter.len.load(Ordering::Relaxed));
+    }
+
     let mut last_len = 0;
     let mut times = Vec::with_capacity(repeat);
     for _ in 0..repeat {
@@ -136,28 +203,45 @@ pub fn bench_helicase_file_parallel(
     size: u64,
     threads: usize,
     repeat: usize,
+    warmup: usize,
     use_mmap: bool,
 ) -> (f64, usize) {
+    for _ in 0..warmup {
+        let builder = if use_mmap {
+            ParallelFastxParser::<DNA_STRING>::from_file_mmap(path)
+        } else {
+            ParallelFastxParser::<DNA_STRING>::from_file(path)
+        }
+        .unwrap()
+        .threads(threads);
+        let total_len = builder
+            .reduce(
+                |mut parser| {
+                    let mut len = 0;
+                    while parser.next().is_some() {
+                        len += parser.get_dna_string().len();
+                    }
+                    len
+                },
+                |a, b| a + b,
+            )
+            .unwrap();
+        std::hint::black_box(total_len);
+    }
+
     let mut last_len = 0;
     let mut times = Vec::with_capacity(repeat);
     for _ in 0..repeat {
         let t0 = Instant::now();
-        let builder = ParallelFastxParser::<DNA_STRING>::from_file(path)
-            .unwrap()
-            .threads(threads);
-        let total_len = if use_mmap {
-            builder.mmap().reduce(
-                |mut parser| {
-                    let mut len = 0;
-                    while parser.next().is_some() {
-                        len += parser.get_dna_string().len();
-                    }
-                    len
-                },
-                |a, b| a + b,
-            )
+        let builder = if use_mmap {
+            ParallelFastxParser::<DNA_STRING>::from_file_mmap(path)
         } else {
-            builder.reduce(
+            ParallelFastxParser::<DNA_STRING>::from_file(path)
+        }
+        .unwrap()
+        .threads(threads);
+        let total_len = builder
+            .reduce(
                 |mut parser| {
                     let mut len = 0;
                     while parser.next().is_some() {
@@ -167,8 +251,7 @@ pub fn bench_helicase_file_parallel(
                 },
                 |a, b| a + b,
             )
-        }
-        .unwrap();
+            .unwrap();
         let elapsed = t0.elapsed().as_secs_f64();
         times.push(elapsed);
         last_len = total_len;
@@ -184,7 +267,19 @@ pub fn bench_paraseq_file(
     size: u64,
     threads: usize,
     repeat: usize,
+    warmup: usize,
 ) -> Result<(f64, usize), String> {
+    for _ in 0..warmup {
+        let reader = paraseq::ReaderBuilder::path(path)
+            .build()
+            .map_err(|e| e.to_string())?;
+        let mut counter = ParaseqCounter::default();
+        reader
+            .process_parallel(&mut counter, threads)
+            .map_err(|e| e.to_string())?;
+        std::hint::black_box(counter.len.load(Ordering::Relaxed));
+    }
+
     let mut last_len = 0;
     let mut times = Vec::with_capacity(repeat);
     for _ in 0..repeat {
@@ -211,11 +306,12 @@ pub fn run_parallel_benchmarks(
     name: &str,
     thread_counts: &[usize],
     repeat: usize,
+    warmup: usize,
     markdown: bool,
     no_baseline: bool,
 ) {
     let size_mb = data.len() as f64 / (1024.0 * 1024.0);
-    let (single_gb_s, single_len) = bench_helicase_single(data, repeat);
+    let (single_gb_s, single_len) = bench_helicase_single(data, repeat, warmup);
 
     if markdown {
         println!("\n### Parallel Scaling: {} ({:.1} MB)", name, size_mb);
@@ -257,13 +353,13 @@ pub fn run_parallel_benchmarks(
     }
 
     for &threads in thread_counts {
-        let (heli_gb_s, heli_len) = bench_helicase_parallel(data, threads, repeat);
+        let (heli_gb_s, heli_len) = bench_helicase_parallel(data, threads, repeat, warmup);
         assert_eq!(
             single_len, heli_len,
             "Helicase length mismatch on {} threads!",
             threads
         );
-        let (heli_pack_gb_s, _heli_pack_len) = bench_helicase_packed(data, threads, repeat);
+        let (heli_pack_gb_s, _heli_pack_len) = bench_helicase_packed(data, threads, repeat, warmup);
         let speedup = heli_gb_s / single_gb_s;
 
         if no_baseline {
@@ -285,7 +381,7 @@ pub fn run_parallel_benchmarks(
                 );
             }
         } else {
-            let paraseq_res = bench_paraseq(data, threads, repeat);
+            let paraseq_res = bench_paraseq(data, threads, repeat, warmup);
             let (par_str, delta_str, delta_num) = match paraseq_res {
                 Ok((par_gb_s, _)) => {
                     let delta = ((heli_gb_s - par_gb_s) / par_gb_s) * 100.0;

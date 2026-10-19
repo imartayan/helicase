@@ -34,6 +34,10 @@ pub struct Args {
     #[arg(short = 'r', long, default_value_t = 5)]
     pub repeat: u64,
 
+    /// Number of warmup iterations before benchmarking
+    #[arg(short = 'w', long, default_value_t = 1)]
+    pub warmup: u64,
+
     /// Benchmark in-memory RAM slices/readers (enabled by default)
     #[arg(short = 'R', long, hide = true)]
     pub ram: bool,
@@ -132,6 +136,7 @@ fn run_with_measurement<M: Measurement>(args: &Args) {
 
         let legacy_args = LegacyArgs {
             repeat: args.repeat,
+            warmup: args.warmup,
             csv: args.csv,
             no_csv_header: args.no_csv_header,
             no_baseline: args.no_baseline,
@@ -167,6 +172,7 @@ fn run_with_measurement<M: Measurement>(args: &Args) {
                 &name,
                 &threads,
                 args.repeat as usize,
+                args.warmup as usize,
                 is_markdown,
                 args.no_baseline,
             );
@@ -180,6 +186,7 @@ fn run_with_measurement<M: Measurement>(args: &Args) {
                 ds.name,
                 &threads,
                 args.repeat as usize,
+                args.warmup as usize,
                 is_markdown,
                 args.no_baseline,
             );
@@ -194,6 +201,7 @@ fn run_with_measurement<M: Measurement>(args: &Args) {
 
     let opts = BenchOptions {
         repeat: args.repeat,
+        warmup: args.warmup,
         no_baseline: args.no_baseline,
         bench_ram,
         bench_file,
@@ -224,6 +232,7 @@ fn print_legacy_help() {
            <FILE>                 Input FASTA or FASTQ file to benchmark\n\n\
          Options:\n  \
            -r, --repeat <REPEAT>  Number of benchmark repetitions per test [default: 5]\n  \
+           -w, --warmup <WARMUP>  Number of warmup iterations before benchmarking [default: 1]\n  \
            -c, --csv              Output in CSV format\n  \
            -H, --no-csv-header    Suppress CSV header\n  \
            -B, --no-baseline      Disable baseline parsers (Needletail & Paraseq)\n  \
@@ -446,5 +455,21 @@ mod tests {
             parsed.input.as_ref().map(|p| p.to_str().unwrap()),
             Some("sample.fa")
         );
+    }
+
+    #[test]
+    fn test_warmup_arg() {
+        let parsed = Args::parse_from(normalize_args(&to_string_vec(&["bench"])));
+        assert_eq!(parsed.warmup, 1);
+        assert_eq!(parsed.repeat, 5);
+
+        let parsed = Args::parse_from(normalize_args(&to_string_vec(&[
+            "bench", "-w", "3", "-r", "10",
+        ])));
+        assert_eq!(parsed.warmup, 3);
+        assert_eq!(parsed.repeat, 10);
+
+        let parsed = Args::parse_from(normalize_args(&to_string_vec(&["bench", "--warmup=0"])));
+        assert_eq!(parsed.warmup, 0);
     }
 }

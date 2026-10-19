@@ -99,6 +99,7 @@ impl OutputFormat {
 #[derive(Debug, Clone)]
 pub struct BenchOptions {
     pub repeat: u64,
+    pub warmup: u64,
     pub no_baseline: bool,
     pub bench_ram: bool,
     pub bench_file: bool,
@@ -112,6 +113,7 @@ impl Default for BenchOptions {
     fn default() -> Self {
         Self {
             repeat: 5,
+            warmup: 1,
             no_baseline: false,
             bench_ram: true,
             bench_file: false,
@@ -258,6 +260,23 @@ pub fn run_custom_file_bench<M: Measurement>(path: &Path, opts: &BenchOptions) {
     print_results(&summaries, opts);
 }
 
+macro_rules! bench_run {
+    ($m:ident, $opts:expr, $code:block) => {{
+        for _ in 0..$opts.warmup {
+            let len: usize = $code;
+            std::hint::black_box(len);
+        }
+        $m.start();
+        let mut last_len: usize = 0;
+        for _ in 0..$opts.repeat {
+            last_len = $code;
+            $m.tick();
+        }
+        std::hint::black_box(last_len);
+        last_len
+    }};
+}
+
 fn bench_ram_dataset<M: Measurement>(
     name: &str,
     slice: &[u8],
@@ -267,15 +286,6 @@ fn bench_ram_dataset<M: Measurement>(
 ) {
     if slice.is_empty() {
         return;
-    }
-
-    // 1 warmup iteration to prime instruction/data caches
-    if let Ok(mut parser) = FastxParser::<DNA_STRING>::from_slice(slice) {
-        let mut len = 0;
-        while parser.next().is_some() {
-            len += parser.get_dna_string().len();
-        }
-        std::hint::black_box(len);
     }
 
     let is_csv = opts.format == OutputFormat::Csv;
@@ -295,169 +305,142 @@ fn bench_ram_dataset<M: Measurement>(
 
     // 1. Needletail baseline (slice reader)
     if !opts.no_baseline && opts.bench_ram {
-        m.start();
-        let mut dna_len = 0;
-        for _ in 0..opts.repeat {
+        let dna_len = bench_run!(m, opts, {
             let mut reader = parse_fastx_reader(slice).expect("Failed to parse slice");
-            dna_len = 0;
+            let mut len = 0;
             while let Some(r) = reader.next() {
                 let record = r.expect("Invalid record");
                 let seq = record.seq();
-                dna_len += seq.len();
+                len += seq.len();
             }
-            m.tick();
-        }
-        std::hint::black_box(dna_len);
+            len
+        });
         show_tick(&m, "Needletail string \t(reader)", dna_len);
         summary.needletail_str = m.throughput(size);
     }
 
     // 2. Needletail string + PackedSeqVec (reused buffer)
     if !opts.no_baseline && (opts.bench_ram || opts.pack_compare) {
-        m.start();
-        let mut dna_len = 0;
-        for _ in 0..opts.repeat {
+        let mut packed = PackedSeqVec::default();
+        let dna_len = bench_run!(m, opts, {
             let mut reader = parse_fastx_reader(slice).expect("Failed to parse slice");
-            let mut packed = PackedSeqVec::default();
-            dna_len = 0;
+            let mut len = 0;
             while let Some(r) = reader.next() {
                 let record = r.expect("Invalid record");
                 packed.clear();
                 packed.push_ascii(&record.seq());
-                dna_len += packed.as_slice().len();
+                len += packed.as_slice().len();
             }
-            m.tick();
-        }
-        std::hint::black_box(dna_len);
+            len
+        });
         show_tick(&m, "Needletail+PackedSeqVec", dna_len);
         summary.needletail_packed = m.throughput(size);
     }
 
     // 3. Helicase string (reader)
     if opts.bench_ram {
-        m.start();
-        let mut dna_len = 0;
-        for _ in 0..opts.repeat {
+        let dna_len = bench_run!(m, opts, {
             let mut parser =
                 FastxParser::<DNA_STRING>::from_reader(slice).expect("Failed to parse reader");
-            dna_len = 0;
+            let mut len = 0;
             while parser.next().is_some() {
-                dna_len += parser.get_dna_string().len();
+                len += parser.get_dna_string().len();
             }
-            m.tick();
-        }
-        std::hint::black_box(dna_len);
+            len
+        });
         show_tick(&m, "Helicase string \t(reader)", dna_len);
         summary.helicase_str_reader = m.throughput(size);
     }
 
     // 4. Helicase string (slice)
     if opts.bench_ram {
-        m.start();
-        let mut dna_len = 0;
-        for _ in 0..opts.repeat {
+        let dna_len = bench_run!(m, opts, {
             let mut parser =
                 FastxParser::<DNA_STRING>::from_slice(slice).expect("Failed to parse slice");
-            dna_len = 0;
+            let mut len = 0;
             while parser.next().is_some() {
-                dna_len += parser.get_dna_string().len();
+                len += parser.get_dna_string().len();
             }
-            m.tick();
-        }
-        std::hint::black_box(dna_len);
+            len
+        });
         show_tick(&m, "Helicase string \t(slice)", dna_len);
         summary.helicase_str = m.throughput(size);
     }
 
     // 5. Helicase string + PackedSeqVec (reused buffer)
     if opts.bench_ram || opts.pack_compare {
-        m.start();
-        let mut dna_len = 0;
-        for _ in 0..opts.repeat {
+        let mut packed = PackedSeqVec::default();
+        let dna_len = bench_run!(m, opts, {
             let mut parser =
                 FastxParser::<DNA_STRING>::from_slice(slice).expect("Failed to parse slice");
-            let mut packed = PackedSeqVec::default();
-            dna_len = 0;
+            let mut len = 0;
             while parser.next().is_some() {
                 packed.clear();
                 packed.push_ascii(parser.get_dna_string());
-                dna_len += packed.as_slice().len();
+                len += packed.as_slice().len();
             }
-            m.tick();
-        }
-        std::hint::black_box(dna_len);
+            len
+        });
         show_tick(&m, "Helicase str+PackedSeqVec", dna_len);
         summary.helicase_str_packed = m.throughput(size);
     }
 
     // 6. Helicase packed (keep_non_actg) (reader)
     if opts.bench_ram {
-        m.start();
-        let mut dna_len = 0;
-        for _ in 0..opts.repeat {
+        let dna_len = bench_run!(m, opts, {
             let mut parser =
                 FastxParser::<DNA_PACKED_KEEP>::from_reader(slice).expect("Failed to parse reader");
-            dna_len = 0;
+            let mut len = 0;
             while parser.next().is_some() {
-                dna_len += parser.get_dna_packed().len();
+                len += parser.get_dna_packed().len();
             }
-            m.tick();
-        }
-        std::hint::black_box(dna_len);
+            len
+        });
         show_tick(&m, "Helicase packed (keep)\t(reader)", dna_len);
         summary.helicase_packed_reader = m.throughput(size);
     }
 
     // 7. Helicase packed (keep_non_actg) (slice)
     if opts.bench_ram || opts.pack_compare {
-        m.start();
-        let mut dna_len = 0;
-        for _ in 0..opts.repeat {
+        let dna_len = bench_run!(m, opts, {
             let mut parser =
                 FastxParser::<DNA_PACKED_KEEP>::from_slice(slice).expect("Failed to parse slice");
-            dna_len = 0;
+            let mut len = 0;
             while parser.next().is_some() {
-                dna_len += parser.get_dna_packed().len();
+                len += parser.get_dna_packed().len();
             }
-            m.tick();
-        }
-        std::hint::black_box(dna_len);
+            len
+        });
         show_tick(&m, "Helicase packed (keep)\t(slice)", dna_len);
         summary.helicase_packed_keep = m.throughput(size);
     }
 
     // 8. Helicase packed (skip_non_actg)
     if opts.bench_ram || opts.pack_compare {
-        m.start();
-        let mut dna_len = 0;
-        for _ in 0..opts.repeat {
+        let dna_len = bench_run!(m, opts, {
             let mut parser =
                 FastxParser::<DNA_PACKED>::from_slice(slice).expect("Failed to parse slice");
-            dna_len = 0;
+            let mut len = 0;
             while parser.next().is_some() {
-                dna_len += parser.get_dna_packed().len();
+                len += parser.get_dna_packed().len();
             }
-            m.tick();
-        }
-        std::hint::black_box(dna_len);
+            len
+        });
         show_tick(&m, "Helicase packed (skip)\t(slice)", dna_len);
         summary.helicase_packed = m.throughput(size);
     }
 
     // 9. Helicase columnar
     if opts.bench_ram || opts.pack_compare {
-        m.start();
-        let mut dna_len = 0;
-        for _ in 0..opts.repeat {
+        let dna_len = bench_run!(m, opts, {
             let mut parser =
                 FastxParser::<DNA_COLUMNAR>::from_slice(slice).expect("Failed to parse slice");
-            dna_len = 0;
+            let mut len = 0;
             while parser.next().is_some() {
-                dna_len += parser.get_dna_columnar().len();
+                len += parser.get_dna_columnar().len();
             }
-            m.tick();
-        }
-        std::hint::black_box(dna_len);
+            len
+        });
         show_tick(&m, "Helicase columnar \t(slice)", dna_len);
         summary.helicase_col = m.throughput(size);
     }
@@ -488,85 +471,70 @@ fn bench_file_and_mmap<M: Measurement>(
     if opts.bench_file {
         // Needletail file
         if !opts.no_baseline {
-            m.start();
-            let mut dna_len = 0;
-            for _ in 0..opts.repeat {
+            let dna_len = bench_run!(m, opts, {
                 let mut reader =
                     parse_fastx_file(path).expect("Failed to parse file with Needletail");
-                dna_len = 0;
+                let mut len = 0;
                 while let Some(r) = reader.next() {
-                    dna_len += r.expect("Invalid record").seq().len();
+                    len += r.expect("Invalid record").seq().len();
                 }
-                m.tick();
-            }
-            std::hint::black_box(dna_len);
+                len
+            });
             show_tick(&m, "Needletail string \t(file)", dna_len);
             summary.needletail_file = m.throughput(size);
         }
 
         // Helicase string file
-        m.start();
-        let mut dna_len = 0;
-        for _ in 0..opts.repeat {
+        let dna_len = bench_run!(m, opts, {
             let mut parser = FastxParser::<DNA_STRING>::from_file(path)
                 .expect("Failed to open file for Helicase string");
-            dna_len = 0;
+            let mut len = 0;
             while parser.next().is_some() {
-                dna_len += parser.get_dna_string().len();
+                len += parser.get_dna_string().len();
             }
-            m.tick();
-        }
-        std::hint::black_box(dna_len);
+            len
+        });
         show_tick(&m, "Helicase string \t(file)", dna_len);
         summary.helicase_str_file = m.throughput(size);
 
         // Helicase packed file
-        m.start();
-        let mut dna_len = 0;
-        for _ in 0..opts.repeat {
+        let dna_len = bench_run!(m, opts, {
             let mut parser = FastxParser::<DNA_PACKED_KEEP>::from_file(path)
                 .expect("Failed to open file for Helicase packed");
-            dna_len = 0;
+            let mut len = 0;
             while parser.next().is_some() {
-                dna_len += parser.get_dna_packed().len();
+                len += parser.get_dna_packed().len();
             }
-            m.tick();
-        }
-        std::hint::black_box(dna_len);
+            len
+        });
         show_tick(&m, "Helicase packed \t(file)", dna_len);
         summary.helicase_packed_file = m.throughput(size);
     }
 
     if opts.bench_mmap {
         // Helicase string mmap
-        m.start();
-        let mut dna_len = 0;
-        for _ in 0..opts.repeat {
+        let dna_len = bench_run!(m, opts, {
             let mut parser = FastxParser::<DNA_STRING>::from_file_mmap(path)
                 .expect("Failed to mmap file for Helicase string");
-            dna_len = 0;
+            let mut len = 0;
             while parser.next().is_some() {
-                dna_len += parser.get_dna_string().len();
+                len += parser.get_dna_string().len();
             }
-            m.tick();
-        }
-        std::hint::black_box(dna_len);
+            len
+        });
         show_tick(&m, "Helicase string \t(mmap)", dna_len);
         summary.helicase_str_mmap = m.throughput(size);
 
         // Helicase packed mmap
-        m.start();
-        let mut dna_len = 0;
-        for _ in 0..opts.repeat {
+        let dna_len = bench_run!(m, opts, {
             let mut parser = FastxParser::<DNA_PACKED_KEEP>::from_file_mmap(path)
                 .expect("Failed to mmap file for Helicase packed");
-            dna_len = 0;
+            let mut len = 0;
             while parser.next().is_some() {
-                dna_len += parser.get_dna_packed().len();
+                len += parser.get_dna_packed().len();
             }
-            m.tick();
-        }
-        std::hint::black_box(dna_len);
+            len
+        });
         show_tick(&m, "Helicase packed \t(mmap)", dna_len);
         summary.helicase_packed_mmap = m.throughput(size);
     }

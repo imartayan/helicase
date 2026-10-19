@@ -32,6 +32,7 @@ const DNA_PACKED: Config = ParserOptions::default()
 #[derive(Debug, Clone)]
 pub struct LegacyArgs {
     pub repeat: u64,
+    pub warmup: u64,
     pub csv: bool,
     pub no_csv_header: bool,
     pub no_baseline: bool,
@@ -67,6 +68,17 @@ pub fn run_legacy_bench<M: Measurement>(args: &LegacyArgs, path: &str) {
         }
     };
     let data = data.as_slice();
+
+    for _ in 0..args.warmup {
+        if let Ok(mut parser) = FastxParser::<DNA_STRING>::from_slice(data) {
+            let mut len = 0;
+            while parser.next().is_some() {
+                len += parser.get_dna_string().len();
+            }
+            std::hint::black_box(len);
+        }
+    }
+
     let mut num_records = 0;
     let mut dna_len = 0;
     let mut m = M::new(path);

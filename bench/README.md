@@ -7,7 +7,8 @@ Arguments:
   <INPUT>  Input file (FASTA/FASTQ)
 
 Options:
-  -r, --repeat <REPEAT>  Number of repetitions [default: 10]
+  -r, --repeat <REPEAT>  Number of repetitions [default: 5]
+  -w, --warmup <WARMUP>  Number of warmup iterations [default: 1]
   -c, --csv              Output in csv format
   -H, --no-csv-header    Do not include csv header
   -P, --no-perf          Disable perf metrics (Linux only)

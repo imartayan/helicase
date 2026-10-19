@@ -48,6 +48,10 @@ pub struct FastqParser<'a, const CONFIG: Config, I: InputData<'a>> {
     bitpackers: DnaBitpackers,
     dna_len: usize,
     pending_error: Option<io::Error>,
+    #[cfg(feature = "paraseq")]
+    record_index: u64,
+    #[cfg(feature = "paraseq")]
+    record_counter: u64,
 }
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
@@ -81,6 +85,10 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
             bitpackers: DnaBitpackers::new(),
             dna_len: 0,
             pending_error,
+            #[cfg(feature = "paraseq")]
+            record_index: 0,
+            #[cfg(feature = "paraseq")]
+            record_counter: 0,
         }
     }
 }
@@ -253,6 +261,12 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
             panic!("Parser config error: dna is ignored")
         }
     }
+
+    #[cfg(feature = "paraseq")]
+    #[inline(always)]
+    fn record_index(&self) -> u64 {
+        self.record_index
+    }
 }
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
@@ -376,6 +390,11 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                     self.increment_pos();
                     if self.finished {
                         return self.return_error_or_none();
+                    }
+                    #[cfg(feature = "paraseq")]
+                    {
+                        self.record_index = self.record_counter;
+                        self.record_counter += 1;
                     }
                     self.record_start = self.global_pos() - 1;
                     if flag_is_not_set(CONFIG, MERGE_RECORDS) {

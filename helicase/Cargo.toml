@@ -21,7 +21,7 @@ flate2 = { version = "1.1", features = ["zlib-rs"], optional = true }
 memchr = "2.8"
 memmap2 = "0.9"
 packed-seq = { version = "5.0", default-features = false, optional = true }
-paraseq = { version = "0.4", default-features = false, optional = true }
+paraseq = { version = "0.6", default-features = false, optional = true }
 
 [dev-dependencies]
 fastx-gen = { path = "../fastx-gen" }

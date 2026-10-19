@@ -401,3 +401,64 @@ mod fastq {
         }
     }
 }
+
+#[cfg(feature = "paraseq")]
+mod paraseq_tests {
+    use super::*;
+    use paraseq::Record;
+
+    const CONFIG: Config = ParserOptions::default().dna_string().config();
+
+    #[test]
+    fn test_fasta_record_index() {
+        let fasta_data = b">r0\nACGT\n>r1\nTGCA\nTGCA\n>r2\nNNNN\n";
+        let mut parser = FastaParser::<CONFIG, _>::from_slice(fasta_data).unwrap();
+        let mut indices = Vec::new();
+        let mut trait_indices = Vec::new();
+        while let Some(_) = parser.next() {
+            indices.push(parser.record_index());
+            trait_indices.push(Record::index(&parser));
+        }
+        assert_eq!(indices, vec![0, 1, 2]);
+        assert_eq!(trait_indices, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn test_fastq_record_index() {
+        let fastq_data = b"@r0\nACGT\n+\nIIII\n@r1\nTGCA\n+\nIIII\n@r2\nGGCC\n+\nIIII\n";
+        let mut parser = FastqParser::<CONFIG, _>::from_slice(fastq_data).unwrap();
+        let mut indices = Vec::new();
+        let mut trait_indices = Vec::new();
+        while let Some(_) = parser.next() {
+            indices.push(parser.record_index());
+            trait_indices.push(Record::index(&parser));
+        }
+        assert_eq!(indices, vec![0, 1, 2]);
+        assert_eq!(trait_indices, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn test_fastx_record_index() {
+        let fasta_data = b">f0\nACGT\n>f1\nTGCA\n";
+        let mut parser = FastxParser::<CONFIG>::from_slice(fasta_data).unwrap();
+        let mut indices = Vec::new();
+        let mut trait_indices = Vec::new();
+        while let Some(_) = parser.next() {
+            indices.push(parser.record_index());
+            trait_indices.push(Record::index(&parser));
+        }
+        assert_eq!(indices, vec![0, 1]);
+        assert_eq!(trait_indices, vec![0, 1]);
+
+        let fastq_data = b"@q0\nACGT\n+\nIIII\n@q1\nTGCA\n+\nIIII\n";
+        let mut parser = FastxParser::<CONFIG>::from_slice(fastq_data).unwrap();
+        let mut indices = Vec::new();
+        let mut trait_indices = Vec::new();
+        while let Some(_) = parser.next() {
+            indices.push(parser.record_index());
+            trait_indices.push(Record::index(&parser));
+        }
+        assert_eq!(indices, vec![0, 1]);
+        assert_eq!(trait_indices, vec![0, 1]);
+    }
+}

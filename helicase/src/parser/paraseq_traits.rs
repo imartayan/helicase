@@ -22,6 +22,10 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Record for FastaParser<'a, CONF
     fn qual(&self) -> Option<&[u8]> {
         self.get_quality()
     }
+    #[inline(always)]
+    fn index(&self) -> u64 {
+        self.record_index()
+    }
 }
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> Record for FastqParser<'a, CONFIG, I> {
@@ -41,6 +45,10 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Record for FastqParser<'a, CONF
     fn qual(&self) -> Option<&[u8]> {
         self.get_quality()
     }
+    #[inline(always)]
+    fn index(&self) -> u64 {
+        self.record_index()
+    }
 }
 
 impl<'a, const CONFIG: Config> Record for FastxParser<'a, CONFIG> {
@@ -59,5 +67,9 @@ impl<'a, const CONFIG: Config> Record for FastxParser<'a, CONFIG> {
     #[inline(always)]
     fn qual(&self) -> Option<&[u8]> {
         self.get_quality()
+    }
+    #[inline(always)]
+    fn index(&self) -> u64 {
+        self.record_index()
     }
 }

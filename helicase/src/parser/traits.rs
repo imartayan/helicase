@@ -100,6 +100,10 @@ pub trait HelicaseParser {
     /// Manually clear the information of the current record.
     /// This is only useful when [`MERGE_RECORDS`](crate::config::advanced::MERGE_RECORDS) is enabled.
     fn clear_record(&mut self);
+
+    /// Get the 0-based index of the current record.
+    #[cfg(feature = "paraseq")]
+    fn record_index(&self) -> u64;
 }
 
 pub trait HelicaseParserIter: HelicaseParser + Iterator<Item = Event> {}

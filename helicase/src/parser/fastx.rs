@@ -136,6 +136,12 @@ impl<'a, const CONFIG: Config> HelicaseParser for FastxParser<'a, CONFIG> {
     fn get_dna_len(&self) -> usize {
         self.0.get_dna_len()
     }
+
+    #[cfg(feature = "paraseq")]
+    #[inline(always)]
+    fn record_index(&self) -> u64 {
+        self.0.record_index()
+    }
 }
 
 impl<'a, const CONFIG: Config> Iterator for FastxParser<'a, CONFIG> {

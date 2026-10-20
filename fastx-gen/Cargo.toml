@@ -4,7 +4,11 @@ version = "0.1.0"
 edition = "2024"
 authors = ["Igor Martayan"]
 description = "Deterministic FASTA/FASTQ generator for testing and benchmarking"
+publish = false
 autobenches = false
+
+[package.metadata.release]
+release = false
 
 [lib]
 bench = false

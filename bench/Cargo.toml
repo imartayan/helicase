@@ -2,8 +2,12 @@
 name = "bench"
 version = "0.2.0"
 edition = "2024"
+publish = false
 autobenches = false
 autoexamples = false
+
+[package.metadata.release]
+release = false
 
 [dependencies]
 helicase = { path = "../helicase", features = ["packed-seq"] }

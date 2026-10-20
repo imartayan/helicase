@@ -2,5 +2,11 @@
 members = ["bench", "fastx-gen", "helicase"]
 resolver = "3"
 
+[workspace.metadata.release]
+tag-prefix = ""
+pre-release-replacements = [
+  { file = "../CHANGELOG.md", search = '<!-- next-header -->\n## \[Unreleased\]', replace = "<!-- next-header -->\n## [Unreleased]\n\n## {{version}}" },
+]
+
 [profile.release]
 lto = "fat"

@@ -1,4 +1,10 @@
-//! A vectorized library for FASTA/FASTQ parsing and bitpacking.
+//! A carefully optimized, SIMD-accelerated FASTA/FASTQ parser for DNA sequences.
+//!
+//! It is designed for speed and flexibility: zero-overhead compile-time configuration, robust handling of non-ACTG bases, and on-the-fly 2-bit bitpacking.
+//!
+//! It is typically 1.2-2.4× faster than `needletail` on a single thread, and 2.5-6× faster than `paraseq` across 4 threads.
+//!
+//! The underlying algorithm is described in [Helicase: Vectorized parsing and bitpacking of genomic sequences](https://doi.org/10.64898/2026.03.19.712912), please cite it if you use this library.
 //!
 //! # Requirements
 //!
@@ -12,7 +18,7 @@
 //!
 //! # Usage
 //!
-//! If you're used to `needletail` or `paraseq`, a [migration guide](https://github.com/imartayan/helicase/blob/main/MIGRATION.md) is available.
+//! If you are migrating from `needletail` or `paraseq`, see the [migration guide](https://github.com/imartayan/helicase/blob/main/MIGRATION.md).
 //!
 //! ## Minimal example
 //!
@@ -162,6 +168,8 @@
 //! For multi-threaded processing, [`ParallelFastxParser`] can parse files in parallel across worker threads.
 //! Like [`FastxParser`], it can be created using [`from_file`](ParallelFastxParser::from_file) or [`from_file_mmap`](ParallelFastxParser::from_file_mmap) (see [Input](#input)).
 //!
+//! For compressed data, multi-block BGZF and multi-frame zstd files are automatically decompressed in parallel.
+//!
 //! Process records across threads with [`for_each`](ParallelFastxParser::for_each):
 //!
 //! ```rust,no_run
@@ -220,9 +228,9 @@
 //!
 //! ## Decompression
 //!
-//! This library supports transparent file decompression using [deko](https://github.com/igankevich/deko), you can choose the supported formats using the following features:
-//! - `gz` for gzip (default)
-//! - `zstd` for zstd (default)
+//! Helicase supports transparent decompression via [`from_file`](input::FromFile::from_file), automatically detecting the following formats:
+//! - `gz` (default) for gzip and BGZF using [sirocco](https://github.com/srijs/sirocco)
+//! - `zstd` (default) for zstd, including multi-frame files
 //! - `bz2` for bzip2
 //! - `xz` for xz
 //!
@@ -234,9 +242,11 @@
 //!
 //! ## Compatibility (`needletail`, `paraseq`)
 //!
-//! Helicase provides optional features to ease migration from existing libraries:
-//! - `needletail`: provides drop-in method aliases (`id`, `seq`, `raw_seq`, `qual`, `num_bases`) on [`HelicaseParser`] and constructors like `parse_fastx_file`.
-//! - `paraseq`: implements [`paraseq::Record`](https://docs.rs/paraseq/latest/paraseq/trait.Record.html) for zero-copy record access and provides [`process_parallel`](ParallelFastxParser::process_parallel) to run existing `ParallelProcessor` implementations directly.
+//! Helicase provides optional features to ease migration from `needletail` and `paraseq`.
+//!
+//! For `needletail`, it provides drop-in method aliases (`id`, `seq`, `raw_seq`, `qual`) and constructors like `parse_fastx_file`.
+//!
+//! For `paraseq`, it implements [`paraseq::Record`](https://docs.rs/paraseq/latest/paraseq/trait.Record.html) and provides [`process_parallel`](ParallelFastxParser::process_parallel) to run existing `ParallelProcessor` directly.
 //!
 //! See the [migration guide](https://github.com/imartayan/helicase/blob/main/MIGRATION.md) for details.
 

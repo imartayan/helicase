@@ -3,9 +3,11 @@
 [![crates.io](https://img.shields.io/crates/v/helicase)](https://crates.io/crates/helicase)
 [![docs](https://img.shields.io/docsrs/helicase)](https://docs.rs/helicase)
 
-Helicase is a carefully optimized FASTA/FASTQ parser that extensively uses vectorized instructions.
+Helicase is a carefully optimized, SIMD-accelerated FASTA/FASTQ parser for DNA sequences.
 
-It is designed for three main goals: being highly configurable, handling non-ACTG bases and computing bitpacked representations of DNA.
+It is designed for speed and flexibility: zero-overhead compile-time configuration, robust handling of non-ACTG bases, and on-the-fly 2-bit bitpacking.
+
+It is typically 1.2-2.4× faster than `needletail` on a single thread, and 2.5-6× faster than `paraseq` across 4 threads.
 
 The underlying algorithm is described in [Helicase: Vectorized parsing and bitpacking of genomic sequences](https://doi.org/10.64898/2026.03.19.712912), please [cite it](#citation) if you use this library.
 
@@ -20,7 +22,7 @@ Note: if your CPU has a bad support for the [PDEP instruction](https://en.wikipe
 
 ## Usage
 
-If you're used to `needletail` or `paraseq`, a [migration guide](MIGRATION.md) is available.
+If you are migrating from `needletail` or `paraseq`, see the [migration guide](MIGRATION.md).
 
 ### Minimal example
 
@@ -161,6 +163,8 @@ fn main() -> std::io::Result<()> {
 For multi-threaded processing, `ParallelFastxParser` can parse files in parallel across worker threads.
 Like `FastxParser`, it can be created using `from_file` or `from_file_mmap` (see [Input](#input)).
 
+For compressed data, multi-block BGZF and multi-frame zstd files are automatically decompressed in parallel.
+
 Process records across threads with `for_each`:
 
 ```rust
@@ -212,9 +216,9 @@ This is useful for [hashing *k*-mers](https://github.com/rust-seq/seq-hash) or [
 
 ### Decompression
 
-This library supports transparent file decompression using [deko](https://github.com/igankevich/deko), you can choose the supported formats using the following features:
-- `gz` for gzip (default)
-- `zstd` for zstd (default)
+Helicase supports transparent decompression via `from_file`, automatically detecting the following formats:
+- `gz` (default) for gzip and BGZF using [sirocco](https://github.com/srijs/sirocco)
+- `zstd` (default) for zstd, including multi-frame files
 - `bz2` for bzip2
 - `xz` for xz
 
@@ -226,9 +230,11 @@ If you want an efficient implementation for these CPUs, we recommend using the `
 
 ### Compatibility (`needletail`, `paraseq`)
 
-Helicase provides optional features to ease migration from existing libraries:
-- `needletail`: provides drop-in method aliases (`id`, `seq`, `raw_seq`, `qual`, `num_bases`) on `HelicaseParser` and constructors like `parse_fastx_file`.
-- `paraseq`: implements `paraseq::Record` for zero-copy record access and provides `process_parallel` to run existing `ParallelProcessor` implementations directly.
+Helicase provides optional features to ease migration from `needletail` and `paraseq`.
+
+For `needletail`, it provides drop-in method aliases (`id`, `seq`, `raw_seq`, `qual`) and constructors like `parse_fastx_file`.
+
+For `paraseq`, it implements `paraseq::Record` and provides `process_parallel` to run existing `ParallelProcessor` directly.
 
 See the [migration guide](MIGRATION.md) for details.
 
@@ -246,10 +252,10 @@ Or benchmark on any custom (optionally compressed) FASTA/FASTQ file:
 RUSTFLAGS="-C target-cpu=native" cargo bench -- <file>
 ```
 
-You can test with public datasets such as:
-- [T2T Human Genome](https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz) (FASTA)
-- [Illumina short reads](https://s3-us-west-2.amazonaws.com/human-pangenomics/NHGRI_UCSC_panel/HG002/hpp_HG002_NA24385_son_v1/ILMN/NIST_Illumina_2x250bps/D1_S1_L001_R2_007.fastq.gz) (FASTQ)
-- [PacBio HiFi long reads](https://s3-us-west-2.amazonaws.com/human-pangenomics/NHGRI_UCSC_panel/HG002/hpp_HG002_NA24385_son_v1/PacBio_HiFi/15kb/m54328_180928_230446.Q20.fastq) (FASTQ)
+You can test it with public datasets such as:
+- the [T2T Human Genome](https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz) (FASTA)
+- some [Illumina short reads](https://s3-us-west-2.amazonaws.com/human-pangenomics/NHGRI_UCSC_panel/HG002/hpp_HG002_NA24385_son_v1/ILMN/NIST_Illumina_2x250bps/D1_S1_L001_R2_007.fastq.gz) (FASTQ)
+- some [PacBio HiFi long reads](https://s3-us-west-2.amazonaws.com/human-pangenomics/NHGRI_UCSC_panel/HG002/hpp_HG002_NA24385_son_v1/PacBio_HiFi/15kb/m54328_180928_230446.Q20.fastq) (FASTQ)
 
 More options (parallel scaling, bitpacking comparisons, decompression, format) are documented in the [bench README](bench/README.md).
 

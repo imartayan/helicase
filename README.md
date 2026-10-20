@@ -11,7 +11,7 @@ The underlying algorithm is described in [Helicase: Vectorized parsing and bitpa
 
 ## Requirements
 
-This library requires AVX2, SSE3 or NEON instruction sets, make sure to enable `target-cpu=native` when using it:
+This library requires AVX-512, AVX2, SSE3 or NEON instruction sets, make sure to enable `target-cpu=native` when using it:
 ``` sh
 RUSTFLAGS="-C target-cpu=native" cargo run --release
 ```

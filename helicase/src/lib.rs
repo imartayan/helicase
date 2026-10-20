@@ -2,7 +2,7 @@
 //!
 //! # Requirements
 //!
-//! This library requires AVX2, SSE3 or NEON instruction sets, make sure to enable `target-cpu=native` when using it:
+//! This library requires AVX-512, AVX2, SSE3 or NEON instruction sets, make sure to enable `target-cpu=native` when using it:
 //!
 //! ```sh
 //! RUSTFLAGS="-C target-cpu=native" cargo run --release
@@ -256,14 +256,26 @@ pub mod needletail_helpers;
 #[cfg(feature = "needletail")]
 pub use needletail_helpers::*;
 
-#[cfg(target_feature = "avx2")]
+#[cfg(all(target_feature = "avx512f", target_feature = "avx512bw"))]
+pub(crate) mod simd {
+    mod avx512;
+    pub use avx512::*;
+}
+#[cfg(all(
+    not(all(target_feature = "avx512f", target_feature = "avx512bw")),
+    target_feature = "avx2"
+))]
 pub(crate) mod simd {
     mod avx2;
     pub use avx2::*;
 }
-#[cfg(all(not(target_feature = "avx2"), target_feature = "ssse3"))]
+#[cfg(all(
+    not(all(target_feature = "avx512f", target_feature = "avx512bw")),
+    not(target_feature = "avx2"),
+    target_feature = "ssse3"
+))]
 #[deprecated(
-    note = "Helicase currently uses SSE3 instead of AVX2 instructions. Compile using `-C target-cpu=native` to get better performances."
+    note = "Helicase currently uses SSE3 instead of AVX2/AVX-512 instructions. Compile using `-C target-cpu=native` to get better performances."
 )]
 pub(crate) mod simd {
     mod sse;
@@ -275,9 +287,10 @@ pub(crate) mod simd {
     pub use neon::*;
 }
 #[cfg(not(any(
-        target_feature = "avx2",
-        target_feature = "ssse3",
-        target_feature = "neon"
+    all(target_feature = "avx512f", target_feature = "avx512bw"),
+    target_feature = "avx2",
+    target_feature = "ssse3",
+    target_feature = "neon"
 )))]
 #[deprecated(
     note = "Helicase currently uses (slow) non-vectorized instructions. Compile using `-C target-cpu=native` to get better performances."

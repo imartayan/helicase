@@ -17,20 +17,21 @@ bench = false
 
 [dependencies]
 deko = { version = "0.6", default-features = false }
-flate2 = { version = "1.1", features = ["zlib-rs"], optional = true }
 memchr = "2.8"
 memmap2 = "0.9"
 packed-seq = { version = "5.0", default-features = false, optional = true }
 paraseq = { version = "0.6", default-features = false, optional = true }
+sirocco = { version = "0.2", optional = true }
 
 [dev-dependencies]
 fastx-gen = { path = "../fastx-gen" }
+flate2 = { version = "1.1", features = ["zlib-rs"] }
 needletail = { version = "0.7", default-features = false }
 
 [features]
 default = ["gz", "zstd"]
 bz2 = ["deko/bzip2"]
-gz = ["deko/flate2", "flate2"]
+gz = ["sirocco"]
 xz = ["deko/xz"]
 zstd = ["deko/zstd"]
 no-pdep = []

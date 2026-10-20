@@ -36,12 +36,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a> + 'a> FromInputData<'a, I>
     for FastxParser<'a, CONFIG>
 {
     fn from_input(input: I) -> io::Result<Self> {
-        match input.first_byte() {
-            b'>' => Ok(Self(Box::new(FastaParser::<CONFIG, I>::from_input(input)?))),
-            b'@' => Ok(Self(Box::new(FastqParser::<CONFIG, I>::from_input(input)?))),
-            _ => Err(io::Error::other(
-                "Invalid record start, expected '>' or '@'",
-            )),
+        match Format::try_from_byte(input.first_byte())? {
+            Format::Fasta => Ok(Self(Box::new(FastaParser::<CONFIG, I>::from_input(input)?))),
+            Format::Fastq => Ok(Self(Box::new(FastqParser::<CONFIG, I>::from_input(input)?))),
         }
     }
 }

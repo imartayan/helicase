@@ -241,7 +241,9 @@ pub fn run_custom_file_bench<M: Measurement>(path: &Path, opts: &BenchOptions) {
         ..Default::default()
     };
 
-    if opts.bench_ram || opts.pack_compare {
+    let is_compressed = crate::cli::is_compressed_file(path);
+
+    if !is_compressed && (opts.bench_ram || opts.pack_compare) {
         match std::fs::read(path) {
             Ok(data) => {
                 bench_ram_dataset::<M>(&name, &data, size, opts, &mut summary);
@@ -511,39 +513,59 @@ fn bench_file_and_mmap<M: Measurement>(
         summary.helicase_packed_file = m.throughput(size);
     }
 
-    if opts.bench_mmap {
-        // Helicase string mmap
-        let dna_len = bench_run!(m, opts, {
-            let mut parser = FastxParser::<DNA_STRING>::from_file_mmap(path)
-                .expect("Failed to mmap file for Helicase string");
-            let mut len = 0;
-            while parser.next().is_some() {
-                len += parser.get_dna_string().len();
-            }
-            len
-        });
-        show_tick(&m, "Helicase string \t(mmap)", dna_len);
-        summary.helicase_str_mmap = m.throughput(size);
+    let is_compressed = crate::cli::is_compressed_file(path);
 
-        // Helicase packed mmap
-        let dna_len = bench_run!(m, opts, {
-            let mut parser = FastxParser::<DNA_PACKED_KEEP>::from_file_mmap(path)
-                .expect("Failed to mmap file for Helicase packed");
-            let mut len = 0;
-            while parser.next().is_some() {
-                len += parser.get_dna_packed().len();
-            }
-            len
-        });
-        show_tick(&m, "Helicase packed \t(mmap)", dna_len);
-        summary.helicase_packed_mmap = m.throughput(size);
+    if opts.bench_mmap {
+        if is_compressed {
+            eprintln!(
+                "{}",
+                "Warning: Memory-mapping (-M) is not supported for compressed files in single-thread mode; skipping."
+                    .yellow()
+            );
+        } else {
+            // Helicase string mmap
+            let dna_len = bench_run!(m, opts, {
+                let mut parser = FastxParser::<DNA_STRING>::from_file_mmap(path)
+                    .expect("Failed to mmap file for Helicase string");
+                let mut len = 0;
+                while parser.next().is_some() {
+                    len += parser.get_dna_string().len();
+                }
+                len
+            });
+            show_tick(&m, "Helicase string \t(mmap)", dna_len);
+            summary.helicase_str_mmap = m.throughput(size);
+
+            // Helicase packed mmap
+            let dna_len = bench_run!(m, opts, {
+                let mut parser = FastxParser::<DNA_PACKED_KEEP>::from_file_mmap(path)
+                    .expect("Failed to mmap file for Helicase packed");
+                let mut len = 0;
+                while parser.next().is_some() {
+                    len += parser.get_dna_packed().len();
+                }
+                len
+            });
+            show_tick(&m, "Helicase packed \t(mmap)", dna_len);
+            summary.helicase_packed_mmap = m.throughput(size);
+        }
     }
 }
 
 pub fn print_results(summaries: &[DatasetSummary], opts: &BenchOptions) {
+    let has_ram = summaries.iter().any(|s| {
+        s.helicase_str.is_some()
+            || s.helicase_str_reader.is_some()
+            || s.needletail_str.is_some()
+            || s.helicase_packed.is_some()
+            || s.helicase_col.is_some()
+    });
+
     match opts.format {
         OutputFormat::Text => {
-            print_summary_table(summaries, !opts.no_baseline);
+            if has_ram {
+                print_summary_table(summaries, !opts.no_baseline);
+            }
             if opts.pack_compare {
                 print_pack_comparison_table(summaries, !opts.no_baseline);
             }
@@ -552,7 +574,9 @@ pub fn print_results(summaries: &[DatasetSummary], opts: &BenchOptions) {
             }
         }
         OutputFormat::Markdown => {
-            print_markdown_table(summaries, !opts.no_baseline);
+            if has_ram {
+                print_markdown_table(summaries, !opts.no_baseline);
+            }
             if opts.pack_compare {
                 print_pack_comparison_markdown(summaries, !opts.no_baseline);
             }

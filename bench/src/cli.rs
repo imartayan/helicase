@@ -1,8 +1,13 @@
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 use crate::legacy::{LegacyArgs, run_legacy_bench};
 use crate::measurement::{BaseTime, Measurement};
-use crate::parallel::run_parallel_benchmarks;
+use crate::parallel::{
+    print_parallel_io_markdown_table, print_parallel_io_summary_table,
+    print_parallel_ram_markdown_table, print_parallel_ram_summary_table, run_parallel_benchmarks,
+    run_parallel_file_benchmarks, run_parallel_mmap_benchmarks,
+};
 use crate::synthetic::{
     BenchOptions, OutputFormat, generate_datasets, run_custom_file_bench, run_synthetic_bench,
 };
@@ -112,6 +117,43 @@ fn parse_thread_counts(s: &str) -> Vec<usize> {
         .collect()
 }
 
+/// Detects whether a file is compressed by peeking its first 4 magic bytes
+/// (gzip/bgzf, zstd, bz2, xz) and falling back to its file extension.
+pub fn is_compressed_file(path: impl AsRef<Path>) -> bool {
+    let path = path.as_ref();
+    if let Ok(mut file) = std::fs::File::open(path) {
+        let mut magic = [0u8; 4];
+        if let Ok(n) = file.read(&mut magic) {
+            // Gzip / BGZF: 0x1F, 0x8B
+            if n >= 2 && magic[0] == 0x1f && magic[1] == 0x8b {
+                return true;
+            }
+            // Zstandard: 0xFD2FB528 (little-endian: 0x28, 0xb5, 0x2f, 0xfd)
+            if n >= 4 && magic == [0x28, 0xb5, 0x2f, 0xfd] {
+                return true;
+            }
+            // Bzip2: 'B', 'Z'
+            if n >= 2 && magic[0] == b'B' && magic[1] == b'Z' {
+                return true;
+            }
+            // Xz: 0xFD, '7', 'z'
+            if n >= 3 && magic[0] == 0xfd && magic[1] == b'7' && magic[2] == b'z' {
+                return true;
+            }
+        }
+    }
+    path.extension().is_some_and(|ext| {
+        ext == "gz"
+            || ext == "bgz"
+            || ext == "bgzf"
+            || ext == "gzip"
+            || ext == "zst"
+            || ext == "zstd"
+            || ext == "bz2"
+            || ext == "xz"
+    })
+}
+
 fn run_with_measurement<M: Measurement>(args: &Args) {
     if args.test {
         return;
@@ -156,48 +198,185 @@ fn run_with_measurement<M: Measurement>(args: &Args) {
         let threads = if threads.is_empty() { vec![4] } else { threads };
         let is_markdown = output_format == OutputFormat::Markdown;
 
+        let bench_file = args.file;
+        let bench_mmap = args.mmap;
+
+        let mut ram_summaries = Vec::new();
+        let mut io_summaries = Vec::new();
+
         if let Some(path) = &args.input
             && !args.synth
         {
-            let data = match std::fs::read(path) {
-                Ok(d) => d,
-                Err(e) => {
-                    eprintln!("Error reading {}: {}", path.display(), e);
-                    std::process::exit(1);
-                }
-            };
             let name = path.file_name().unwrap_or_default().to_string_lossy();
-            run_parallel_benchmarks(
-                &data,
-                &name,
-                &threads,
-                args.repeat as usize,
-                args.warmup as usize,
-                is_markdown,
-                args.no_baseline,
-            );
-            return;
+            let is_compressed = is_compressed_file(path);
+
+            // If neither -F nor -M is specified:
+            // - compressed files default to FileInput (-F)
+            // - uncompressed files default to in-memory slice (RAM)
+            let (run_file, run_mmap, run_ram) = if !bench_file && !bench_mmap {
+                if is_compressed {
+                    (true, false, false)
+                } else {
+                    (false, false, true)
+                }
+            } else {
+                (bench_file, bench_mmap, false)
+            };
+
+            if run_file {
+                let sum = run_parallel_file_benchmarks(
+                    path,
+                    &name,
+                    &threads,
+                    args.repeat as usize,
+                    args.warmup as usize,
+                    is_markdown,
+                    args.no_baseline,
+                );
+                io_summaries.push(sum);
+            }
+
+            if run_mmap
+                && let Some(sum) = run_parallel_mmap_benchmarks(
+                    path,
+                    &name,
+                    &threads,
+                    args.repeat as usize,
+                    args.warmup as usize,
+                    is_markdown,
+                    args.no_baseline,
+                )
+            {
+                io_summaries.push(sum);
+            }
+
+            if run_ram {
+                let data = match std::fs::read(path) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        eprintln!("Error reading {}: {}", path.display(), e);
+                        std::process::exit(1);
+                    }
+                };
+                let sum = run_parallel_benchmarks(
+                    &data,
+                    &name,
+                    &threads,
+                    args.repeat as usize,
+                    args.warmup as usize,
+                    is_markdown,
+                    args.no_baseline,
+                );
+                ram_summaries.push(sum);
+            }
+        } else {
+            // Synthetic datasets mode with -p
+            let run_file = bench_file;
+            let run_mmap = bench_mmap;
+            let run_ram = !args.no_ram && (args.ram || (!run_file && !run_mmap));
+
+            let datasets = generate_datasets();
+
+            if run_ram {
+                for ds in &datasets {
+                    let sum = run_parallel_benchmarks(
+                        &ds.data,
+                        ds.name,
+                        &threads,
+                        args.repeat as usize,
+                        args.warmup as usize,
+                        is_markdown,
+                        args.no_baseline,
+                    );
+                    ram_summaries.push(sum);
+                }
+            }
+
+            if run_file || run_mmap {
+                use std::io::Write;
+                let temp_dir = std::env::temp_dir().join("helicase_parallel_bench_temp");
+                let _ = std::fs::create_dir_all(&temp_dir);
+
+                for (idx, ds) in datasets.iter().enumerate() {
+                    let file_ext = if ds.name.starts_with("FASTQ") {
+                        "fastq"
+                    } else {
+                        "fasta"
+                    };
+                    let temp_file_path = temp_dir.join(format!("ds_{idx}.{file_ext}"));
+                    if let Ok(mut f) = std::fs::File::create(&temp_file_path) {
+                        let _ = f.write_all(&ds.data);
+                    }
+
+                    if run_file {
+                        let sum = run_parallel_file_benchmarks(
+                            &temp_file_path,
+                            ds.name,
+                            &threads,
+                            args.repeat as usize,
+                            args.warmup as usize,
+                            is_markdown,
+                            args.no_baseline,
+                        );
+                        io_summaries.push(sum);
+                    }
+
+                    if run_mmap
+                        && let Some(sum) = run_parallel_mmap_benchmarks(
+                            &temp_file_path,
+                            ds.name,
+                            &threads,
+                            args.repeat as usize,
+                            args.warmup as usize,
+                            is_markdown,
+                            args.no_baseline,
+                        )
+                    {
+                        io_summaries.push(sum);
+                    }
+
+                    let _ = std::fs::remove_file(&temp_file_path);
+                }
+
+                let _ = std::fs::remove_dir_all(&temp_dir);
+            }
         }
 
-        let datasets = generate_datasets();
-        for ds in &datasets {
-            run_parallel_benchmarks(
-                &ds.data,
-                ds.name,
-                &threads,
-                args.repeat as usize,
-                args.warmup as usize,
-                is_markdown,
-                args.no_baseline,
-            );
+        if is_markdown {
+            if !ram_summaries.is_empty() {
+                print_parallel_ram_markdown_table(&ram_summaries, !args.no_baseline);
+            }
+            if !io_summaries.is_empty() {
+                print_parallel_io_markdown_table(&io_summaries, !args.no_baseline);
+            }
+        } else {
+            if !ram_summaries.is_empty() {
+                print_parallel_ram_summary_table(&ram_summaries, !args.no_baseline);
+            }
+            if !io_summaries.is_empty() {
+                print_parallel_io_summary_table(&io_summaries, !args.no_baseline);
+            }
         }
         return;
     }
 
     // Additive I/O backends: RAM is default; -F and -M add their backends
-    let bench_ram = !args.no_ram;
-    let bench_file = args.file;
+    let mut bench_ram = !args.no_ram;
+    let mut bench_file = args.file;
     let bench_mmap = args.mmap;
+
+    if let Some(path) = &args.input
+        && !args.synth
+    {
+        let is_compressed = is_compressed_file(path);
+        if is_compressed {
+            // Compressed files cannot be sliced in RAM directly; disable RAM and default to streaming FileInput
+            bench_ram = false;
+            if !bench_file && !bench_mmap {
+                bench_file = true;
+            }
+        }
+    }
 
     let opts = BenchOptions {
         repeat: args.repeat,
@@ -292,6 +471,39 @@ pub fn normalize_args(raw_args: &[String]) -> Vec<String> {
             } else {
                 normalized.push("--parallel=4".to_string());
                 i += 1;
+            }
+            continue;
+        }
+
+        // 5. Short flag with thread spec directly attached: e.g. -p8, -p2,4,8
+        if let Some(rem) = arg.strip_prefix("-p")
+            && is_thread_spec(rem)
+        {
+            normalized.push(format!("--parallel={rem}"));
+            i += 1;
+            continue;
+        }
+
+        // 6. Clustered short flags containing 'p': e.g. -pFM, -pF, -pM, -FMp
+        if arg.starts_with('-')
+            && !arg.starts_with("--")
+            && arg.len() > 2
+            && arg.contains('p')
+            && arg[1..].chars().all(|c| c.is_alphabetic())
+        {
+            let next_is_thread = raw_args.get(i + 1).is_some_and(|next| is_thread_spec(next));
+            if next_is_thread {
+                let threads = &raw_args[i + 1];
+                normalized.push(format!("--parallel={threads}"));
+                i += 2;
+            } else {
+                normalized.push("--parallel=4".to_string());
+                i += 1;
+            }
+            for c in arg[1..].chars() {
+                if c != 'p' {
+                    normalized.push(format!("-{c}"));
+                }
             }
             continue;
         }
@@ -416,6 +628,24 @@ mod tests {
         assert_eq!(
             normalize_args(&to_string_vec(&["bench", "legacy", "reads.fastq"])),
             to_string_vec(&["bench", "-l", "reads.fastq"])
+        );
+
+        // Combined short flags with -p: -pFM
+        assert_eq!(
+            normalize_args(&to_string_vec(&["bench", "-pFM"])),
+            to_string_vec(&["bench", "--parallel=4", "-F", "-M"])
+        );
+
+        // Combined short flags with -p and thread count: -pFM 8
+        assert_eq!(
+            normalize_args(&to_string_vec(&["bench", "-pFM", "8"])),
+            to_string_vec(&["bench", "--parallel=8", "-F", "-M"])
+        );
+
+        // -p with attached thread count: -p8
+        assert_eq!(
+            normalize_args(&to_string_vec(&["bench", "-p8"])),
+            to_string_vec(&["bench", "--parallel=8"])
         );
     }
 

@@ -5,7 +5,7 @@ use core::ops::Range;
 use deko::read::AnyDecoder;
 use memmap2::Mmap;
 use std::fs::File;
-use std::io::{self, Read};
+use std::io::{self, BufRead, BufReader, Read};
 use std::path::Path;
 
 const BUFFER_DEFAULT_SIZE: usize = 1 << 17;
@@ -280,6 +280,145 @@ pub trait FromMmap<'a>: FromInputData<'a, MmapInput<'a>> {
 
 impl<'a, F: FromInputData<'a, MmapInput<'a>>> FromMmap<'a> for F {}
 
+#[cfg(feature = "sirocco")]
+const SIROCCO_BUF_LEN: usize = 256 * 1024;
+
+#[cfg(feature = "sirocco")]
+struct SiroccoMultiGzReader<R: BufRead> {
+    inner: R,
+    decoder: sirocco::inflate::Decoder,
+    buf: Vec<u8>,
+    pending: Range<usize>,
+    prev_total_out: usize,
+    full: bool,
+    done: bool,
+    pending_err: Option<io::Error>,
+}
+
+#[cfg(feature = "sirocco")]
+impl<R: BufRead> SiroccoMultiGzReader<R> {
+    fn new(inner: R) -> Self {
+        Self {
+            inner,
+            decoder: sirocco::inflate::Decoder::new(sirocco::Format::Gzip),
+            buf: Vec::new(),
+            pending: 0..0,
+            prev_total_out: 0,
+            full: false,
+            done: false,
+            pending_err: None,
+        }
+    }
+
+    fn fill(&mut self) -> io::Result<()> {
+        if self.buf.is_empty() {
+            self.buf = vec![0; SIROCCO_BUF_LEN];
+        }
+
+        while self.pending.is_empty() && self.pending_err.is_none() {
+            if self.done {
+                let peek = self.inner.fill_buf()?;
+                if peek.is_empty() {
+                    break;
+                }
+                let is_next_gz = if peek.len() >= 2 {
+                    peek[0] == 0x1F && peek[1] == 0x8B
+                } else {
+                    peek[0] == 0x1F
+                };
+                if is_next_gz {
+                    self.decoder.reset();
+                    self.prev_total_out = 0;
+                    self.pending = 0..0;
+                    self.full = false;
+                    self.done = false;
+                } else {
+                    break;
+                }
+            }
+
+            if self.full {
+                self.decoder.make_room(&mut self.buf);
+                self.full = false;
+            }
+
+            let input = self.inner.fill_buf()?;
+            let eof = input.is_empty();
+            let buf_ptr = self.buf.as_ptr() as usize;
+
+            match self.decoder.decompress(input, &mut self.buf, eof) {
+                Ok(p) => {
+                    let out_start = p.output.as_ptr() as usize - buf_ptr;
+                    let out_end = out_start + p.output.len();
+                    (self.done, self.full) = (p.done, p.full);
+                    self.inner.consume(p.consumed);
+                    self.pending = out_start..out_end;
+                    self.prev_total_out = self.decoder.total_out() as usize;
+                }
+                Err(e) => {
+                    let new_total = self.decoder.total_out() as usize;
+                    let new_bytes = new_total.saturating_sub(self.prev_total_out);
+                    if new_bytes > 0 {
+                        let out_start = self.pending.end;
+                        self.pending = out_start..out_start + new_bytes;
+                        self.prev_total_out = new_total;
+                        self.done = true;
+                        self.pending_err = Some(io::Error::new(io::ErrorKind::InvalidData, e));
+                    } else {
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, e));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "sirocco")]
+impl<R: BufRead> Read for SiroccoMultiGzReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        if self.pending.is_empty() {
+            if let Some(err) = self.pending_err.take() {
+                return Err(err);
+            }
+            self.fill()?;
+        }
+
+        if self.pending.is_empty() {
+            if let Some(err) = self.pending_err.take() {
+                return Err(err);
+            }
+            return Ok(0);
+        }
+
+        let n = self.pending.len().min(buf.len());
+        buf[..n].copy_from_slice(&self.buf[self.pending.start..self.pending.start + n]);
+        self.pending.start += n;
+        Ok(n)
+    }
+}
+
+enum ReaderDecoder<R: Read> {
+    #[cfg(feature = "sirocco")]
+    Sirocco(Box<SiroccoMultiGzReader<BufReader<R>>>),
+    Deko(Box<AnyDecoder<BufReader<R>>>),
+}
+
+impl<R: Read> Read for ReaderDecoder<R> {
+    #[inline(always)]
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            #[cfg(feature = "sirocco")]
+            ReaderDecoder::Sirocco(r) => r.read(buf),
+            ReaderDecoder::Deko(r) => r.read(buf),
+        }
+    }
+}
+
 /// Reader input.
 /// It supports transparent decompression.
 pub struct ReaderInput<'a, R: Read + Send + 'a> {
@@ -288,7 +427,7 @@ pub struct ReaderInput<'a, R: Read + Send + 'a> {
     pos: usize,
     offset: usize,
     first_byte: u8,
-    decoder: AnyDecoder<R>,
+    decoder: ReaderDecoder<R>,
     pending_err: Option<io::Error>,
     errored: bool,
     _phantom: PhantomData<&'a ()>,
@@ -311,13 +450,29 @@ impl<'a, R: Read + Send + 'a> ReaderInput<'a, R> {
     }
 
     pub fn new(reader: R) -> io::Result<Self> {
+        let mut buf_reader = BufReader::with_capacity(64 * 1024, reader);
+        let is_gz = {
+            let peek = buf_reader.fill_buf()?;
+            peek.len() >= 2 && peek[0] == 0x1F && peek[1] == 0x8B
+        };
+
+        #[cfg(feature = "sirocco")]
+        let decoder = if is_gz {
+            ReaderDecoder::Sirocco(Box::new(SiroccoMultiGzReader::new(buf_reader)))
+        } else {
+            ReaderDecoder::Deko(Box::new(AnyDecoder::new(buf_reader)))
+        };
+
+        #[cfg(not(feature = "sirocco"))]
+        let decoder = ReaderDecoder::Deko(Box::new(AnyDecoder::new(buf_reader)));
+
         let mut s = Self {
             data: vec![0; BUFFER_DEFAULT_SIZE],
             len: 0,
             pos: 0,
             offset: 0,
             first_byte: 0,
-            decoder: AnyDecoder::new(reader),
+            decoder,
             pending_err: None,
             errored: false,
             _phantom: PhantomData,
@@ -408,11 +563,33 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
 
     #[inline(always)]
     fn compression_format(&mut self) -> io::Result<Option<deko::Format>> {
-        let format = self.decoder.kind()?;
-        if format == deko::Format::Verbatim {
-            Ok(None)
-        } else {
-            Ok(Some(format))
+        match &mut self.decoder {
+            #[cfg(feature = "sirocco")]
+            ReaderDecoder::Sirocco(_) => {
+                // In deko 0.6, deko::Format::Gz is only defined under deko's flate2 feature.
+                // Sirocco handles decompression directly; is_compressed() returns true.
+                Ok(None)
+            }
+            ReaderDecoder::Deko(decoder) => {
+                let format = decoder.kind()?;
+                if format == deko::Format::Verbatim {
+                    Ok(None)
+                } else {
+                    Ok(Some(format))
+                }
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn is_compressed(&mut self) -> io::Result<bool> {
+        match &mut self.decoder {
+            #[cfg(feature = "sirocco")]
+            ReaderDecoder::Sirocco(_) => Ok(true),
+            ReaderDecoder::Deko(decoder) => {
+                let format = decoder.kind()?;
+                Ok(format != deko::Format::Verbatim)
+            }
         }
     }
 

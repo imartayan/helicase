@@ -11,6 +11,8 @@ packed-seq = { version = "5.0", default-features = false }
 fastx-gen = { path = "../fastx-gen" }
 clap = { version = "4.5", features = ["derive"] }
 colored = "3.0"
+flate2 = "1.0"
+memchr = "2.8"
 needletail = { version = "0.7", default-features = false, features = [
     "flate2",
     "zstd",
@@ -25,6 +27,7 @@ regex = "1.12"
 simd-minimizers = { version = "3.0", features = ["scalar"], optional = true }
 sysinfo = "0.39"
 fearless_simd = { version = "1.1", optional = true }
+sirocco = "0.2"
 
 [lib]
 name = "bench"
@@ -34,6 +37,11 @@ bench = false
 [[bin]]
 name = "bench"
 path = "src/main.rs"
+bench = false
+
+[[bin]]
+name = "decompress_bench"
+path = "src/decompress_bench.rs"
 bench = false
 
 [[bench]]
@@ -47,6 +55,7 @@ perf-event2 = "0.7"
 
 [features]
 simd-minimizers = ["helicase/packed-seq", "dep:simd-minimizers"]
+sirocco = ["helicase/sirocco"]
 
 [[example]]
 name = "simd_mini"

@@ -292,7 +292,7 @@ impl<'a> InputData<'a> for SliceInput<'a> {
         if 64 <= self.pos && self.pos <= self.data.len() {
             unsafe { core::slice::from_raw_parts(self.data.as_ptr().add(self.pos - 64), 64) }
         } else {
-            unsafe { core::slice::from_raw_parts(self.last_block.as_ptr(), self.data.len() % 64) }
+            &self.last_block
         }
     }
 

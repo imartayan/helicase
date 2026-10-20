@@ -86,6 +86,26 @@ impl Chunk {
             mask_n: mask.mask_n,
         }
     }
+
+    #[inline(always)]
+    pub const fn set<const CONFIG: Config>(&mut self, other: Self) {
+        self.len = other.len;
+        self.newline = other.newline;
+        self.is_dna = other.is_dna;
+        if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
+            self.two_bits = other.two_bits;
+        }
+        if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
+            self.high_bit = other.high_bit;
+            self.low_bit = other.low_bit;
+        }
+        if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
+            self.mask_non_actg = other.mask_non_actg;
+        }
+        if flag_is_set(CONFIG, COMPUTE_MASK_N) {
+            self.mask_n = other.mask_n;
+        }
+    }
 }
 
 pub struct Lexer<'a, const CONFIG: Config, I: InputData<'a>> {
@@ -224,10 +244,10 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Lexer<'a, CONFIG, I> {
             *pos_in_block = target_pos % 64;
             self.input.seek_block(*block_counter);
             let block_len = 64.min(buf_off + data_len - *block_counter * 64);
-            *block = Chunk::from_mask::<CONFIG>(
+            block.set::<CONFIG>(Chunk::from_mask::<CONFIG>(
                 block_len,
                 extract_bitmask::<CONFIG, SCAN_MODE_QUALITY>(self.input.current_block()),
-            );
+            ));
         }
     }
 }

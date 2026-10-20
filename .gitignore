@@ -26,4 +26,6 @@ Cargo.lock
 *.fa
 *.fq
 *.gz
+*.bgz
 *.zst
+*.pzst

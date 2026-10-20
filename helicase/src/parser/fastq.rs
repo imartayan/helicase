@@ -127,7 +127,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
         if flag_is_set(CONFIG, COMPUTE_DNA_STRING) {
             self.cur_dna_string.clear();
         }
-        self.bitpackers.clear();
+        self.bitpackers.clear::<CONFIG>();
         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
             self.dna_len = 0;
         }
@@ -293,7 +293,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
         } else {
             match self.lexer.next() {
                 Some(Ok(b)) => {
-                    self.block = b;
+                    self.block.set::<CONFIG>(b);
                     self.block_counter += 1;
                     self.pos_in_block = 0;
                 }
@@ -310,7 +310,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
     fn consume_newline(&mut self) {
         self.block.newline &= self.block.newline.wrapping_sub(1);
         self.increment_pos();
-        self.line_count += 1;
     }
 
     #[inline(always)]
@@ -376,8 +375,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
     }
 
     #[inline(always)]
-    fn append_dna_block_from(&mut self, block: Chunk) {
-        self.bitpackers.append_block_from::<CONFIG>(&block);
+    fn append_dna_block(&mut self) {
+        self.bitpackers.append_block_from::<CONFIG>(&self.block);
         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
             self.dna_len += 64;
         }
@@ -390,75 +389,79 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            match self.line_count % 4 {
-                0 => {
-                    // HEADER
-                    self.increment_pos();
-                    if self.finished {
-                        return self.return_error_or_none();
-                    }
-                    #[cfg(feature = "paraseq")]
-                    {
-                        self.record_index = self.record_counter;
-                        self.record_counter += 1;
-                    }
-                    self.record_start = self.global_pos() - 1;
-                    if flag_is_not_set(CONFIG, MERGE_RECORDS) {
-                        self.clear_record();
-                    }
-                    if flag_is_set(CONFIG, COMPUTE_HEADER) {
-                        self.header_range.start = self.global_pos();
-                    }
-                    while self.block.newline == 0 {
-                        if flag_is_set(CONFIG, COMPUTE_HEADER)
-                            && !I::RANDOM_ACCESS
-                            && self.lexer.input.is_end_of_buffer()
-                        {
-                            self.lexer.input.make_room(self.header_range.start);
-                        }
-                        self.block = match self.lexer.next_in_header() {
-                            Some(Ok(b)) => b,
-                            Some(Err(e)) => {
-                                self.finished = true;
-                                self.pending_error = Some(e);
-                                return self.return_error_or_none();
-                            }
-                            None => {
-                                self.finished = true;
-                                return self.return_error_or_none();
-                            }
-                        };
-                        self.block_counter += 1;
-                        self.pos_in_block = 0;
-                    }
-                    self.pos_in_block = self.block.newline.trailing_zeros() as usize;
-                    let nl_pos = self.global_pos();
-                    if !self.crlf_detected {
-                        if nl_pos > 0 && self.lexer.input.slice(nl_pos - 1..nl_pos) == b"\r" {
-                            self.crlf_len = 1;
-                        }
-                        self.crlf_detected = true;
-                    }
-                    self.header_range.end = nl_pos.saturating_sub(self.crlf_len);
+            if !flag_is_set(CONFIG, RETURN_DNA_CHUNK) || self.line_count == 0 {
+                // HEADER
+                self.increment_pos();
+                if self.finished {
+                    return self.return_error_or_none();
+                }
+                #[cfg(feature = "paraseq")]
+                {
+                    self.record_index = self.record_counter;
+                    self.record_counter += 1;
+                }
+                self.record_start = self.global_pos() - 1;
+                if flag_is_not_set(CONFIG, MERGE_RECORDS) {
+                    self.clear_record();
+                }
+                if flag_is_set(CONFIG, COMPUTE_HEADER) {
+                    self.header_range.start = self.global_pos();
+                }
+                while self.block.newline == 0 {
                     if flag_is_set(CONFIG, COMPUTE_HEADER)
                         && !I::RANDOM_ACCESS
-                        && self.pos_in_block + 1 >= self.block.len
                         && self.lexer.input.is_end_of_buffer()
                     {
                         self.lexer.input.make_room(self.header_range.start);
                     }
-                    self.consume_newline();
-                    self.seq_start = self.global_pos();
+                    match self.lexer.next_in_header() {
+                        Some(Ok(b)) => self.block.set::<CONFIG>(b),
+                        Some(Err(e)) => {
+                            self.finished = true;
+                            self.pending_error = Some(e);
+                            return self.return_error_or_none();
+                        }
+                        None => {
+                            self.finished = true;
+                            return self.return_error_or_none();
+                        }
+                    }
+                    self.block_counter += 1;
+                    self.pos_in_block = 0;
                 }
-                1 => {
-                    // SEQUENCE
+                self.pos_in_block = self.block.newline.trailing_zeros() as usize;
+                let nl_pos = self.global_pos();
+                if !self.crlf_detected {
+                    if nl_pos > 0 && self.lexer.input.slice(nl_pos - 1..nl_pos) == b"\r" {
+                        self.crlf_len = 1;
+                    }
+                    self.crlf_detected = true;
+                }
+                self.header_range.end = nl_pos.saturating_sub(self.crlf_len);
+                if flag_is_set(CONFIG, COMPUTE_HEADER)
+                    && !I::RANDOM_ACCESS
+                    && self.pos_in_block + 1 >= self.block.len
+                    && self.lexer.input.is_end_of_buffer()
+                {
+                    self.lexer.input.make_room(self.header_range.start);
+                }
+                self.consume_newline();
+                self.seq_start = self.global_pos();
+                if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
+                    self.line_count = 1;
+                }
+            }
+
+            if !flag_is_set(CONFIG, RETURN_DNA_CHUNK) || self.line_count == 1 {
+                // SEQUENCE
+                'seq_line: loop {
                     if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
                         let mask = !0 << self.pos_in_block;
                         let mut position = (self.block.is_dna | self.block.newline) & mask;
                         while position == 0 {
                             self.make_room_record();
-                            self.block = match self.lexer.next() {
-                                Some(Ok(b)) => b,
+                            match self.lexer.next() {
+                                Some(Ok(b)) => self.block.set::<CONFIG>(b),
                                 Some(Err(e)) => {
                                     self.finished = true;
                                     self.pending_error = Some(e);
@@ -468,7 +471,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                                     self.finished = true;
                                     return self.return_error_or_none();
                                 }
-                            };
+                            }
                             self.block_counter += 1;
                             self.pos_in_block = 0;
                             position = self.block.is_dna | self.block.newline;
@@ -478,13 +481,15 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                             self.dna_range.end = self.global_pos().saturating_sub(self.crlf_len);
                             self.make_room_record_end();
                             self.consume_newline();
-                            continue;
+                            break 'seq_line;
                         }
                     }
 
                     let mask = !0 << self.pos_in_block;
                     let mut position = !self.block.is_dna & mask;
-                    if flag_is_not_set(CONFIG, MERGE_DNA_CHUNKS) {
+                    if flag_is_set(CONFIG, SPLIT_NON_ACTG)
+                        && flag_is_not_set(CONFIG, MERGE_DNA_CHUNKS)
+                    {
                         self.clear_chunk();
                     }
                     self.dna_range.start = self.global_pos();
@@ -504,8 +509,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         if self.pos_in_block > 0 {
                             self.make_room_record();
                             self.append_dna_range(self.pos_in_block, 64 - self.pos_in_block);
-                            self.block = match self.lexer.next() {
-                                Some(Ok(b)) => b,
+                            match self.lexer.next() {
+                                Some(Ok(b)) => self.block.set::<CONFIG>(b),
                                 Some(Err(e)) => {
                                     self.finished = true;
                                     self.pending_error = Some(e);
@@ -515,16 +520,15 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                                     self.finished = true;
                                     return self.return_error_or_none();
                                 }
-                            };
+                            }
                             self.block_counter += 1;
                             self.pos_in_block = 0;
                             position = !self.block.is_dna;
                         }
-                        let mut block = self.block;
                         let mut dna_blocks: usize = 0;
                         while position == 0 {
                             self.make_room_record();
-                            self.append_dna_block_from(block);
+                            self.append_dna_block();
                             dna_blocks += 1;
 
                             if dna_blocks == 16 && !merge_chunks {
@@ -538,24 +542,21 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                                 );
                                 dna_blocks = 15;
                             }
-                            block = match self.lexer.next() {
-                                Some(Ok(b)) => b,
+                            match self.lexer.next() {
+                                Some(Ok(b)) => self.block.set::<CONFIG>(b),
                                 Some(Err(e)) => {
-                                    self.block = block;
                                     self.finished = true;
                                     self.pending_error = Some(e);
                                     return self.return_error_or_none();
                                 }
                                 None => {
-                                    self.block = block;
                                     self.finished = true;
                                     return self.return_error_or_none();
                                 }
-                            };
+                            }
                             self.block_counter += 1;
-                            position = !block.is_dna;
+                            position = !self.block.is_dna;
                         }
-                        self.block = block;
                         self.pos_in_block = position.trailing_zeros() as usize;
                         if self.pos_in_block > 0 {
                             let len = if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
@@ -583,96 +584,102 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         self.cur_dna_string.extend_from_slice(dna_chunk);
                     }
                     self.make_room_record_end();
-                    if flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
-                        || ((1 << self.pos_in_block) & self.block.newline) != 0
-                    {
+                    let at_newline = flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
+                        || ((1 << self.pos_in_block) & self.block.newline) != 0;
+                    if at_newline {
                         self.consume_newline();
                     }
                     if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
+                        if at_newline {
+                            self.line_count = 2;
+                        }
                         return Some(Event::DnaChunk(self.dna_range.clone()));
                     }
-                }
-                2 => {
-                    // PLUS
-                    while self.block.newline == 0 {
-                        self.make_room_record();
-                        self.block = match self.lexer.next_in_non_dna() {
-                            Some(Ok(b)) => b,
-                            Some(Err(e)) => {
-                                self.finished = true;
-                                self.pending_error = Some(e);
-                                return self.return_error_or_none();
-                            }
-                            None => {
-                                self.finished = true;
-                                return self.return_error_or_none();
-                            }
-                        };
-                        self.block_counter += 1;
-                        self.pos_in_block = 0;
-                    }
-                    self.pos_in_block = self.block.newline.trailing_zeros() as usize;
-                    self.make_room_record_end();
-                    self.consume_newline();
-                }
-                3 => {
-                    // QUALITY
-                    let qual_start = self.global_pos();
-                    if flag_is_set(CONFIG, COMPUTE_QUALITY) {
-                        self.quality_range.start = qual_start;
-                    }
-                    let seq_len = self.dna_range.end.saturating_sub(self.seq_start);
-                    let target_pos = qual_start + seq_len + self.crlf_len;
-                    if target_pos / 64 > self.block_counter && self.block.newline == 0 {
-                        let keep_anchor = flag_is_set(
-                            CONFIG,
-                            COMPUTE_HEADER | COMPUTE_DNA_STRING | COMPUTE_QUALITY,
-                        );
-                        let anchor = if flag_is_set(CONFIG, COMPUTE_HEADER | COMPUTE_DNA_STRING) {
-                            self.anchor()
-                        } else {
-                            qual_start
-                        };
-                        self.lexer.skip_quality_line(
-                            target_pos,
-                            &mut self.block_counter,
-                            &mut self.pos_in_block,
-                            &mut self.block,
-                            anchor,
-                            keep_anchor,
-                        );
-                    }
-                    while self.block.newline == 0 {
-                        self.make_room_record();
-                        self.make_room_quality();
-                        self.block = match self.lexer.next_in_non_dna() {
-                            Some(Ok(b)) => b,
-                            Some(Err(e)) => {
-                                self.pending_error = Some(e);
-                                self.finished = true;
-                                break;
-                            }
-                            None => {
-                                self.finished = true;
-                                break;
-                            }
-                        };
-                        self.block_counter += 1;
-                        self.pos_in_block = 0;
-                    }
-                    self.pos_in_block = self.block.newline.trailing_zeros() as usize;
-                    if flag_is_set(CONFIG, COMPUTE_QUALITY) {
-                        self.pos_in_block = self.pos_in_block.min(self.block.len);
-                        self.quality_range.end = self.global_pos().saturating_sub(self.crlf_len);
-                    }
-                    self.make_room_record_end();
-                    self.make_room_quality_end();
-                    self.consume_newline();
-                    if flag_is_set(CONFIG, RETURN_RECORD) {
-                        return Some(Event::Record(self.record_start..self.global_pos()));
+                    if at_newline {
+                        break 'seq_line;
                     }
                 }
-                _ => unreachable!(),
+            }
+
+            // PLUS
+            while self.block.newline == 0 {
+                self.make_room_record();
+                match self.lexer.next_in_non_dna() {
+                    Some(Ok(b)) => self.block.set::<CONFIG>(b),
+                    Some(Err(e)) => {
+                        self.finished = true;
+                        self.pending_error = Some(e);
+                        return self.return_error_or_none();
+                    }
+                    None => {
+                        self.finished = true;
+                        return self.return_error_or_none();
+                    }
+                }
+                self.block_counter += 1;
+                self.pos_in_block = 0;
+            }
+            self.pos_in_block = self.block.newline.trailing_zeros() as usize;
+            self.make_room_record_end();
+            self.consume_newline();
+
+            // QUALITY
+            let qual_start = self.global_pos();
+            if flag_is_set(CONFIG, COMPUTE_QUALITY) {
+                self.quality_range.start = qual_start;
+            }
+            let seq_len = self.dna_range.end.saturating_sub(self.seq_start);
+            let target_pos = qual_start + seq_len + self.crlf_len;
+            if target_pos / 64 > self.block_counter && self.block.newline == 0 {
+                let keep_anchor = flag_is_set(
+                    CONFIG,
+                    COMPUTE_HEADER | COMPUTE_DNA_STRING | COMPUTE_QUALITY,
+                );
+                let anchor = if flag_is_set(CONFIG, COMPUTE_HEADER | COMPUTE_DNA_STRING) {
+                    self.anchor()
+                } else {
+                    qual_start
+                };
+                self.lexer.skip_quality_line(
+                    target_pos,
+                    &mut self.block_counter,
+                    &mut self.pos_in_block,
+                    &mut self.block,
+                    anchor,
+                    keep_anchor,
+                );
+            }
+            while self.block.newline == 0 {
+                self.make_room_record();
+                self.make_room_quality();
+                match self.lexer.next_in_non_dna() {
+                    Some(Ok(b)) => self.block.set::<CONFIG>(b),
+                    Some(Err(e)) => {
+                        self.pending_error = Some(e);
+                        self.finished = true;
+                        break;
+                    }
+                    None => {
+                        self.finished = true;
+                        break;
+                    }
+                }
+                self.block_counter += 1;
+                self.pos_in_block = 0;
+            }
+            self.pos_in_block = self.block.newline.trailing_zeros() as usize;
+            if flag_is_set(CONFIG, COMPUTE_QUALITY) {
+                self.pos_in_block = self.pos_in_block.min(self.block.len);
+                self.quality_range.end = self.global_pos().saturating_sub(self.crlf_len);
+            }
+            self.make_room_record_end();
+            self.make_room_quality_end();
+            self.consume_newline();
+            if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
+                self.line_count = 0;
+            }
+            if flag_is_set(CONFIG, RETURN_RECORD) {
+                return Some(Event::Record(self.record_start..self.global_pos()));
             }
         }
     }

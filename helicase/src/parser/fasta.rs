@@ -132,7 +132,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastaParser<
         if flag_is_set(CONFIG, COMPUTE_DNA_STRING) {
             self.cur_dna_string.clear();
         }
-        self.bitpackers.clear();
+        self.bitpackers.clear::<CONFIG>();
         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
             self.dna_len = 0;
         }
@@ -323,9 +323,23 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
     #[inline(always)]
     fn current_byte(&self) -> u8 {
         if self.pos_in_block < self.block.len {
-            self.lexer.input.current_block()[self.pos_in_block]
+            self.lexer.input.current_block()[self.pos_in_block & 63]
         } else {
             0
+        }
+    }
+
+    #[inline(always)]
+    fn skip_blank_lines(&mut self, line_start: usize) {
+        while !self.finished {
+            if ((1 << self.pos_in_block) & self.block.newline) != 0 {
+                self.make_room_record_end(line_start);
+                self.consume_newline();
+            } else if self.crlf_len != 0 && self.current_byte() == b'\r' {
+                self.increment_pos();
+            } else {
+                break;
+            }
         }
     }
 
@@ -336,7 +350,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
         } else {
             match self.lexer.next() {
                 Some(Ok(b)) => {
-                    self.block = b;
+                    self.block.set::<CONFIG>(b);
                     self.block_counter += 1;
                     self.pos_in_block = 0;
                 }
@@ -365,8 +379,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
     }
 
     #[inline(always)]
-    fn append_dna_block_from(&mut self, block: Chunk) {
-        self.bitpackers.append_block_from::<CONFIG>(&block);
+    fn append_dna_block(&mut self) {
+        self.bitpackers.append_block_from::<CONFIG>(&self.block);
         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
             self.dna_len += 64;
         }
@@ -421,8 +435,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             {
                 self.lexer.input.make_room(self.header_range.start);
             }
-            self.block = match self.lexer.next_in_header() {
-                Some(Ok(b)) => b,
+            match self.lexer.next_in_header() {
+                Some(Ok(b)) => self.block.set::<CONFIG>(b),
                 Some(Err(e)) => {
                     self.finished = true;
                     self.pending_error = Some(e);
@@ -446,7 +460,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
                     self.state = State::Sequence;
                     break;
                 }
-            };
+            }
             self.block_counter += 1;
             self.pos_in_block = 0;
             position = self.block.newline;
@@ -489,8 +503,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             let mut position = (self.block.is_dna | self.block.newline) & mask;
             while position == 0 {
                 self.make_room_record(self.global_pos());
-                self.block = match self.lexer.next() {
-                    Some(Ok(b)) => b,
+                match self.lexer.next() {
+                    Some(Ok(b)) => self.block.set::<CONFIG>(b),
                     Some(Err(e)) => {
                         self.finished = true;
                         self.pending_error = Some(e);
@@ -501,7 +515,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
                         self.finished = true;
                         break;
                     }
-                };
+                }
                 self.block_counter += 1;
                 self.pos_in_block = 0;
                 position = self.block.is_dna | self.block.newline;
@@ -648,7 +662,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             return Some(self.finish_record_eof());
         }
         let block_len = 64.min((buf_off + data_len).saturating_sub(self.block_counter * 64));
-        self.block = self.lexer.scan_current_block(block_len);
+        self.block
+            .set::<CONFIG>(self.lexer.scan_current_block(block_len));
 
         if self.current_byte() == b'>' {
             return Some(self.emit_record_events());
@@ -678,16 +693,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                 }
                 State::Sequence => {
                     // Skip blank lines
-                    while !self.finished {
-                        if self.current_byte() == b'\r' {
-                            self.increment_pos();
-                        } else if self.current_byte() == b'\n' {
-                            self.make_room_record_end(self.global_pos());
-                            self.consume_newline();
-                        } else {
-                            break;
-                        }
-                    }
+                    self.skip_blank_lines(self.global_pos());
 
                     if self.finished {
                         return self.finish_record_eof();
@@ -733,7 +739,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                                 self.append_dna_range(self.pos_in_block, 64 - self.pos_in_block);
                                 match self.lexer.next() {
                                     Some(Ok(b)) => {
-                                        self.block = b;
+                                        self.block.set::<CONFIG>(b);
                                         self.block_counter += 1;
                                         self.pos_in_block = 0;
                                         position = !self.block.is_dna;
@@ -750,11 +756,10 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                                     }
                                 }
                             }
-                            let mut block = self.block;
                             let mut dna_blocks: usize = 0;
                             while position == 0 {
                                 self.make_room_record(line_start);
-                                self.append_dna_block_from(block);
+                                self.append_dna_block();
                                 dna_blocks += 1;
 
                                 if dna_blocks == 16 && !merge_chunks {
@@ -769,25 +774,22 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                                     dna_blocks = 15;
                                 }
 
-                                block = match self.lexer.next() {
-                                    Some(Ok(b)) => b,
+                                match self.lexer.next() {
+                                    Some(Ok(b)) => self.block.set::<CONFIG>(b),
                                     Some(Err(e)) => {
-                                        self.block = block;
                                         self.finished = true;
                                         self.pending_error = Some(e);
                                         return self.return_error_or_none();
                                     }
                                     None => {
-                                        self.block = block;
                                         self.pos_in_block = 64;
                                         self.finished = true;
                                         break;
                                     }
-                                };
+                                }
                                 self.block_counter += 1;
-                                position = !block.is_dna;
+                                position = !self.block.is_dna;
                             }
-                            self.block = block;
                             if !self.finished {
                                 self.pos_in_block = position.trailing_zeros() as usize;
                                 if self.pos_in_block > 0 {
@@ -831,7 +833,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                             self.make_room_record(line_start);
                             match self.lexer.next() {
                                 Some(Ok(b)) => {
-                                    self.block = b;
+                                    self.block.set::<CONFIG>(b);
                                     self.block_counter += 1;
                                     self.pos_in_block = 0;
                                 }
@@ -860,16 +862,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                         self.make_room_record_end(line_start);
                         self.consume_newline();
 
-                        while !self.finished {
-                            if self.current_byte() == b'\r' {
-                                self.increment_pos();
-                            } else if self.current_byte() == b'\n' {
-                                self.make_room_record_end(line_start);
-                                self.consume_newline();
-                            } else {
-                                break;
-                            }
-                        }
+                        self.skip_blank_lines(line_start);
 
                         if self.finished {
                             return self.finish_record_eof();

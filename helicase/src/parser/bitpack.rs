@@ -21,11 +21,19 @@ impl DnaBitpackers {
     }
 
     #[inline(always)]
-    pub fn clear(&mut self) {
-        self.packed.clear();
-        self.columnar.clear();
-        self.mask_non_actg.clear();
-        self.mask_n.clear();
+    pub fn clear<const CONFIG: Config>(&mut self) {
+        if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
+            self.packed.clear();
+        }
+        if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
+            self.columnar.clear();
+        }
+        if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
+            self.mask_non_actg.clear();
+        }
+        if flag_is_set(CONFIG, COMPUTE_MASK_N) {
+            self.mask_n.clear();
+        }
     }
 
     #[inline(always)]

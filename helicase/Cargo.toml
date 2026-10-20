@@ -41,3 +41,7 @@ all-features = true
 [[example]]
 name = "packed"
 required-features = ["packed-seq"]
+
+[[example]]
+name = "parallel_len_paraseq"
+required-features = ["paraseq"]

@@ -562,6 +562,28 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     {
         self.reduce(process, |(), ()| ())
     }
+
+    /// Executes parallel processing across worker threads using a Paraseq [`ParallelProcessor`](paraseq::parallel::ParallelProcessor).
+    ///
+    /// Drives worker threads via Helicase's lock-free work-stealing engine, passing each
+    /// record as a zero-copy [`paraseq::Record`] reference into [`process_record`](paraseq::parallel::ParallelProcessor::process_record).
+    #[cfg(feature = "paraseq")]
+    pub fn process_parallel<P>(self, processor: &mut P) -> io::Result<()>
+    where
+        P: for<'b, 'c> paraseq::parallel::ParallelProcessor<&'b FastxParser<'c, CONFIG>> + Sync,
+    {
+        let proc = processor.clone();
+        self.for_each(move |mut parser| {
+            let mut local_proc = proc.clone();
+            while let Some(_event) = parser.next() {
+                if let Err(e) = local_proc.process_record(&parser) {
+                    eprintln!("Paraseq processor error: {e}");
+                    break;
+                }
+            }
+            let _ = local_proc.on_thread_complete();
+        })
+    }
 }
 
 fn run_multi_reader<const CONFIG: Config, State, Process, Reduce>(

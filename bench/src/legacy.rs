@@ -4,7 +4,7 @@ use helicase::config::advanced::*;
 use helicase::config::*;
 use helicase::input::*;
 use helicase::*;
-use needletail::{parse_fastx_file, parse_fastx_reader};
+use needletail::parse_fastx_reader;
 use paraseq::{ReaderBuilder, Record, fastx};
 
 use crate::measurement::Measurement;
@@ -139,39 +139,55 @@ pub fn run_legacy_bench<M: Measurement>(args: &LegacyArgs, path: &str) {
             }
         }
         if args.file {
-            m.start();
-            for _ in 0..args.repeat {
-                let mut reader = parse_fastx_file(path).expect("Failed to parse file");
-                dna_len = 0;
-                while let Some(r) = reader.next() {
-                    let record = r.expect("Invalid record");
-                    let clean_seq = record.seq();
-                    dna_len += clean_seq.len();
-                }
-                m.tick();
-            }
-            let result = if args.show_val { Some(dna_len) } else { None };
-            m.show("Needletail string \t(file)", size, result, args.csv);
-
-            m.start();
-            for _ in 0..args.repeat {
-                let mut reader = ReaderBuilder::path(path)
-                    .batch_size(1)
-                    .build()
-                    .expect("Failed to parse file");
-                let mut record_set = reader.new_record_set();
-                dna_len = 0;
-                while record_set.fill(&mut reader).unwrap() {
-                    for r in record_set.iter() {
-                        let record = r.expect("Invalid record");
-                        let clean_seq = record.seq();
-                        dna_len += clean_seq.len();
+            match crate::synthetic::open_needletail_reader(std::path::Path::new(path)) {
+                Ok(_) => {
+                    m.start();
+                    for _ in 0..args.repeat {
+                        let mut reader =
+                            crate::synthetic::open_needletail_reader(std::path::Path::new(path))
+                                .expect("Failed to parse file");
+                        dna_len = 0;
+                        while let Some(r) = reader.next() {
+                            let record = r.expect("Invalid record");
+                            let clean_seq = record.seq();
+                            dna_len += clean_seq.len();
+                        }
+                        m.tick();
                     }
+                    let result = if args.show_val { Some(dna_len) } else { None };
+                    m.show("Needletail string \t(file)", size, result, args.csv);
                 }
-                m.tick();
+                Err(e) => {
+                    eprintln!("Warning: Needletail failed to parse {path}: {e}; skipping baseline.");
+                }
             }
-            let result = if args.show_val { Some(dna_len) } else { None };
-            m.show("Paraseq string  \t(file)", size, result, args.csv);
+
+            match ReaderBuilder::path(path).batch_size(1).build() {
+                Ok(_) => {
+                    m.start();
+                    for _ in 0..args.repeat {
+                        let mut reader = ReaderBuilder::path(path)
+                            .batch_size(1)
+                            .build()
+                            .expect("Failed to parse file");
+                        let mut record_set = reader.new_record_set();
+                        dna_len = 0;
+                        while record_set.fill(&mut reader).unwrap() {
+                            for r in record_set.iter() {
+                                let record = r.expect("Invalid record");
+                                let clean_seq = record.seq();
+                                dna_len += clean_seq.len();
+                            }
+                        }
+                        m.tick();
+                    }
+                    let result = if args.show_val { Some(dna_len) } else { None };
+                    m.show("Paraseq string  \t(file)", size, result, args.csv);
+                }
+                Err(e) => {
+                    eprintln!("Warning: Paraseq failed to parse {path}: {e}; skipping baseline.");
+                }
+            }
         }
     }
 

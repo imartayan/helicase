@@ -135,6 +135,7 @@ impl CompressionFormat {
                 "bgz" | "bgzf" => return Ok(Some(Self::Bgzf)),
                 "gz" | "gzip" => return Ok(Some(Self::Gzip)),
                 "zst" | "zstd" => return Ok(Some(Self::Zstd)),
+                "pzst" | "pzstd" => return Ok(Some(Self::Pzstd)),
                 "bz2" => return Ok(Some(Self::Bzip2)),
                 "xz" => return Ok(Some(Self::Xz)),
                 _ => {}

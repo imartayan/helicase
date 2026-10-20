@@ -448,6 +448,29 @@ fn bench_ram_dataset<M: Measurement>(
     }
 }
 
+pub fn open_needletail_reader(
+    path: &Path,
+) -> Result<Box<dyn needletail::FastxReader>, Box<dyn std::error::Error + Send + Sync>> {
+    if let Ok(reader) = parse_fastx_file(path) {
+        return Ok(reader);
+    }
+
+    // Needletail only checks standard Zstd magic [0x28, 0xB5] and fails to recognize
+    // multi-frame Zstd skippable frames (0x184D2A50..0x184D2A5F) emitted by pzstd.
+    // Wrap with zstd decoder if the file is Zstd/Pzstd.
+    let format = helicase::input::CompressionFormat::from_path(path).ok().flatten();
+    if matches!(
+        format,
+        Some(helicase::input::CompressionFormat::Zstd | helicase::input::CompressionFormat::Pzstd)
+    ) {
+        let file = File::open(path)?;
+        let decoder = zstd::stream::read::Decoder::new(file)?;
+        return Ok(parse_fastx_reader(decoder)?);
+    }
+
+    Ok(parse_fastx_file(path)?)
+}
+
 fn bench_file_and_mmap<M: Measurement>(
     name: &str,
     path: &Path,
@@ -473,17 +496,27 @@ fn bench_file_and_mmap<M: Measurement>(
     if opts.bench_file {
         // Needletail file
         if !opts.no_baseline {
-            let dna_len = bench_run!(m, opts, {
-                let mut reader =
-                    parse_fastx_file(path).expect("Failed to parse file with Needletail");
-                let mut len = 0;
-                while let Some(r) = reader.next() {
-                    len += r.expect("Invalid record").seq().len();
+            match open_needletail_reader(path) {
+                Ok(_) => {
+                    let dna_len = bench_run!(m, opts, {
+                        let mut reader = open_needletail_reader(path)
+                            .expect("Failed to parse file with Needletail");
+                        let mut len = 0;
+                        while let Some(r) = reader.next() {
+                            len += r.expect("Invalid record").seq().len();
+                        }
+                        len
+                    });
+                    show_tick(&m, "Needletail string \t(file)", dna_len);
+                    summary.needletail_file = m.throughput(size);
                 }
-                len
-            });
-            show_tick(&m, "Needletail string \t(file)", dna_len);
-            summary.needletail_file = m.throughput(size);
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Needletail does not support {}: {e}; skipping baseline.",
+                        path.display()
+                    );
+                }
+            }
         }
 
         // Helicase string file

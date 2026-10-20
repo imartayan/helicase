@@ -28,6 +28,7 @@ simd-minimizers = { version = "3.0", features = ["scalar"], optional = true }
 sysinfo = "0.39"
 fearless_simd = { version = "1.1", optional = true }
 sirocco = "0.2"
+zstd = "0.13"
 
 [lib]
 name = "bench"

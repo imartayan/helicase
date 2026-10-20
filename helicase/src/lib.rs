@@ -252,6 +252,11 @@ pub mod parser;
 pub use config::{Config, ParserOptions};
 pub use parser::{FastaParser, FastqParser, FastxParser, HelicaseParser, ParallelFastxParser};
 
+#[cfg(feature = "needletail")]
+pub mod needletail_helpers;
+#[cfg(feature = "needletail")]
+pub use needletail_helpers::*;
+
 #[cfg(target_feature = "avx2")]
 pub(crate) mod simd {
     mod avx2;

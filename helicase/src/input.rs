@@ -112,7 +112,7 @@ impl CompressionFormat {
         let n = (&file).read(&mut buf)?;
         if n > 0 {
             let format = Self::from_bytes(&buf[..n]);
-            if let Some(Self::Zstd) = format {
+            if format == Some(Self::Zstd) {
                 #[cfg(feature = "zstd")]
                 {
                     if let Ok(mmap) = unsafe { Mmap::map(&file) } {
@@ -443,7 +443,7 @@ struct SiroccoMultiGzReader<R: BufRead> {
 
 #[cfg(feature = "sirocco")]
 impl<R: BufRead> SiroccoMultiGzReader<R> {
-    fn new(inner: R) -> Self {
+    const fn new(inner: R) -> Self {
         Self {
             inner,
             decoder: sirocco::inflate::Decoder::new(sirocco::Format::Gzip),
@@ -561,10 +561,10 @@ impl<R: Read> Read for ReaderDecoder<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self {
             #[cfg(feature = "sirocco")]
-            ReaderDecoder::Sirocco(r) => r.read(buf),
+            Self::Sirocco(r) => r.read(buf),
             #[cfg(feature = "zstd")]
-            ReaderDecoder::Zstd(r) => r.read(buf),
-            ReaderDecoder::Deko(r) => r.read(buf),
+            Self::Zstd(r) => r.read(buf),
+            Self::Deko(r) => r.read(buf),
         }
     }
 }

@@ -29,10 +29,10 @@ pub enum Format {
 impl Format {
     /// Identifies the format from the initial record character (`>` for FASTA, `@` for FASTQ).
     #[inline]
-    pub fn from_byte(byte: u8) -> Option<Self> {
+    pub const fn from_byte(byte: u8) -> Option<Self> {
         match byte {
-            b'>' => Some(Format::Fasta),
-            b'@' => Some(Format::Fastq),
+            b'>' => Some(Self::Fasta),
+            b'@' => Some(Self::Fastq),
             _ => None,
         }
     }

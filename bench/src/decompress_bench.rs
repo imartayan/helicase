@@ -58,7 +58,7 @@ impl<R: BufRead> Read for SiroccoGzipReader<R> {
 }
 
 #[cfg(feature = "sirocco")]
-pub fn is_bgzf(bytes: &[u8]) -> bool {
+pub const fn is_bgzf(bytes: &[u8]) -> bool {
     bytes.len() >= 18
         && bytes[0] == 0x1f
         && bytes[1] == 0x8b
@@ -566,7 +566,7 @@ fn evaluate_dataset(
 
     // Baseline uncompressed validation
     let (uncomp_size, expected_records, expected_dna_len) =
-        if let Some(uncomp_p) = uncompressed_path {
+        uncompressed_path.map_or((0, 0, 0), |uncomp_p| {
             let uncomp_bytes = std::fs::read(uncomp_p).expect("Failed to read uncompressed file");
             let mut parser = FastxParser::<{ DEFAULT_CONFIG }>::from_slice(&uncomp_bytes).unwrap();
             let mut recs = 0;
@@ -576,9 +576,7 @@ fn evaluate_dataset(
                 len += parser.get_dna_string().len();
             }
             (uncomp_bytes.len(), recs, len)
-        } else {
-            (0, 0, 0)
-        };
+        });
     #[cfg(not(feature = "sirocco"))]
     let _ = (expected_records, expected_dna_len);
 

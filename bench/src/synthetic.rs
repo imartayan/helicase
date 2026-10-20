@@ -458,7 +458,9 @@ pub fn open_needletail_reader(
     // Needletail only checks standard Zstd magic [0x28, 0xB5] and fails to recognize
     // multi-frame Zstd skippable frames (0x184D2A50..0x184D2A5F) emitted by pzstd.
     // Wrap with zstd decoder if the file is Zstd/Pzstd.
-    let format = helicase::input::CompressionFormat::from_path(path).ok().flatten();
+    let format = helicase::input::CompressionFormat::from_path(path)
+        .ok()
+        .flatten();
     if matches!(
         format,
         Some(helicase::input::CompressionFormat::Zstd | helicase::input::CompressionFormat::Pzstd)

@@ -158,7 +158,9 @@ pub fn run_legacy_bench<M: Measurement>(args: &LegacyArgs, path: &str) {
                     m.show("Needletail string \t(file)", size, result, args.csv);
                 }
                 Err(e) => {
-                    eprintln!("Warning: Needletail failed to parse {path}: {e}; skipping baseline.");
+                    eprintln!(
+                        "Warning: Needletail failed to parse {path}: {e}; skipping baseline."
+                    );
                 }
             }
 

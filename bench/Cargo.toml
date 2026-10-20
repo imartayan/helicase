@@ -17,18 +17,15 @@ needletail = { version = "0.7", default-features = false, features = [
     "flate2",
     "zstd",
 ] }
-niffler = { version = "3.0", default-features = false, features = [
-    "gz",
-    "zstd",
-] }
 paraseq = { version = "0.6", default-features = false, features = ["niffler"] }
 rayon = "1.12"
-regex = "1.12"
-simd-minimizers = { version = "3.0", features = ["scalar"], optional = true }
 sysinfo = "0.39"
-fearless_simd = { version = "1.1", optional = true }
+simd-minimizers = { version = "3.0", features = ["scalar"], optional = true }
 sirocco = "0.2"
 zstd = "0.13"
+
+[package.metadata.cargo-machete]
+ignored = ["simd-minimizers"]
 
 [lib]
 name = "bench"

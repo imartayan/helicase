@@ -895,10 +895,11 @@ where
             })
             .collect();
 
-        handles
-            .into_iter()
-            .map(|h| h.join().unwrap())
-            .collect::<Vec<_>>()
+        let mut res = Vec::with_capacity(handles.len());
+        for h in handles {
+            res.push(h.join().unwrap());
+        }
+        res
     });
 
     let mut total = State::default();
@@ -910,14 +911,14 @@ where
 
 #[cfg(feature = "zstd")]
 #[derive(Clone, Copy)]
-pub(crate) struct ZstdFrame {
-    pub(crate) comp_offset: usize,
-    pub(crate) comp_len: usize,
-    pub(crate) uncomp_len: usize,
+pub struct ZstdFrame {
+    pub comp_offset: usize,
+    pub comp_len: usize,
+    pub uncomp_len: usize,
 }
 
 #[cfg(feature = "zstd")]
-pub(crate) fn index_zstd_frames(compressed: &[u8]) -> Vec<ZstdFrame> {
+pub fn index_zstd_frames(compressed: &[u8]) -> Vec<ZstdFrame> {
     let mut frames = Vec::with_capacity(compressed.len() / (1024 * 1024) + 1);
     let mut comp_offset = 0;
 
@@ -1074,12 +1075,12 @@ fn find_record_start_in_zstd(
 
         let decomp_ok = if f.uncomp_len > 0 {
             frame_data.resize(f.uncomp_len, 0);
-            if let Ok(n) = decompressor.decompress_to_buffer(frame_bytes, &mut frame_data) {
-                frame_data.truncate(n);
-                true
-            } else {
-                false
-            }
+            decompressor
+                .decompress_to_buffer(frame_bytes, &mut frame_data)
+                .is_ok_and(|n| {
+                    frame_data.truncate(n);
+                    true
+                })
         } else {
             frame_data.clear();
             zstd::stream::read::Decoder::new(frame_bytes)
@@ -1169,10 +1170,11 @@ where
             })
             .collect();
 
-        handles
-            .into_iter()
-            .map(|h| h.join().unwrap())
-            .collect::<Vec<_>>()
+        let mut res = Vec::with_capacity(handles.len());
+        for h in handles {
+            res.push(h.join().unwrap());
+        }
+        res
     });
 
     let mut total = State::default();

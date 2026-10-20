@@ -55,6 +55,7 @@ perf-event2 = "0.7"
 
 [features]
 simd-minimizers = ["helicase/packed-seq", "dep:simd-minimizers"]
+fearless_simd = ["helicase/fearless_simd", "dep:fearless_simd"]
 sirocco = ["helicase/sirocco"]
 
 [[example]]

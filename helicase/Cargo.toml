@@ -21,6 +21,7 @@ memchr = "2.8"
 memmap2 = "0.9"
 packed-seq = { version = "5.0", default-features = false, optional = true }
 paraseq = { version = "0.6", default-features = false, optional = true }
+fearless_simd = { version = "1.1", optional = true }
 sirocco = { version = "0.2", optional = true }
 zstd = { version = "0.13", default-features = false, optional = true }
 

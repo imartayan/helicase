@@ -256,12 +256,22 @@ pub mod needletail_helpers;
 #[cfg(feature = "needletail")]
 pub use needletail_helpers::*;
 
-#[cfg(target_feature = "avx2")]
+#[cfg(feature = "fearless_simd")]
+pub(crate) mod simd {
+    mod fearless;
+    pub use fearless::*;
+}
+
+#[cfg(all(not(feature = "fearless_simd"), target_feature = "avx2"))]
 pub(crate) mod simd {
     mod avx2;
     pub use avx2::*;
 }
-#[cfg(all(not(target_feature = "avx2"), target_feature = "ssse3"))]
+#[cfg(all(
+    not(feature = "fearless_simd"),
+    not(target_feature = "avx2"),
+    target_feature = "ssse3"
+))]
 #[deprecated(
     note = "Helicase currently uses SSE3 instead of AVX2 instructions. Compile using `-C target-cpu=native` to get better performances."
 )]
@@ -269,16 +279,19 @@ pub(crate) mod simd {
     mod sse;
     pub use sse::*;
 }
-#[cfg(target_feature = "neon")]
+#[cfg(all(not(feature = "fearless_simd"), target_feature = "neon"))]
 pub(crate) mod simd {
     mod neon;
     pub use neon::*;
 }
-#[cfg(not(any(
+#[cfg(all(
+    not(feature = "fearless_simd"),
+    not(any(
         target_feature = "avx2",
         target_feature = "ssse3",
         target_feature = "neon"
-)))]
+    ))
+))]
 #[deprecated(
     note = "Helicase currently uses (slow) non-vectorized instructions. Compile using `-C target-cpu=native` to get better performances."
 )]

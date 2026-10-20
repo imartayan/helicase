@@ -405,6 +405,8 @@ impl<R: BufRead> Read for SiroccoMultiGzReader<R> {
 enum ReaderDecoder<R: Read> {
     #[cfg(feature = "sirocco")]
     Sirocco(Box<SiroccoMultiGzReader<BufReader<R>>>),
+    #[cfg(feature = "zstd")]
+    Zstd(Box<zstd::stream::read::Decoder<'static, BufReader<R>>>),
     Deko(Box<AnyDecoder<BufReader<R>>>),
 }
 
@@ -414,6 +416,8 @@ impl<R: Read> Read for ReaderDecoder<R> {
         match self {
             #[cfg(feature = "sirocco")]
             ReaderDecoder::Sirocco(r) => r.read(buf),
+            #[cfg(feature = "zstd")]
+            ReaderDecoder::Zstd(r) => r.read(buf),
             ReaderDecoder::Deko(r) => r.read(buf),
         }
     }
@@ -451,20 +455,45 @@ impl<'a, R: Read + Send + 'a> ReaderInput<'a, R> {
 
     pub fn new(reader: R) -> io::Result<Self> {
         let mut buf_reader = BufReader::with_capacity(64 * 1024, reader);
-        let is_gz = {
-            let peek = buf_reader.fill_buf()?;
-            peek.len() >= 2 && peek[0] == 0x1F && peek[1] == 0x8B
-        };
+        let peek = buf_reader.fill_buf()?;
+        let is_gz = peek.len() >= 2 && peek[0] == 0x1F && peek[1] == 0x8B;
+        #[cfg(feature = "zstd")]
+        let is_zstd = peek.len() >= 4
+            && (peek[..4] == [0x28, 0xb5, 0x2f, 0xfd]
+                || (peek[3] == 0x18
+                    && peek[2] == 0x4d
+                    && peek[1] == 0x2a
+                    && (peek[0] & 0xf0) == 0x50));
 
         #[cfg(feature = "sirocco")]
         let decoder = if is_gz {
             ReaderDecoder::Sirocco(Box::new(SiroccoMultiGzReader::new(buf_reader)))
         } else {
+            #[cfg(feature = "zstd")]
+            if is_zstd {
+                ReaderDecoder::Zstd(Box::new(zstd::stream::read::Decoder::with_buffer(
+                    buf_reader,
+                )?))
+            } else {
+                ReaderDecoder::Deko(Box::new(AnyDecoder::new(buf_reader)))
+            }
+            #[cfg(not(feature = "zstd"))]
             ReaderDecoder::Deko(Box::new(AnyDecoder::new(buf_reader)))
         };
 
         #[cfg(not(feature = "sirocco"))]
-        let decoder = ReaderDecoder::Deko(Box::new(AnyDecoder::new(buf_reader)));
+        let decoder = {
+            #[cfg(feature = "zstd")]
+            if is_zstd {
+                ReaderDecoder::Zstd(Box::new(zstd::stream::read::Decoder::with_buffer(
+                    buf_reader,
+                )?))
+            } else {
+                ReaderDecoder::Deko(Box::new(AnyDecoder::new(buf_reader)))
+            }
+            #[cfg(not(feature = "zstd"))]
+            ReaderDecoder::Deko(Box::new(AnyDecoder::new(buf_reader)))
+        };
 
         let mut s = Self {
             data: vec![0; BUFFER_DEFAULT_SIZE],
@@ -570,6 +599,8 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
                 // Sirocco handles decompression directly; is_compressed() returns true.
                 Ok(None)
             }
+            #[cfg(feature = "zstd")]
+            ReaderDecoder::Zstd(_) => Ok(Some(deko::Format::Zstd)),
             ReaderDecoder::Deko(decoder) => {
                 let format = decoder.kind()?;
                 if format == deko::Format::Verbatim {
@@ -586,6 +617,8 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
         match &mut self.decoder {
             #[cfg(feature = "sirocco")]
             ReaderDecoder::Sirocco(_) => Ok(true),
+            #[cfg(feature = "zstd")]
+            ReaderDecoder::Zstd(_) => Ok(true),
             ReaderDecoder::Deko(decoder) => {
                 let format = decoder.kind()?;
                 Ok(format != deko::Format::Verbatim)

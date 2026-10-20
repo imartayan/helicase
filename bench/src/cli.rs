@@ -128,8 +128,14 @@ pub fn is_compressed_file(path: impl AsRef<Path>) -> bool {
             if n >= 2 && magic[0] == 0x1f && magic[1] == 0x8b {
                 return true;
             }
-            // Zstandard: 0xFD2FB528 (little-endian: 0x28, 0xb5, 0x2f, 0xfd)
-            if n >= 4 && magic == [0x28, 0xb5, 0x2f, 0xfd] {
+            // Zstandard: 0xFD2FB528 (little-endian: 0x28, 0xb5, 0x2f, 0xfd) or skippable frame (0x184D2A50..0x184D2A5F)
+            if n >= 4
+                && (magic == [0x28, 0xb5, 0x2f, 0xfd]
+                    || (magic[3] == 0x18
+                        && magic[2] == 0x4d
+                        && magic[1] == 0x2a
+                        && (magic[0] & 0xf0) == 0x50))
+            {
                 return true;
             }
             // Bzip2: 'B', 'Z'

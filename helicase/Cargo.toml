@@ -22,18 +22,20 @@ memmap2 = "0.9"
 packed-seq = { version = "5.0", default-features = false, optional = true }
 paraseq = { version = "0.6", default-features = false, optional = true }
 sirocco = { version = "0.2", optional = true }
+zstd = { version = "0.13", default-features = false, optional = true }
 
 [dev-dependencies]
 fastx-gen = { path = "../fastx-gen" }
 flate2 = { version = "1.1", features = ["zlib-rs"] }
 needletail = { version = "0.7", default-features = false }
+zstd = "0.13"
 
 [features]
 default = ["gz", "zstd"]
 bz2 = ["deko/bzip2"]
 gz = ["sirocco"]
 xz = ["deko/xz"]
-zstd = ["deko/zstd"]
+zstd = ["deko/zstd", "dep:zstd"]
 no-pdep = []
 needletail = []
 

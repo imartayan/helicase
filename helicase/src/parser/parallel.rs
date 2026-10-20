@@ -501,6 +501,7 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
 enum FileKind {
     Uncompressed,
     Gzip,
+    Zstd,
     OtherCompressed,
 }
 
@@ -514,9 +515,21 @@ fn detect_file_kind(path: &Path) -> io::Result<FileKind> {
     if n >= 2 && magic[0] == 0x1f && magic[1] == 0x8b {
         return Ok(FileKind::Gzip);
     }
-    // Zstandard: 0xFD2FB528 (little-endian: 0x28, 0xb5, 0x2f, 0xfd)
-    if n >= 4 && magic == [0x28, 0xb5, 0x2f, 0xfd] {
-        return Ok(FileKind::OtherCompressed);
+    // Zstandard: 0xFD2FB528 (little-endian: 0x28, 0xb5, 0x2f, 0xfd) or skippable frame (0x184D2A50..0x184D2A5F)
+    if n >= 4
+        && (magic == [0x28, 0xb5, 0x2f, 0xfd]
+            || (magic[3] == 0x18
+                && magic[2] == 0x4d
+                && magic[1] == 0x2a
+                && (magic[0] & 0xf0) == 0x50))
+    {
+        return Ok(FileKind::Zstd);
+    }
+    // Check file extension as fallback for Zstandard
+    if let Some(ext) = path.extension().and_then(|e| e.to_str())
+        && (ext.eq_ignore_ascii_case("zst") || ext.eq_ignore_ascii_case("zstd"))
+    {
+        return Ok(FileKind::Zstd);
     }
     // Bzip2: 'B', 'Z'
     if n >= 2 && magic[0] == b'B' && magic[1] == b'Z' {
@@ -657,6 +670,31 @@ where
                 Ok(process(parser))
             }
             #[cfg(not(feature = "sirocco"))]
+            {
+                let file = File::open(path)?;
+                let parser = FastxParser::<CONFIG>::from_reader(file)?;
+                Ok(process(parser))
+            }
+        }
+        FileKind::Zstd => {
+            #[cfg(feature = "zstd")]
+            {
+                let file = File::open(path)?;
+                let mmap = unsafe { memmap2::Mmap::map(&file)? };
+                let frames = index_zstd_frames(&mmap);
+                if frames.len() > 1 && num_threads > 1 {
+                    return run_zstd_multi_reader::<CONFIG, State, _, _>(
+                        &mmap,
+                        &frames,
+                        num_threads,
+                        process,
+                        reduce,
+                    );
+                }
+                let parser = FastxParser::<CONFIG>::from_file(path)?;
+                Ok(process(parser))
+            }
+            #[cfg(not(feature = "zstd"))]
             {
                 let file = File::open(path)?;
                 let parser = FastxParser::<CONFIG>::from_reader(file)?;
@@ -908,6 +946,280 @@ where
                         start_skip,
                         end_take,
                     );
+                    let parser = FastxParser::<CONFIG>::from_reader(reader)?;
+                    Ok(process(parser))
+                })
+            })
+            .collect();
+
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+
+    let mut total = State::default();
+    for res in results {
+        total = reduce(total, res?);
+    }
+    Ok(total)
+}
+
+#[cfg(feature = "zstd")]
+#[derive(Clone, Copy)]
+struct ZstdFrame {
+    comp_offset: usize,
+    comp_len: usize,
+    uncomp_len: usize,
+}
+
+#[cfg(feature = "zstd")]
+fn index_zstd_frames(compressed: &[u8]) -> Vec<ZstdFrame> {
+    let mut frames = Vec::with_capacity(compressed.len() / (1024 * 1024) + 1);
+    let mut comp_offset = 0;
+
+    while comp_offset + 4 <= compressed.len() {
+        let slice = &compressed[comp_offset..];
+        // Check for skippable frame: 0x184D2A50 to 0x184D2A5F
+        // Format: 4-byte magic + 4-byte frame size (u32 little-endian) + payload
+        if slice.len() >= 8
+            && slice[3] == 0x18
+            && slice[2] == 0x4d
+            && slice[1] == 0x2a
+            && (slice[0] & 0xf0) == 0x50
+        {
+            let user_size = u32::from_le_bytes([slice[4], slice[5], slice[6], slice[7]]) as usize;
+            comp_offset += 8 + user_size;
+            continue;
+        }
+
+        match zstd::zstd_safe::find_frame_compressed_size(slice) {
+            Ok(comp_len) if comp_len > 0 && comp_offset + comp_len <= compressed.len() => {
+                let uncomp_len = zstd::zstd_safe::get_frame_content_size(slice)
+                    .ok()
+                    .flatten()
+                    .unwrap_or(0) as usize;
+                frames.push(ZstdFrame {
+                    comp_offset,
+                    comp_len,
+                    uncomp_len,
+                });
+                comp_offset += comp_len;
+            }
+            _ => break,
+        }
+    }
+    frames
+}
+
+#[cfg(feature = "zstd")]
+struct ZstdFrameRangeReader<'a> {
+    compressed: &'a [u8],
+    frames: &'a [ZstdFrame],
+    current_frame: usize,
+    start_frame: usize,
+    end_frame: usize,
+    start_skip: usize,
+    end_take: usize,
+
+    decompressor: zstd::bulk::Decompressor<'static>,
+    buf: Vec<u8>,
+    pos: usize,
+    len: usize,
+}
+
+#[cfg(feature = "zstd")]
+impl<'a> ZstdFrameRangeReader<'a> {
+    fn new(
+        compressed: &'a [u8],
+        frames: &'a [ZstdFrame],
+        start_frame: usize,
+        end_frame: usize,
+        start_skip: usize,
+        end_take: usize,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            compressed,
+            frames,
+            current_frame: start_frame,
+            start_frame,
+            end_frame,
+            start_skip,
+            end_take,
+            decompressor: zstd::bulk::Decompressor::new()?,
+            buf: Vec::new(),
+            pos: 0,
+            len: 0,
+        })
+    }
+}
+
+#[cfg(feature = "zstd")]
+impl<'a> Read for ZstdFrameRangeReader<'a> {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        while self.pos >= self.len {
+            if self.current_frame > self.end_frame
+                || (self.current_frame == self.end_frame && self.end_take == 0)
+                || self.current_frame >= self.frames.len()
+            {
+                return Ok(0);
+            }
+            let f = &self.frames[self.current_frame];
+            let frame_bytes = &self.compressed[f.comp_offset..f.comp_offset + f.comp_len];
+
+            // Ignore skippable frames (magic 0x184D2A50..=0x184D2A5F)
+            if frame_bytes.len() >= 4
+                && (frame_bytes[0] & 0xF0) == 0x50
+                && frame_bytes[1] == 0x2A
+                && frame_bytes[2] == 0x4D
+                && frame_bytes[3] == 0x18
+            {
+                self.current_frame += 1;
+                continue;
+            }
+
+            if f.uncomp_len > 0 {
+                self.buf.resize(f.uncomp_len, 0);
+                let n = self
+                    .decompressor
+                    .decompress_to_buffer(frame_bytes, &mut self.buf)?;
+                self.buf.truncate(n);
+            } else {
+                self.buf.clear();
+                let mut decoder = zstd::stream::read::Decoder::new(frame_bytes)?;
+                decoder.read_to_end(&mut self.buf)?;
+            }
+
+            let mut start = 0;
+            let mut end = self.buf.len();
+
+            if self.current_frame == self.start_frame {
+                start = self.start_skip;
+            }
+            if self.current_frame == self.end_frame {
+                end = self.end_take;
+            }
+
+            self.pos = start;
+            self.len = end;
+            self.current_frame += 1;
+        }
+
+        let n = (self.len - self.pos).min(out.len());
+        out[..n].copy_from_slice(&self.buf[self.pos..self.pos + n]);
+        self.pos += n;
+        Ok(n)
+    }
+}
+
+#[cfg(feature = "zstd")]
+fn find_record_start_in_zstd(
+    compressed: &[u8],
+    frames: &[ZstdFrame],
+    mut frame_idx: usize,
+    format: Format,
+) -> (usize, usize) {
+    let mut frame_data = Vec::new();
+    let mut decompressor = match zstd::bulk::Decompressor::new() {
+        Ok(d) => d,
+        Err(_) => return (frames.len(), 0),
+    };
+
+    while frame_idx < frames.len() {
+        let f = &frames[frame_idx];
+        let frame_bytes = &compressed[f.comp_offset..f.comp_offset + f.comp_len];
+
+        let decomp_ok = if f.uncomp_len > 0 {
+            frame_data.resize(f.uncomp_len, 0);
+            if let Ok(n) = decompressor.decompress_to_buffer(frame_bytes, &mut frame_data) {
+                frame_data.truncate(n);
+                true
+            } else {
+                false
+            }
+        } else {
+            frame_data.clear();
+            zstd::stream::read::Decoder::new(frame_bytes)
+                .and_then(|mut r| r.read_to_end(&mut frame_data))
+                .is_ok()
+        };
+
+        if decomp_ok {
+            let cand = find_record_start(&frame_data, 1, format);
+            if cand < frame_data.len() {
+                return (frame_idx, cand);
+            }
+        }
+        frame_idx += 1;
+    }
+    (frames.len(), 0)
+}
+
+#[cfg(feature = "zstd")]
+fn run_zstd_multi_reader<const CONFIG: Config, State, Process, Reduce>(
+    compressed: &[u8],
+    frames: &[ZstdFrame],
+    num_threads: usize,
+    process: Process,
+    reduce: Reduce,
+) -> io::Result<State>
+where
+    State: Send + Default,
+    Process: Fn(FastxParser<'_, CONFIG>) -> State + Sync,
+    Reduce: Fn(State, State) -> State + Sync,
+{
+    let format = {
+        let f0 = &frames[0];
+        let frame_bytes = &compressed[f0.comp_offset..f0.comp_offset + f0.comp_len];
+        let mut header = [0u8; 64];
+        let n = zstd::stream::read::Decoder::new(frame_bytes)
+            .and_then(|mut r| r.read(&mut header))
+            .unwrap_or(0);
+        let first_byte = if n > 0 { header[0] } else { 0 };
+        Format::try_from_byte(first_byte)?
+    };
+
+    let num_threads = num_threads.max(1).min(frames.len());
+    let process = &process;
+    let reduce = &reduce;
+    let frames_ref = frames;
+
+    let split_points: Vec<std::sync::OnceLock<(usize, usize)>> = (0..=num_threads)
+        .map(|_| std::sync::OnceLock::new())
+        .collect();
+    split_points[0].set((0, 0)).unwrap();
+    split_points[num_threads]
+        .set((frames_ref.len(), 0))
+        .unwrap();
+    let splits_ref = &split_points;
+
+    let get_split = |idx: usize| -> (usize, usize) {
+        *splits_ref[idx].get_or_init(|| {
+            let target_frame = idx * frames_ref.len() / num_threads;
+            find_record_start_in_zstd(compressed, frames_ref, target_frame, format)
+        })
+    };
+
+    let results = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..num_threads)
+            .map(|i| {
+                s.spawn(move || -> io::Result<State> {
+                    let (start_frame, start_skip) = get_split(i);
+                    let (end_frame, end_take) = get_split(i + 1);
+
+                    if start_frame >= frames_ref.len()
+                        || (start_frame == end_frame && start_skip >= end_take)
+                    {
+                        return Ok(State::default());
+                    }
+                    let reader = ZstdFrameRangeReader::new(
+                        compressed,
+                        frames_ref,
+                        start_frame,
+                        end_frame,
+                        start_skip,
+                        end_take,
+                    )?;
                     let parser = FastxParser::<CONFIG>::from_reader(reader)?;
                     Ok(process(parser))
                 })

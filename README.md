@@ -16,12 +16,11 @@ This library requires AVX2, SSE3 or NEON instruction sets, make sure to enable `
 RUSTFLAGS="-C target-cpu=native" cargo run --release
 ```
 
-Note: if your CPU has a bad support for the [PDEP instruction](https://en.wikipedia.org/wiki/X86_Bit_manipulation_instruction_set#Parallel_bit_deposit_and_extract) (e.g. AMD CPUs prior to 2020), it is recommended to use the `no-pdep` [feature](#crate-features):
-``` sh
-RUSTFLAGS="-C target-cpu=native" cargo run --release -F no-pdep
-```
+Note: if your CPU has a bad support for the [PDEP instruction](https://en.wikipedia.org/wiki/X86_Bit_manipulation_instruction_set#Parallel_bit_deposit_and_extract) (e.g. AMD CPUs prior to 2020), it is recommended to use the `no-pdep` [feature](#crate-features).
 
 ## Usage
+
+If you're used to `needletail` or `paraseq`, a [migration guide](MIGRATION.md) is available.
 
 ### Minimal example
 
@@ -71,11 +70,11 @@ const CONFIG: Config = ParserOptions::default()
 
 ### Bitpacked DNA formats
 
-The parser can output a bitpacked representation of the sequence in two different formats:
-- `PackedDNA` which maps each base to two bits and packs them (compatible with [packed-seq](https://github.com/rust-seq/packed-seq) using the corresponding [feature](#crate-features)).
-- `ColumnarDNA` which separates the high bit and the low bit of each base, and store them in two bitmasks.
+The parser can output a bitpacked representation of the sequence in two formats:
+- `PackedDNA` maps each base to two bits and packs them (compatible with [packed-seq](https://github.com/rust-seq/packed-seq) via the `packed-seq` [feature](#crate-features)).
+- `ColumnarDNA` separates the high bit and the low bit of each base into two bitmasks.
 
-Since each base is encoded using two bits, we have to handle non-ACTG bases differently.
+Since 2-bit encoding only represents four bases, non-ACTG characters are handled explicitly.
 Three options are available via `ParserOptions`:
 - `split_non_actg` splits the sequence at non-ACTG bases, yielding one `DnaChunk` event per contiguous ACTG run (default for bitpacked formats), and disables `Record` events by default to avoid processing each sequence twice.
 - `skip_non_actg` skips non-ACTG bases and merges the remaining chunks, yielding one `Record` event per record.
@@ -123,28 +122,11 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-When only one type of event is active (such as the default configuration yielding `Event::Record`), the event value can be safely ignored:
-
-```rust
-use helicase::input::*;
-use helicase::*;
-
-// Default config: only Record events, one per record.
-const CONFIG: Config = ParserOptions::default().config();
-
-fn main() -> std::io::Result<()> {
-    let path = "...";
-    let mut parser = FastxParser::<CONFIG>::from_file(&path)?;
-
-    while let Some(_event) = parser.next() {
-        let header = parser.get_header();
-        let seq = parser.get_dna_string();
-    }
-    Ok(())
-}
-```
+When only one type of event is active (such as the default configuration yielding `Event::Record`), matching is unnecessary and the event value can simply be ignored (`while let Some(_event) = parser.next()`).
 
 ### Iterating over chunks of packed DNA
+
+To parse sequences into contiguous 2-bit chunks:
 
 ```rust
 use helicase::input::*;
@@ -179,7 +161,7 @@ fn main() -> std::io::Result<()> {
 For multi-threaded processing, `ParallelFastxParser` can parse files in parallel across worker threads.
 Like `FastxParser`, it can be created using `from_file` or `from_file_mmap` (see [Input](#input)).
 
-You drive the parsing loop directly on each thread with `for_each` or `reduce`:
+Process records across threads with `for_each`:
 
 ```rust
 use helicase::config::*;
@@ -190,7 +172,6 @@ const CONFIG: Config = ParserOptions::default().ignore_headers().config();
 fn main() -> std::io::Result<()> {
     let path = "...";
 
-    // Process records in parallel across 8 threads using for_each
     ParallelFastxParser::<CONFIG>::from_file(&path)?
         .threads(8)
         .for_each(|mut parser| {
@@ -201,31 +182,33 @@ fn main() -> std::io::Result<()> {
             }
         })?;
 
-    // Sum total sequence length across 8 threads using reduce
-    let total_len: usize = ParallelFastxParser::<CONFIG>::from_file(&path)?
-        .threads(8)
-        .reduce(
-            |mut parser| {
-                let mut local_len = 0;
-                while let Some(_event) = parser.next() {
-                    local_len += parser.get_dna_string().len();
-                }
-                local_len
-            },
-            |acc, val| acc + val,
-        )?;
-
     Ok(())
 }
 ```
 
+Or aggregate results across threads with `reduce`:
+
+```rust
+let total_len: usize = ParallelFastxParser::<CONFIG>::from_file(&path)?
+    .threads(8)
+    .reduce(
+        |mut parser| {
+            let mut local_len = 0;
+            while let Some(_event) = parser.next() {
+                local_len += parser.get_dna_string().len();
+            }
+            local_len
+        },
+        |acc, val| acc + val,
+    )?;
+```
+
 ## Crate features
 
-### Packed-seq
+### Packed-seq (`packed-seq`)
 
-The [PackedDNA format](#bitpacked-dna-formats) is compatible with [packed-seq](https://github.com/rust-seq/packed-seq) and can be converted when the `packed-seq` feature is enabled (disabled by default).
-
-This can be useful for [hashing *k*-mers](https://github.com/rust-seq/seq-hash) or [computing minimizers & syncmers](https://github.com/rust-seq/simd-minimizers).
+Enables conversion from [`PackedDNA`](#bitpacked-dna-formats) to `PackedSeq` from the [packed-seq](https://github.com/rust-seq/packed-seq) crate (disabled by default).
+This is useful for [hashing *k*-mers](https://github.com/rust-seq/seq-hash) or [computing minimizers and syncmers](https://github.com/rust-seq/simd-minimizers).
 
 ### Decompression
 
@@ -235,11 +218,19 @@ This library supports transparent file decompression using [deko](https://github
 - `bz2` for bzip2
 - `xz` for xz
 
-### No PDEP
+### No PDEP (`no-pdep`)
 
 By default, this library uses [PDEP](https://en.wikipedia.org/wiki/X86_Bit_manipulation_instruction_set#Parallel_bit_deposit_and_extract) to compute the [PackedDNA format](#bitpacked-dna-formats).
 However, this instruction can be slow on some older CPUs (especially AMD CPUs prior to 2020).
 If you want an efficient implementation for these CPUs, we recommend using the `no-pdep` feature.
+
+### Compatibility (`needletail`, `paraseq`)
+
+Helicase provides optional features to ease migration from existing libraries:
+- `needletail`: provides drop-in method aliases (`id`, `seq`, `raw_seq`, `qual`, `num_bases`) on `HelicaseParser` and constructors like `parse_fastx_file`.
+- `paraseq`: implements `paraseq::Record` for zero-copy record access and provides `process_parallel` to run existing `ParallelProcessor` implementations directly.
+
+See the [migration guide](MIGRATION.md) for details.
 
 ## Benchmarks
 

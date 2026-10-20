@@ -2,22 +2,19 @@
 //!
 //! # Requirements
 //!
-//! This library requires AVX2, SSE3, or NEON instruction sets. Enable `target-cpu=native` when
-//! building:
+//! This library requires AVX2, SSE3 or NEON instruction sets, make sure to enable `target-cpu=native` when using it:
 //!
 //! ```sh
 //! RUSTFLAGS="-C target-cpu=native" cargo run --release
 //! ```
 //!
-//! If your CPU has poor support for the
-//! [PDEP instruction](https://en.wikipedia.org/wiki/X86_Bit_manipulation_instruction_set#Parallel_bit_deposit_and_extract)
-//! (e.g. AMD CPUs prior to 2020), use the `no-pdep` feature:
+//! Note: if your CPU has a bad support for the [PDEP instruction](https://en.wikipedia.org/wiki/X86_Bit_manipulation_instruction_set#Parallel_bit_deposit_and_extract) (e.g. AMD CPUs prior to 2020), it is recommended to use the `no-pdep` [feature](#crate-features).
 //!
-//! ```sh
-//! RUSTFLAGS="-C target-cpu=native" cargo run --release -F no-pdep
-//! ```
+//! # Usage
 //!
-//! # Minimal example
+//! If you're used to `needletail` or `paraseq`, a [migration guide](https://github.com/imartayan/helicase/blob/main/MIGRATION.md) is available.
+//!
+//! ## Minimal example
 //!
 //! The main entry point is to define a configuration via [`ParserOptions`]
 //! and build a [`FastxParser`]/[`ParallelFastxParser`] with this configuration.
@@ -47,12 +44,12 @@
 //!     }
 //! }
 //! ```
-//! # Input
+//! ## Input
 //!
 //! Files are opened with [`from_file`](input::FromFile::from_file) (which supports [transparent decompression](#crate-features)) or [`from_file_mmap`](input::FromMmap::from_file_mmap) (which only supports uncompressed data but can be faster).
 //! In-memory slices ([`from_slice`](input::FromSlice::from_slice)) and generic streams ([`from_reader`](input::FromReader::from_reader)) are also supported.
 //!
-//! # Adjusting the configuration
+//! ## Adjusting the configuration
 //!
 //! The parser is configured at compile-time via [`ParserOptions`].
 //! For example, to ignore headers and split non-ACTG bases:
@@ -66,15 +63,15 @@
 //!     .config();
 //! ```
 //!
-//! # Bitpacked DNA formats
+//! ## Bitpacked DNA formats
 //!
 //! The parser can output a bitpacked representation of the sequence in two formats:
 //! - [`PackedDNA`](dna_format::PackedDNA) maps each base to two bits and packs them
-//!   (compatible with [packed-seq](https://github.com/rust-seq/packed-seq) via the `packed-seq` feature).
+//!   (compatible with [packed-seq](https://github.com/rust-seq/packed-seq) via the `packed-seq` [feature](#crate-features)).
 //! - [`ColumnarDNA`](dna_format::ColumnarDNA) separates the high bit and the low bit of each base into two bitmasks.
 //!
-//! Since each base is encoded in two bits, non-ACTG bases must be handled explicitly. Three
-//! options are available via [`ParserOptions`]:
+//! Since 2-bit encoding only represents four bases, non-ACTG characters are handled explicitly.
+//! Three options are available via [`ParserOptions`]:
 //! - [`split_non_actg`](ParserOptions::split_non_actg) splits the sequence at non-ACTG bases,
 //!   yielding one [`DnaChunk`](parser::Event::DnaChunk) event per contiguous ACTG run (default for bitpacked formats),
 //!   and disables `Record` events by default to avoid processing each sequence twice.
@@ -83,7 +80,7 @@
 //! - [`keep_non_actg`](ParserOptions::keep_non_actg) keeps non-ACTG bases and encodes them lossily,
 //!   yielding one [`Record`](parser::Event::Record) event per record (default for string format).
 //!
-//! # Events
+//! ## Events
 //!
 //! The parser is an iterator that yields [`Event`](parser::Event) values.
 //! An event signals a record boundary, a contiguous DNA chunk, or an I/O error:
@@ -113,7 +110,7 @@
 //!                 let seq = parser.get_dna_packed();
 //!             }
 //!             Event::Record(range) => {
-//!                 // Record boundary reached (all chunks of this record processed)
+//!                 // all chunks of this record have been processed
 //!                 let header = parser.get_header();
 //!             }
 //!             Event::IoError(err) => {
@@ -125,28 +122,12 @@
 //! }
 //! ```
 //!
-//! When only one type of event is active (such as the default configuration yielding `Event::Record`), the event value can be safely ignored:
+//! When only one type of event is active (such as the default configuration yielding `Event::Record`),
+//! matching is unnecessary and the event value can simply be ignored (`while let Some(_event) = parser.next()`).
 //!
-//! ```rust,no_run
-//! use helicase::input::*;
-//! use helicase::*;
+//! ## Iterating over chunks of packed DNA
 //!
-//! // Default config: only Record events, one per record.
-//! const CONFIG: Config = ParserOptions::default().config();
-//!
-//! fn main() -> std::io::Result<()> {
-//!     let path = "...";
-//!     let mut parser = FastxParser::<CONFIG>::from_file(&path)?;
-//!
-//!     while let Some(_event) = parser.next() {
-//!         let header = parser.get_header();
-//!         let seq = parser.get_dna_string();
-//!     }
-//!     Ok(())
-//! }
-//! ```
-//!
-//! # Iterating over chunks of packed DNA
+//! To parse sequences into contiguous 2-bit chunks:
 //!
 //! ```rust,no_run
 //! use helicase::input::*;
@@ -165,6 +146,8 @@
 //!     while let Some(_event) = parser.next() {
 //!         // headers are still accessible between chunks
 //!         let header = parser.get_header();
+//!
+//!         // get a reference to the packed sequence
 //!         let seq = parser.get_dna_packed();
 //!
 //!         // or directly get a PackedSeq (requires the packed-seq feature)
@@ -174,12 +157,12 @@
 //! }
 //! ```
 //!
-//! # Parallel parsing
+//! ## Parallel parsing
 //!
 //! For multi-threaded processing, [`ParallelFastxParser`] can parse files in parallel across worker threads.
 //! Like [`FastxParser`], it can be created using [`from_file`](ParallelFastxParser::from_file) or [`from_file_mmap`](ParallelFastxParser::from_file_mmap) (see [Input](#input)).
 //!
-//! You drive the parsing loop directly on each thread with [`for_each`](ParallelFastxParser::for_each) or [`reduce`](ParallelFastxParser::reduce):
+//! Process records across threads with [`for_each`](ParallelFastxParser::for_each):
 //!
 //! ```rust,no_run
 //! use helicase::config::*;
@@ -190,7 +173,6 @@
 //! fn main() -> std::io::Result<()> {
 //!     let path = "...";
 //!
-//!     // Process records in parallel across 8 threads using for_each
 //!     ParallelFastxParser::<CONFIG>::from_file(&path)?
 //!         .threads(8)
 //!         .for_each(|mut parser| {
@@ -201,33 +183,42 @@
 //!             }
 //!         })?;
 //!
-//!     // Sum total sequence length across 8 threads using reduce
-//!     let total_len: usize = ParallelFastxParser::<CONFIG>::from_file(&path)?
-//!         .threads(8)
-//!         .reduce(
-//!             |mut parser| {
-//!                 let mut local_len = 0;
-//!                 while let Some(_event) = parser.next() {
-//!                     local_len += parser.get_dna_string().len();
-//!                 }
-//!                 local_len
-//!             },
-//!             |acc, val| acc + val,
-//!         )?;
-//!
 //!     Ok(())
 //! }
 //! ```
 //!
+//! Or aggregate results across threads with [`reduce`](ParallelFastxParser::reduce):
+//!
+//! ```rust,no_run
+//! # use helicase::config::*;
+//! # use helicase::*;
+//! # const CONFIG: Config = ParserOptions::default().ignore_headers().config();
+//! # fn main() -> std::io::Result<()> {
+//! # let path = "...";
+//! let total_len: usize = ParallelFastxParser::<CONFIG>::from_file(&path)?
+//!     .threads(8)
+//!     .reduce(
+//!         |mut parser| {
+//!             let mut local_len = 0;
+//!             while let Some(_event) = parser.next() {
+//!                 local_len += parser.get_dna_string().len();
+//!             }
+//!             local_len
+//!         },
+//!         |acc, val| acc + val,
+//!     )?;
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # Crate features
 //!
-//! ### Packed-seq
+//! ## Packed-seq (`packed-seq`)
 //!
-//! The [PackedDNA format](#bitpacked-dna-formats) is compatible with [packed-seq](https://github.com/rust-seq/packed-seq) and can be converted when the `packed-seq` feature is enabled (disabled by default).
+//! Enables conversion from [`PackedDNA`](dna_format::PackedDNA) to `PackedSeq` from the [packed-seq](https://github.com/rust-seq/packed-seq) crate (disabled by default).
+//! This is useful for [hashing *k*-mers](https://github.com/rust-seq/seq-hash) or [computing minimizers and syncmers](https://github.com/rust-seq/simd-minimizers).
 //!
-//! This can be useful for [hashing *k*-mers](https://github.com/rust-seq/seq-hash) or [computing minimizers & syncmers](https://github.com/rust-seq/simd-minimizers).
-//!
-//! ### Decompression
+//! ## Decompression
 //!
 //! This library supports transparent file decompression using [deko](https://github.com/igankevich/deko), you can choose the supported formats using the following features:
 //! - `gz` for gzip (default)
@@ -235,11 +226,19 @@
 //! - `bz2` for bzip2
 //! - `xz` for xz
 //!
-//! ### No PDEP
+//! ## No PDEP (`no-pdep`)
 //!
 //! By default, this library uses [PDEP](https://en.wikipedia.org/wiki/X86_Bit_manipulation_instruction_set#Parallel_bit_deposit_and_extract) to compute the [PackedDNA format](#bitpacked-dna-formats).
 //! However, this instruction can be slow on some older CPUs (especially AMD CPUs prior to 2020).
 //! If you want an efficient implementation for these CPUs, we recommend using the `no-pdep` feature.
+//!
+//! ## Compatibility (`needletail`, `paraseq`)
+//!
+//! Helicase provides optional features to ease migration from existing libraries:
+//! - `needletail`: provides drop-in method aliases (`id`, `seq`, `raw_seq`, `qual`, `num_bases`) on [`HelicaseParser`] and constructors like `parse_fastx_file`.
+//! - `paraseq`: implements [`paraseq::Record`](https://docs.rs/paraseq/latest/paraseq/trait.Record.html) for zero-copy record access and provides [`process_parallel`](ParallelFastxParser::process_parallel) to run existing `ParallelProcessor` implementations directly.
+//!
+//! See the [migration guide](https://github.com/imartayan/helicase/blob/main/MIGRATION.md) for details.
 
 extern crate alloc;
 

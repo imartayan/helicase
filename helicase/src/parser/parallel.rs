@@ -497,50 +497,7 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FileKind {
-    Uncompressed,
-    Gzip,
-    Zstd,
-    OtherCompressed,
-}
-
-fn detect_file_kind(path: &Path) -> io::Result<FileKind> {
-    let mut file = File::open(path)?;
-    let mut magic = [0u8; 4];
-    let n = file.read(&mut magic)?;
-    if n == 0 {
-        return Ok(FileKind::Uncompressed);
-    }
-    if n >= 2 && magic[0] == 0x1f && magic[1] == 0x8b {
-        return Ok(FileKind::Gzip);
-    }
-    // Zstandard: 0xFD2FB528 (little-endian: 0x28, 0xb5, 0x2f, 0xfd) or skippable frame (0x184D2A50..0x184D2A5F)
-    if n >= 4
-        && (magic == [0x28, 0xb5, 0x2f, 0xfd]
-            || (magic[3] == 0x18
-                && magic[2] == 0x4d
-                && magic[1] == 0x2a
-                && (magic[0] & 0xf0) == 0x50))
-    {
-        return Ok(FileKind::Zstd);
-    }
-    // Check file extension as fallback for Zstandard
-    if let Some(ext) = path.extension().and_then(|e| e.to_str())
-        && (ext.eq_ignore_ascii_case("zst") || ext.eq_ignore_ascii_case("zstd"))
-    {
-        return Ok(FileKind::Zstd);
-    }
-    // Bzip2: 'B', 'Z'
-    if n >= 2 && magic[0] == b'B' && magic[1] == b'Z' {
-        return Ok(FileKind::OtherCompressed);
-    }
-    // Xz: 0xFD, '7', 'z', 'X', 'Z', 0x00
-    if n >= 3 && magic[0] == 0xfd && magic[1] == b'7' && magic[2] == b'z' {
-        return Ok(FileKind::OtherCompressed);
-    }
-    Ok(FileKind::Uncompressed)
-}
+use crate::input::CompressionFormat;
 
 fn run_multi_reader<const CONFIG: Config, State, Process, Reduce>(
     path: &Path,
@@ -555,8 +512,8 @@ where
     Reduce: Fn(State, State) -> State + Sync,
 {
     let num_threads = num_threads.max(1);
-    match detect_file_kind(path)? {
-        FileKind::Uncompressed => {
+    match CompressionFormat::from_path(path)? {
+        None => {
             let mut file = File::open(path)?;
             let file_len = file.metadata()?.len();
             if file_len == 0 {
@@ -649,12 +606,12 @@ where
             }
             Ok(total.unwrap_or_default())
         }
-        FileKind::Gzip => {
+        Some(CompressionFormat::Bgzf) => {
             #[cfg(feature = "sirocco")]
             {
-                let file = File::open(path)?;
-                let mmap = unsafe { memmap2::Mmap::map(&file)? };
-                if is_bgzf_slice(&mmap) {
+                if num_threads > 1 {
+                    let file = File::open(path)?;
+                    let mmap = unsafe { memmap2::Mmap::map(&file)? };
                     return run_bgzf_multi_reader_sirocco::<CONFIG, State, _, _>(
                         &mmap,
                         num_threads,
@@ -662,11 +619,7 @@ where
                         reduce,
                     );
                 }
-                let reader = sirocco::inflate::Reader::new(
-                    sirocco::Format::Gzip,
-                    std::io::BufReader::new(file),
-                );
-                let parser = FastxParser::<CONFIG>::from_reader(reader)?;
+                let parser = FastxParser::<CONFIG>::from_file(path)?;
                 Ok(process(parser))
             }
             #[cfg(not(feature = "sirocco"))]
@@ -676,7 +629,7 @@ where
                 Ok(process(parser))
             }
         }
-        FileKind::Zstd => {
+        Some(CompressionFormat::Pzstd) => {
             #[cfg(feature = "zstd")]
             {
                 let file = File::open(path)?;
@@ -701,26 +654,16 @@ where
                 Ok(process(parser))
             }
         }
-        FileKind::OtherCompressed => {
-            let file = File::open(path)?;
-            let parser = FastxParser::<CONFIG>::from_reader(file)?;
+        Some(
+            CompressionFormat::Gzip
+            | CompressionFormat::Zstd
+            | CompressionFormat::Bzip2
+            | CompressionFormat::Xz,
+        ) => {
+            let parser = FastxParser::<CONFIG>::from_file(path)?;
             Ok(process(parser))
         }
     }
-}
-
-#[cfg(feature = "sirocco")]
-#[inline]
-pub(crate) fn is_bgzf_slice(bytes: &[u8]) -> bool {
-    bytes.len() >= 18
-        && bytes[0] == 0x1f
-        && bytes[1] == 0x8b
-        && bytes[2] == 0x08
-        && (bytes[3] & 0x04) != 0 // FLG.FEXTRA
-        && bytes[12] == b'B'
-        && bytes[13] == b'C'
-        && bytes[14] == 0x02
-        && bytes[15] == 0x00
 }
 
 #[cfg(feature = "sirocco")]
@@ -967,14 +910,14 @@ where
 
 #[cfg(feature = "zstd")]
 #[derive(Clone, Copy)]
-struct ZstdFrame {
-    comp_offset: usize,
-    comp_len: usize,
-    uncomp_len: usize,
+pub(crate) struct ZstdFrame {
+    pub(crate) comp_offset: usize,
+    pub(crate) comp_len: usize,
+    pub(crate) uncomp_len: usize,
 }
 
 #[cfg(feature = "zstd")]
-fn index_zstd_frames(compressed: &[u8]) -> Vec<ZstdFrame> {
+pub(crate) fn index_zstd_frames(compressed: &[u8]) -> Vec<ZstdFrame> {
     let mut frames = Vec::with_capacity(compressed.len() / (1024 * 1024) + 1);
     let mut comp_offset = 0;
 

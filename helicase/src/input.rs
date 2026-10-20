@@ -11,6 +11,146 @@ use std::path::Path;
 const BUFFER_DEFAULT_SIZE: usize = 1 << 17;
 const BUFFER_DOUBLE_UNTIL: usize = 1 << 24;
 
+/// Supported compression formats for FASTX files and streams.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CompressionFormat {
+    /// Standard single-member Gzip stream (.gz)
+    Gzip,
+    /// Blocked GNU Zip Format (.bgz, .bgzf)
+    Bgzf,
+    /// Standard single-frame Zstandard stream (.zst)
+    Zstd,
+    /// Parallel / multi-frame Zstandard stream (.zst, pzstd)
+    Pzstd,
+    /// Bzip2 stream (.bz2)
+    Bzip2,
+    /// XZ stream (.xz)
+    Xz,
+}
+
+impl CompressionFormat {
+    /// Returns `true` if this compression format consists of independent parallel chunks/blocks (BGZF or PZSTD).
+    #[inline]
+    pub const fn is_parallel(&self) -> bool {
+        matches!(self, Self::Bgzf | Self::Pzstd)
+    }
+
+    /// Returns the canonical name of the compression format.
+    #[inline]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Gzip => "gzip",
+            Self::Bgzf => "bgzf",
+            Self::Zstd => "zstd",
+            Self::Pzstd => "pzstd",
+            Self::Bzip2 => "bzip2",
+            Self::Xz => "xz",
+        }
+    }
+
+    /// Returns the standard file extension for this format.
+    #[inline]
+    pub const fn extension(&self) -> &'static str {
+        match self {
+            Self::Gzip => "gz",
+            Self::Bgzf => "bgz",
+            Self::Zstd | Self::Pzstd => "zst",
+            Self::Bzip2 => "bz2",
+            Self::Xz => "xz",
+        }
+    }
+
+    /// Detects compression format from the initial magic bytes of a buffer/stream.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b {
+            if bytes.len() >= 18
+                && bytes[2] == 0x08
+                && (bytes[3] & 0x04) != 0
+                && bytes[12] == b'B'
+                && bytes[13] == b'C'
+                && bytes[14] == 0x02
+                && bytes[15] == 0x00
+            {
+                return Some(Self::Bgzf);
+            }
+            return Some(Self::Gzip);
+        }
+
+        // Zstandard: skippable frame used by pzstd (0x184D2A50..0x184D2A5F)
+        if bytes.len() >= 4
+            && bytes[3] == 0x18
+            && bytes[2] == 0x4d
+            && bytes[1] == 0x2a
+            && (bytes[0] & 0xf0) == 0x50
+        {
+            return Some(Self::Pzstd);
+        }
+
+        // Standard Zstandard frame: 0xFD2FB528 (little-endian: 0x28, 0xb5, 0x2f, 0xfd)
+        if bytes.len() >= 4 && bytes[..4] == [0x28, 0xb5, 0x2f, 0xfd] {
+            return Some(Self::Zstd);
+        }
+
+        // Bzip2: 'B', 'Z'
+        if bytes.len() >= 2 && bytes[0] == b'B' && bytes[1] == b'Z' {
+            return Some(Self::Bzip2);
+        }
+
+        // XZ: 0xFD, '7', 'z', 'X', 'Z', 0x00
+        if bytes.len() >= 3 && bytes[0] == 0xfd && bytes[1] == b'7' && bytes[2] == b'z' {
+            return Some(Self::Xz);
+        }
+
+        None
+    }
+
+    /// Detects compression format from a file path by peeking magic bytes and checking file extension.
+    pub fn from_path(path: impl AsRef<Path>) -> io::Result<Option<Self>> {
+        let path = path.as_ref();
+        let file = File::open(path)?;
+        let mut buf = [0u8; 64];
+        let n = (&file).read(&mut buf)?;
+        if n > 0 {
+            let format = Self::from_bytes(&buf[..n]);
+            if let Some(Self::Zstd) = format {
+                #[cfg(feature = "zstd")]
+                {
+                    if let Ok(mmap) = unsafe { Mmap::map(&file) } {
+                        let frames = crate::parser::index_zstd_frames(&mmap);
+                        if frames.len() > 1 {
+                            return Ok(Some(Self::Pzstd));
+                        }
+                    }
+                }
+                return Ok(Some(Self::Zstd));
+            }
+            if format.is_some() {
+                return Ok(format);
+            }
+        }
+
+        // Fallback: check file extension
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            match ext.to_ascii_lowercase().as_str() {
+                "bgz" | "bgzf" => return Ok(Some(Self::Bgzf)),
+                "gz" | "gzip" => return Ok(Some(Self::Gzip)),
+                "zst" | "zstd" => return Ok(Some(Self::Zstd)),
+                "bz2" => return Ok(Some(Self::Bzip2)),
+                "xz" => return Ok(Some(Self::Xz)),
+                _ => {}
+            }
+        }
+
+        Ok(None)
+    }
+}
+
+impl core::fmt::Display for CompressionFormat {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 pub trait InputData<'a>: Iterator<Item = io::Result<&'a [u8]>> {
     const RANDOM_ACCESS: bool;
 
@@ -24,7 +164,7 @@ pub trait InputData<'a>: Iterator<Item = io::Result<&'a [u8]>> {
 
     /// Returns the type of compression format detected, `None` if uncompressed.
     #[inline(always)]
-    fn compression_format(&mut self) -> io::Result<Option<deko::Format>> {
+    fn compression_format(&mut self) -> io::Result<Option<CompressionFormat>> {
         Ok(None)
     }
 
@@ -171,6 +311,11 @@ impl<'a> InputData<'a> for SliceInput<'a> {
     }
 
     #[inline(always)]
+    fn compression_format(&mut self) -> io::Result<Option<CompressionFormat>> {
+        Ok(CompressionFormat::from_bytes(self.data))
+    }
+
+    #[inline(always)]
     fn seek_block(&mut self, block_idx: usize) {
         self.pos = (block_idx + 1) * 64;
     }
@@ -232,7 +377,7 @@ impl<'a> InputData<'a> for MmapInput<'a> {
     }
 
     #[inline(always)]
-    fn compression_format(&mut self) -> io::Result<Option<deko::Format>> {
+    fn compression_format(&mut self) -> io::Result<Option<CompressionFormat>> {
         self.slice.compression_format()
     }
 
@@ -434,6 +579,7 @@ pub struct ReaderInput<'a, R: Read + Send + 'a> {
     decoder: ReaderDecoder<R>,
     pending_err: Option<io::Error>,
     errored: bool,
+    compression: Option<CompressionFormat>,
     _phantom: PhantomData<&'a ()>,
 }
 
@@ -455,44 +601,30 @@ impl<'a, R: Read + Send + 'a> ReaderInput<'a, R> {
 
     pub fn new(reader: R) -> io::Result<Self> {
         let mut buf_reader = BufReader::with_capacity(64 * 1024, reader);
-        let peek = buf_reader.fill_buf()?;
-        let is_gz = peek.len() >= 2 && peek[0] == 0x1F && peek[1] == 0x8B;
-        #[cfg(feature = "zstd")]
-        let is_zstd = peek.len() >= 4
-            && (peek[..4] == [0x28, 0xb5, 0x2f, 0xfd]
-                || (peek[3] == 0x18
-                    && peek[2] == 0x4d
-                    && peek[1] == 0x2a
-                    && (peek[0] & 0xf0) == 0x50));
+        let compression = {
+            let peek = buf_reader.fill_buf()?;
+            CompressionFormat::from_bytes(peek)
+        };
 
         #[cfg(feature = "sirocco")]
-        let decoder = if is_gz {
-            ReaderDecoder::Sirocco(Box::new(SiroccoMultiGzReader::new(buf_reader)))
-        } else {
-            #[cfg(feature = "zstd")]
-            if is_zstd {
-                ReaderDecoder::Zstd(Box::new(zstd::stream::read::Decoder::with_buffer(
-                    buf_reader,
-                )?))
-            } else {
-                ReaderDecoder::Deko(Box::new(AnyDecoder::new(buf_reader)))
+        let decoder = match compression {
+            Some(CompressionFormat::Gzip | CompressionFormat::Bgzf) => {
+                ReaderDecoder::Sirocco(Box::new(SiroccoMultiGzReader::new(buf_reader)))
             }
-            #[cfg(not(feature = "zstd"))]
-            ReaderDecoder::Deko(Box::new(AnyDecoder::new(buf_reader)))
+            #[cfg(feature = "zstd")]
+            Some(CompressionFormat::Zstd | CompressionFormat::Pzstd) => ReaderDecoder::Zstd(
+                Box::new(zstd::stream::read::Decoder::with_buffer(buf_reader)?),
+            ),
+            _ => ReaderDecoder::Deko(Box::new(AnyDecoder::new(buf_reader))),
         };
 
         #[cfg(not(feature = "sirocco"))]
-        let decoder = {
+        let decoder = match compression {
             #[cfg(feature = "zstd")]
-            if is_zstd {
-                ReaderDecoder::Zstd(Box::new(zstd::stream::read::Decoder::with_buffer(
-                    buf_reader,
-                )?))
-            } else {
-                ReaderDecoder::Deko(Box::new(AnyDecoder::new(buf_reader)))
-            }
-            #[cfg(not(feature = "zstd"))]
-            ReaderDecoder::Deko(Box::new(AnyDecoder::new(buf_reader)))
+            Some(CompressionFormat::Zstd | CompressionFormat::Pzstd) => ReaderDecoder::Zstd(
+                Box::new(zstd::stream::read::Decoder::with_buffer(buf_reader)?),
+            ),
+            _ => ReaderDecoder::Deko(Box::new(AnyDecoder::new(buf_reader))),
         };
 
         let mut s = Self {
@@ -504,6 +636,7 @@ impl<'a, R: Read + Send + 'a> ReaderInput<'a, R> {
             decoder,
             pending_err: None,
             errored: false,
+            compression,
             _phantom: PhantomData,
         };
         s.fill_buffer();
@@ -591,39 +724,29 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
     }
 
     #[inline(always)]
-    fn compression_format(&mut self) -> io::Result<Option<deko::Format>> {
-        match &mut self.decoder {
-            #[cfg(feature = "sirocco")]
-            ReaderDecoder::Sirocco(_) => {
-                // In deko 0.6, deko::Format::Gz is only defined under deko's flate2 feature.
-                // Sirocco handles decompression directly; is_compressed() returns true.
-                Ok(None)
-            }
-            #[cfg(feature = "zstd")]
-            ReaderDecoder::Zstd(_) => Ok(Some(deko::Format::Zstd)),
-            ReaderDecoder::Deko(decoder) => {
-                let format = decoder.kind()?;
-                if format == deko::Format::Verbatim {
-                    Ok(None)
-                } else {
-                    Ok(Some(format))
-                }
-            }
+    fn compression_format(&mut self) -> io::Result<Option<CompressionFormat>> {
+        if self.compression.is_some() {
+            return Ok(self.compression);
         }
+        if let ReaderDecoder::Deko(decoder) = &mut self.decoder {
+            let format = decoder.kind()?;
+            let mapped = match format {
+                deko::Format::Verbatim => None,
+                #[cfg(feature = "bz2")]
+                deko::Format::Bz => Some(CompressionFormat::Bzip2),
+                #[cfg(feature = "xz")]
+                deko::Format::Xz => Some(CompressionFormat::Xz),
+                _ => None,
+            };
+            self.compression = mapped;
+            return Ok(mapped);
+        }
+        Ok(None)
     }
 
     #[inline(always)]
     fn is_compressed(&mut self) -> io::Result<bool> {
-        match &mut self.decoder {
-            #[cfg(feature = "sirocco")]
-            ReaderDecoder::Sirocco(_) => Ok(true),
-            #[cfg(feature = "zstd")]
-            ReaderDecoder::Zstd(_) => Ok(true),
-            ReaderDecoder::Deko(decoder) => {
-                let format = decoder.kind()?;
-                Ok(format != deko::Format::Verbatim)
-            }
-        }
+        Ok(self.compression_format()?.is_some())
     }
 
     #[inline(always)]
@@ -703,3 +826,84 @@ pub trait FromFile: FromInputData<'static, FileInput> {
 }
 
 impl<F: FromInputData<'static, FileInput>> FromFile for F {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compression_format_detection_from_bytes() {
+        // Uncompressed FASTA
+        assert_eq!(CompressionFormat::from_bytes(b">seq1\nACGT\n"), None);
+        // Uncompressed FASTQ
+        assert_eq!(
+            CompressionFormat::from_bytes(b"@read1\nACGT\n+\nIIII\n"),
+            None
+        );
+
+        // Standard Gzip
+        let gz_bytes = [0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff];
+        assert_eq!(
+            CompressionFormat::from_bytes(&gz_bytes),
+            Some(CompressionFormat::Gzip)
+        );
+
+        // BGZF Gzip with BC extra subfield
+        let bgz_bytes = [
+            0x1f, 0x8b, 0x08, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x06, 0x00, b'B', b'C',
+            0x02, 0x00, 0xe2, 0x3d,
+        ];
+        assert_eq!(
+            CompressionFormat::from_bytes(&bgz_bytes),
+            Some(CompressionFormat::Bgzf)
+        );
+
+        // Standard Zstd
+        let zstd_bytes = [0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x00];
+        assert_eq!(
+            CompressionFormat::from_bytes(&zstd_bytes),
+            Some(CompressionFormat::Zstd)
+        );
+
+        // PZSTD skippable frame
+        let pzstd_bytes = [0x50, 0x2a, 0x4d, 0x18, 0x04, 0x00, 0x00, 0x00];
+        assert_eq!(
+            CompressionFormat::from_bytes(&pzstd_bytes),
+            Some(CompressionFormat::Pzstd)
+        );
+
+        // Bzip2
+        let bz2_bytes = *b"BZh9";
+        assert_eq!(
+            CompressionFormat::from_bytes(&bz2_bytes),
+            Some(CompressionFormat::Bzip2)
+        );
+
+        // Xz
+        let xz_bytes = [0xfd, b'7', b'z', b'X', b'Z', 0x00];
+        assert_eq!(
+            CompressionFormat::from_bytes(&xz_bytes),
+            Some(CompressionFormat::Xz)
+        );
+    }
+
+    #[test]
+    fn test_compression_format_properties() {
+        assert!(CompressionFormat::Bgzf.is_parallel());
+        assert!(CompressionFormat::Pzstd.is_parallel());
+        assert!(!CompressionFormat::Gzip.is_parallel());
+        assert!(!CompressionFormat::Zstd.is_parallel());
+        assert!(!CompressionFormat::Bzip2.is_parallel());
+        assert!(!CompressionFormat::Xz.is_parallel());
+
+        assert_eq!(CompressionFormat::Gzip.as_str(), "gzip");
+        assert_eq!(CompressionFormat::Bgzf.as_str(), "bgzf");
+        assert_eq!(CompressionFormat::Zstd.as_str(), "zstd");
+        assert_eq!(CompressionFormat::Pzstd.as_str(), "pzstd");
+        assert_eq!(CompressionFormat::Bzip2.as_str(), "bzip2");
+        assert_eq!(CompressionFormat::Xz.as_str(), "xz");
+
+        assert_eq!(format!("{}", CompressionFormat::Bgzf), "bgzf");
+        assert_eq!(format!("{}", CompressionFormat::Pzstd), "pzstd");
+    }
+}

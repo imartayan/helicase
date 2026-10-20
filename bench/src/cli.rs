@@ -1,4 +1,3 @@
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::legacy::{LegacyArgs, run_legacy_bench};
@@ -117,47 +116,12 @@ fn parse_thread_counts(s: &str) -> Vec<usize> {
         .collect()
 }
 
-/// Detects whether a file is compressed by peeking its first 4 magic bytes
-/// (gzip/bgzf, zstd, bz2, xz) and falling back to its file extension.
+/// Detects whether a file is compressed using Helicase's CompressionFormat detection.
 pub fn is_compressed_file(path: impl AsRef<Path>) -> bool {
-    let path = path.as_ref();
-    if let Ok(mut file) = std::fs::File::open(path) {
-        let mut magic = [0u8; 4];
-        if let Ok(n) = file.read(&mut magic) {
-            // Gzip / BGZF: 0x1F, 0x8B
-            if n >= 2 && magic[0] == 0x1f && magic[1] == 0x8b {
-                return true;
-            }
-            // Zstandard: 0xFD2FB528 (little-endian: 0x28, 0xb5, 0x2f, 0xfd) or skippable frame (0x184D2A50..0x184D2A5F)
-            if n >= 4
-                && (magic == [0x28, 0xb5, 0x2f, 0xfd]
-                    || (magic[3] == 0x18
-                        && magic[2] == 0x4d
-                        && magic[1] == 0x2a
-                        && (magic[0] & 0xf0) == 0x50))
-            {
-                return true;
-            }
-            // Bzip2: 'B', 'Z'
-            if n >= 2 && magic[0] == b'B' && magic[1] == b'Z' {
-                return true;
-            }
-            // Xz: 0xFD, '7', 'z'
-            if n >= 3 && magic[0] == 0xfd && magic[1] == b'7' && magic[2] == b'z' {
-                return true;
-            }
-        }
-    }
-    path.extension().is_some_and(|ext| {
-        ext == "gz"
-            || ext == "bgz"
-            || ext == "bgzf"
-            || ext == "gzip"
-            || ext == "zst"
-            || ext == "zstd"
-            || ext == "bz2"
-            || ext == "xz"
-    })
+    helicase::input::CompressionFormat::from_path(path)
+        .ok()
+        .flatten()
+        .is_some()
 }
 
 fn run_with_measurement<M: Measurement>(args: &Args) {

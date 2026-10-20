@@ -728,7 +728,11 @@ pub fn run_parallel_file_benchmarks(
     ParallelIoSummary {
         name: name.to_string(),
         size_mb,
-        backend: "FileInput",
+        backend: helicase::input::CompressionFormat::from_path(path)
+            .ok()
+            .flatten()
+            .map(|c| c.as_str())
+            .unwrap_or("FileInput"),
         single_file_gb_s,
         single_seq_gb_s: single_dna_gb_s,
         results,

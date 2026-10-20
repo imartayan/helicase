@@ -16,6 +16,8 @@ pub use fasta::*;
 pub use fastq::*;
 pub use fastx::*;
 pub use parallel::ParallelFastxParser;
+#[cfg(feature = "zstd")]
+pub(crate) use parallel::index_zstd_frames;
 pub use traits::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

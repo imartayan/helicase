@@ -279,8 +279,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastaParser<
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
     #[inline(always)]
-    fn return_error_or_none(&mut self) -> Option<Event> {
-        self.pending_error.take().map(Event::IoError)
+    fn return_error_or_none(&mut self) -> Option<Result<Event>> {
+        self.pending_error.take().map(Err)
     }
 
     #[inline(always)]
@@ -387,28 +387,28 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
     }
 
     #[inline(always)]
-    fn emit_record_events(&mut self) -> Option<Event> {
+    fn emit_record_events(&mut self) -> Option<Result<Event>> {
         self.state = State::Header;
         if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
             if flag_is_set(CONFIG, RETURN_RECORD) {
                 self.state = State::EmitRecord;
             }
-            return Some(Event::DnaChunk(self.dna_range.clone()));
+            return Some(Ok(Event::DnaChunk(self.dna_range.clone())));
         }
         if flag_is_set(CONFIG, RETURN_RECORD) {
-            return Some(Event::Record(self.record_start..self.global_pos()));
+            return Some(Ok(Event::Record(self.record_start..self.global_pos())));
         }
         None
     }
 
     #[inline(always)]
-    fn finish_record_eof(&mut self) -> Option<Event> {
+    fn finish_record_eof(&mut self) -> Option<Result<Event>> {
         self.emit_record_events()
             .or_else(|| self.return_error_or_none())
     }
 
     #[inline(always)]
-    fn advance_header(&mut self) -> Option<Option<Event>> {
+    fn advance_header(&mut self) -> Option<Option<Result<Event>>> {
         if self.finished {
             return Some(self.return_error_or_none());
         }
@@ -495,7 +495,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
     }
 
     #[inline(always)]
-    fn skip_non_actg(&mut self) -> Option<Option<Event>> {
+    fn skip_non_actg(&mut self) -> Option<Option<Result<Event>>> {
         if flag_is_set(CONFIG, SPLIT_NON_ACTG)
             && ((1 << self.pos_in_block) & self.block.is_dna) == 0
         {
@@ -539,7 +539,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
     }
 
     #[inline(always)]
-    fn try_wrapped_stride(&mut self, next_line_start: usize) -> Option<Option<Event>> {
+    fn try_wrapped_stride(&mut self, next_line_start: usize) -> Option<Option<Result<Event>>> {
         let line_width = self.dna_range.len();
         let newline_len = next_line_start.saturating_sub(self.dna_range.end);
         if line_width == 0 || newline_len == 0 {
@@ -674,7 +674,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
 }
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CONFIG, I> {
-    type Item = Event;
+    type Item = Result<Event>;
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
@@ -683,7 +683,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                 State::EmitRecord => {
                     self.state = State::Header;
                     if flag_is_set(CONFIG, RETURN_RECORD) {
-                        return Some(Event::Record(self.record_start..self.global_pos()));
+                        return Some(Ok(Event::Record(self.record_start..self.global_pos())));
                     }
                 }
                 State::Header => {
@@ -702,7 +702,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                     if self.current_byte() == b'>' {
                         self.state = State::Header;
                         if flag_is_set(CONFIG, RETURN_RECORD) {
-                            return Some(Event::Record(self.record_start..self.global_pos()));
+                            return Some(Ok(Event::Record(self.record_start..self.global_pos())));
                         }
                         continue 'parser_loop;
                     }
@@ -854,7 +854,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                             && ((1 << self.pos_in_block) & self.block.newline) == 0
                         {
                             if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
-                                return Some(Event::DnaChunk(self.dna_range.clone()));
+                                return Some(Ok(Event::DnaChunk(self.dna_range.clone())));
                             }
                             break 'dna_line;
                         }
@@ -879,7 +879,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                             && ((1 << self.pos_in_block) & self.block.is_dna) == 0
                         {
                             if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
-                                return Some(Event::DnaChunk(self.dna_range.clone()));
+                                return Some(Ok(Event::DnaChunk(self.dna_range.clone())));
                             }
                             break 'dna_line;
                         }

@@ -14,7 +14,7 @@ const CONFIG_PACKED: Config = ParserOptions::default()
     .keep_non_actg()
     .config();
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = std::env::args().nth(1).expect("No input file given");
     let size = metadata(&path).expect("Cannot get file metadata").len() as usize;
     let mut reader = parse_fastx_file(&path).expect("Cannot open file");
@@ -45,7 +45,8 @@ fn main() {
     min_pos.clear();
 
     let now = Instant::now();
-    while let Some(_) = parser_string.next() {
+    while let Some(event) = parser_string.next() {
+        event?;
         let packed_seq = PackedSeqVec::from_ascii(parser_string.get_dna_string());
         let seq = packed_seq.as_slice();
         builder.run(seq, &mut min_pos);
@@ -58,7 +59,8 @@ fn main() {
     min_pos.clear();
 
     let now = Instant::now();
-    while let Some(_) = parser_packed.next() {
+    while let Some(event) = parser_packed.next() {
+        event?;
         let seq = parser_packed.get_packed_seq();
         builder.run(seq, &mut min_pos);
     }
@@ -66,4 +68,5 @@ fn main() {
         "Parse PackedDNA & compute minimizers:\t {:6.3} GB/s (single thread)",
         size as f64 / 1e9 / now.elapsed().as_secs_f64()
     );
+    Ok(())
 }

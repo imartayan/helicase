@@ -5,14 +5,15 @@ use helicase::*;
 
 const CONFIG: Config = ParserOptions::default().dna_packed().config();
 
-fn main() {
+fn main() -> std::io::Result<()> {
     let path = std::env::args().nth(1).expect("No input file given");
 
     // create a parser with the desired options
-    let mut parser = FastxParser::<CONFIG>::from_file(&path).expect("Cannot open file");
+    let mut parser = FastxParser::<CONFIG>::from_file(&path)?;
 
     // iterate over each chunk of ACTG
-    while let Some(_event) = parser.next() {
+    while let Some(event) = parser.next() {
+        event?;
         // we still have access to the header
         let header = parser.get_header();
 
@@ -24,4 +25,5 @@ fn main() {
 
         // ...
     }
+    Ok(())
 }

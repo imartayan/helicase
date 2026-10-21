@@ -35,14 +35,15 @@ use helicase::*;
 // set the options of the parser (at compile-time)
 const CONFIG: Config = ParserOptions::default().config();
 
-fn main() {
+fn main() -> std::io::Result<()> {
     let path = "...";
 
     // create a parser with the desired options
-    let mut parser = FastxParser::<CONFIG>::from_file(&path).expect("Cannot open file");
+    let mut parser = FastxParser::<CONFIG>::from_file(&path)?;
 
     // iterate over records
-    while let Some(_event) = parser.next() {
+    while let Some(event) = parser.next() {
+        event?;
         // get a reference to the header
         let header = parser.get_header();
 
@@ -51,6 +52,7 @@ fn main() {
 
         // ...
     }
+    Ok(())
 }
 ```
 
@@ -84,15 +86,24 @@ Three options are available via `ParserOptions`:
 
 ### Events
 
-The parser is an iterator that yields `Event` values.
-An event signals a record boundary, a contiguous DNA chunk, or an I/O error:
+The parser is an iterator that yields `Result<Event, parser::Error>` values.
+An event signals a record boundary or a contiguous DNA chunk:
 - `Event::Record(range)`: emitted once per record boundary. The `range` gives the byte offsets `start..end` of the entire record. Enabled by `return_record` (on by default for string and lossy formats).
 - `Event::DnaChunk(range)`: emitted for each contiguous run of ACTG bases when non-ACTG characters are split. The `range` gives the byte offsets `start..end` of the chunk. Enabled by `return_dna_chunk` (on by default with `split_non_actg`, `dna_packed`, and `dna_columnar`).
-- `Event::IoError(err)`: emitted if an I/O or stream decompression error occurs during iteration.
 
 Sequence, header, and quality data are read directly from the parser methods (`get_header`, `get_dna_string`, `get_dna_packed`, `get_quality`, etc.).
 
-When both records and chunks are active (e.g. `dna_packed().return_record(true)`), match on the event to distinguish them:
+When only one type of event is active (such as the default configuration yielding `Event::Record`), matching is unnecessary and errors can simply be propagated with `event?;`:
+
+```rust
+while let Some(event) = parser.next() {
+    event?;
+    let header = parser.get_header();
+    let seq = parser.get_dna_string();
+}
+```
+
+When both records and chunks are active (e.g. `dna_packed().return_record(true)`), match on the event using `?` to distinguish them:
 
 ```rust
 use helicase::input::*;
@@ -106,7 +117,7 @@ fn main() -> std::io::Result<()> {
     let mut parser = FastxParser::<CONFIG>::from_file("reads.fastq.gz")?;
 
     while let Some(event) = parser.next() {
-        match event {
+        match event? {
             Event::DnaChunk(range) => {
                 // one contiguous ACTG run is ready
                 let seq = parser.get_dna_packed();
@@ -115,16 +126,11 @@ fn main() -> std::io::Result<()> {
                 // all chunks of this record have been processed
                 let header = parser.get_header();
             }
-            Event::IoError(err) => {
-                return Err(err);
-            }
         }
     }
     Ok(())
 }
 ```
-
-When only one type of event is active (such as the default configuration yielding `Event::Record`), matching is unnecessary and the event value can simply be ignored (`while let Some(_event) = parser.next()`).
 
 ### Iterating over chunks of packed DNA
 

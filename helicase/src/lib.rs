@@ -32,14 +32,15 @@
 //! // set the options of the parser (at compile-time)
 //! const CONFIG: Config = ParserOptions::default().config();
 //!
-//! fn main() {
+//! fn main() -> std::io::Result<()> {
 //!     let path = "...";
 //!
 //!     // create a parser with the desired options
-//!     let mut parser = FastxParser::<CONFIG>::from_file(&path).expect("Cannot open file");
+//!     let mut parser = FastxParser::<CONFIG>::from_file(&path)?;
 //!
 //!     // iterate over records
-//!     while let Some(_event) = parser.next() {
+//!     while let Some(event) = parser.next() {
+//!         event?;
 //!         // get a reference to the header
 //!         let header = parser.get_header();
 //!
@@ -48,6 +49,7 @@
 //!
 //!         // ...
 //!     }
+//!     Ok(())
 //! }
 //! ```
 //! ## Input
@@ -88,15 +90,35 @@
 //!
 //! ## Events
 //!
-//! The parser is an iterator that yields [`Event`](parser::Event) values.
-//! An event signals a record boundary, a contiguous DNA chunk, or an I/O error:
+//! The parser is an iterator that yields [`Result<Event, parser::Error>`](parser::Result) values.
+//! An event signals a record boundary or a contiguous DNA chunk:
 //! - [`Event::Record(range)`](parser::Event::Record): emitted once per record boundary, carrying the byte offset `Range<usize>` of the entire record. Enabled by [`return_record`](ParserOptions::return_record) (on by default for string and lossy formats).
 //! - [`Event::DnaChunk(range)`](parser::Event::DnaChunk): emitted for each contiguous ACTG run when non-ACTG characters are split, carrying the byte offset `Range<usize>` of the chunk. Enabled by [`return_dna_chunk`](ParserOptions::return_dna_chunk) (on by default with [`split_non_actg`](ParserOptions::split_non_actg), [`dna_packed`](ParserOptions::dna_packed), and [`dna_columnar`](ParserOptions::dna_columnar)).
-//! - [`Event::IoError(err)`](parser::Event::IoError): emitted if an I/O or stream decompression error occurs during iteration.
 //!
 //! Sequence, header, and quality data are read directly from the parser methods ([`get_header`](HelicaseParser::get_header), [`get_dna_string`](HelicaseParser::get_dna_string), [`get_dna_packed`](HelicaseParser::get_dna_packed), [`get_quality`](HelicaseParser::get_quality), etc.).
 //!
-//! When both records and chunks are active (e.g. `dna_packed().return_record(true)`), match on the event to distinguish them:
+//! When only one type of event is active (such as the default configuration yielding `Event::Record`),
+//! matching is unnecessary and errors can simply be propagated with `event?;`:
+//!
+//! ```rust,no_run
+//! use helicase::input::*;
+//! use helicase::*;
+//!
+//! const CONFIG: Config = ParserOptions::default().config();
+//!
+//! fn main() -> std::io::Result<()> {
+//!     let mut parser = FastxParser::<CONFIG>::from_file("reads.fastq.gz")?;
+//!
+//!     while let Some(event) = parser.next() {
+//!         event?;
+//!         let header = parser.get_header();
+//!         let seq = parser.get_dna_string();
+//!     }
+//!     Ok(())
+//! }
+//! ```
+//!
+//! When both records and chunks are active (e.g. `dna_packed().return_record(true)`), match on the event using `?` to distinguish them:
 //!
 //! ```rust,no_run
 //! use helicase::input::*;
@@ -110,7 +132,7 @@
 //!     let mut parser = FastxParser::<CONFIG>::from_file("reads.fastq.gz")?;
 //!
 //!     while let Some(event) = parser.next() {
-//!         match event {
+//!         match event? {
 //!             Event::DnaChunk(range) => {
 //!                 // One contiguous ACTG run is ready
 //!                 let seq = parser.get_dna_packed();
@@ -119,17 +141,11 @@
 //!                 // all chunks of this record have been processed
 //!                 let header = parser.get_header();
 //!             }
-//!             Event::IoError(err) => {
-//!                 return Err(err);
-//!             }
 //!         }
 //!     }
 //!     Ok(())
 //! }
 //! ```
-//!
-//! When only one type of event is active (such as the default configuration yielding `Event::Record`),
-//! matching is unnecessary and the event value can simply be ignored (`while let Some(_event) = parser.next()`).
 //!
 //! ## Iterating over chunks of packed DNA
 //!
@@ -259,7 +275,7 @@ pub(crate) mod lexer;
 pub mod parser;
 
 pub use config::{Config, ParserOptions};
-pub use parser::{FastaParser, FastqParser, FastxParser, HelicaseParser, ParallelFastxParser};
+pub use parser::{FastxParser, HelicaseParser, ParallelFastxParser};
 
 #[cfg(feature = "needletail")]
 pub mod needletail_helpers;

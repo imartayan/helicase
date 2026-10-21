@@ -51,7 +51,7 @@ mod fasta {
 
     #[test]
     fn test_header() {
-        let mut f = FastaParser::<CONFIG_HEADER, _>::from_slice(FASTA).unwrap();
+        let mut f = parser::FastaParser::<CONFIG_HEADER, _>::from_slice(FASTA).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(String::from_utf8(f.get_header_owned()).unwrap());
@@ -61,7 +61,7 @@ mod fasta {
 
     #[test]
     fn test_dna_string() {
-        let mut f = FastaParser::<CONFIG_STRING, _>::from_slice(FASTA).unwrap();
+        let mut f = parser::FastaParser::<CONFIG_STRING, _>::from_slice(FASTA).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(String::from_utf8(f.get_dna_string_owned()).unwrap());
@@ -71,7 +71,7 @@ mod fasta {
             vec!["TTTCTtaAAAAAGAAAAACAAN", "CTCTTANNAAACAAAnAGCTTT", "CCAC",]
         );
 
-        let mut f = FastaParser::<CONFIG_STRING_ACTG, _>::from_slice(FASTA).unwrap();
+        let mut f = parser::FastaParser::<CONFIG_STRING_ACTG, _>::from_slice(FASTA).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(String::from_utf8(f.get_dna_string_owned()).unwrap());
@@ -87,7 +87,7 @@ mod fasta {
             ]
         );
 
-        let mut f = FastaParser::<CONFIG_STRING_ACTG_MERGE, _>::from_slice(FASTA).unwrap();
+        let mut f = parser::FastaParser::<CONFIG_STRING_ACTG_MERGE, _>::from_slice(FASTA).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(String::from_utf8(f.get_dna_string_owned()).unwrap());
@@ -100,7 +100,7 @@ mod fasta {
 
     #[test]
     fn test_dna_columnar() {
-        let mut f = FastaParser::<CONFIG_COLUMNAR, _>::from_slice(FASTA).unwrap();
+        let mut f = parser::FastaParser::<CONFIG_COLUMNAR, _>::from_slice(FASTA).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(format!("{}", f.get_dna_columnar_owned()));
@@ -116,7 +116,7 @@ mod fasta {
             ]
         );
 
-        let mut f = FastaParser::<CONFIG_COLUMNAR_MERGE, _>::from_slice(FASTA).unwrap();
+        let mut f = parser::FastaParser::<CONFIG_COLUMNAR_MERGE, _>::from_slice(FASTA).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(format!("{}", f.get_dna_columnar_owned()));
@@ -129,7 +129,7 @@ mod fasta {
 
     #[test]
     fn test_dna_packed() {
-        let mut f = FastaParser::<CONFIG_PACKED, _>::from_slice(FASTA).unwrap();
+        let mut f = parser::FastaParser::<CONFIG_PACKED, _>::from_slice(FASTA).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(format!("{}", f.get_dna_packed_owned()));
@@ -145,7 +145,7 @@ mod fasta {
             ]
         );
 
-        let mut f = FastaParser::<CONFIG_PACKED_MERGE, _>::from_slice(FASTA).unwrap();
+        let mut f = parser::FastaParser::<CONFIG_PACKED_MERGE, _>::from_slice(FASTA).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(format!("{}", f.get_dna_packed_owned()));
@@ -160,7 +160,7 @@ mod fasta {
     fn test_packed_matches_string_long_sequence() {
         let seq = b"ACGT".repeat(40);
         let fasta = [b">seq\n".as_ref(), seq.as_ref()].concat();
-        let mut f = FastaParser::<CONFIG_PACKED_KEEP, _>::from_slice(&fasta).unwrap();
+        let mut f = parser::FastaParser::<CONFIG_PACKED_KEEP, _>::from_slice(&fasta).unwrap();
         while let Some(_) = f.next() {
             let s = f.get_dna_string();
             let p = f.get_dna_packed();
@@ -180,7 +180,7 @@ mod fasta {
         let seq = b"A".repeat(194);
         let fasta = [b">s\n".as_ref(), seq.as_ref()].concat();
         assert_eq!(fasta.len() % 64, 197 % 64);
-        let mut f = FastaParser::<CONFIG_PACKED_KEEP, _>::from_slice(&fasta).unwrap();
+        let mut f = parser::FastaParser::<CONFIG_PACKED_KEEP, _>::from_slice(&fasta).unwrap();
         while let Some(_) = f.next() {
             let string_len = f.get_dna_string().len();
             let packed_len = f.get_dna_packed().len();
@@ -199,7 +199,7 @@ mod fasta {
             .keep_non_actg()
             .config();
 
-        let mut parser = FastaParser::<CONFIG_ALL, _>::from_slice(crlf_data).unwrap();
+        let mut parser = parser::FastaParser::<CONFIG_ALL, _>::from_slice(crlf_data).unwrap();
         let mut headers = Vec::new();
         let mut seqs = Vec::new();
         while let Some(_event) = parser.next() {
@@ -269,7 +269,7 @@ mod fastq {
 
     #[test]
     fn test_header() {
-        let mut f = FastqParser::<CONFIG_HEADER, _>::from_slice(FASTQ).unwrap();
+        let mut f = parser::FastqParser::<CONFIG_HEADER, _>::from_slice(FASTQ).unwrap();
         let mut res = Vec::new();
         let mut c = 0;
         while let Some(_) = f.next() {
@@ -284,7 +284,7 @@ mod fastq {
 
     #[test]
     fn test_quality() {
-        let mut f = FastqParser::<CONFIG_QUALITY, _>::from_slice(FASTQ).unwrap();
+        let mut f = parser::FastqParser::<CONFIG_QUALITY, _>::from_slice(FASTQ).unwrap();
         let mut res = Vec::new();
         let mut c = 0;
         while let Some(_) = f.next() {
@@ -299,7 +299,7 @@ mod fastq {
 
     #[test]
     fn test_dna_string() {
-        let mut f = FastqParser::<CONFIG_STRING, _>::from_slice(FASTQ).unwrap();
+        let mut f = parser::FastqParser::<CONFIG_STRING, _>::from_slice(FASTQ).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(String::from_utf8(f.get_dna_string_owned()).unwrap());
@@ -309,7 +309,7 @@ mod fastq {
             vec!["TTTCTtaAAAAAGAAAAACAAN", "CTCTTANNAAACAAAnAGCTTT", "CCAC"]
         );
 
-        let mut f = FastqParser::<CONFIG_STRING_ACTG, _>::from_slice(FASTQ).unwrap();
+        let mut f = parser::FastqParser::<CONFIG_STRING_ACTG, _>::from_slice(FASTQ).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(String::from_utf8(f.get_dna_string_owned()).unwrap());
@@ -325,7 +325,7 @@ mod fastq {
             ]
         );
 
-        let mut f = FastqParser::<CONFIG_STRING_ACTG_MERGE, _>::from_slice(FASTQ).unwrap();
+        let mut f = parser::FastqParser::<CONFIG_STRING_ACTG_MERGE, _>::from_slice(FASTQ).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(String::from_utf8(f.get_dna_string_owned()).unwrap());
@@ -338,7 +338,7 @@ mod fastq {
 
     #[test]
     fn test_dna_columnar() {
-        let mut f = FastqParser::<CONFIG_COLUMNAR, _>::from_slice(FASTQ).unwrap();
+        let mut f = parser::FastqParser::<CONFIG_COLUMNAR, _>::from_slice(FASTQ).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(format!("{}", f.get_dna_columnar_owned()));
@@ -354,7 +354,7 @@ mod fastq {
             ]
         );
 
-        let mut f = FastqParser::<CONFIG_COLUMNAR_MERGE, _>::from_slice(FASTQ).unwrap();
+        let mut f = parser::FastqParser::<CONFIG_COLUMNAR_MERGE, _>::from_slice(FASTQ).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(format!("{}", f.get_dna_columnar_owned()));
@@ -367,7 +367,7 @@ mod fastq {
 
     #[test]
     fn test_dna_packed() {
-        let mut f = FastqParser::<CONFIG_PACKED, _>::from_slice(FASTQ).unwrap();
+        let mut f = parser::FastqParser::<CONFIG_PACKED, _>::from_slice(FASTQ).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(format!("{}", f.get_dna_packed_owned()));
@@ -383,7 +383,7 @@ mod fastq {
             ]
         );
 
-        let mut f = FastqParser::<CONFIG_PACKED_MERGE, _>::from_slice(FASTQ).unwrap();
+        let mut f = parser::FastqParser::<CONFIG_PACKED_MERGE, _>::from_slice(FASTQ).unwrap();
         let mut res = Vec::new();
         while let Some(_) = f.next() {
             res.push(format!("{}", f.get_dna_packed_owned()));
@@ -399,7 +399,7 @@ mod fastq {
         let seq = b"ACGT".repeat(40);
         let qual = b"I".repeat(160);
         let fastq = [b"@seq\n".as_ref(), &seq, b"\n+\n".as_ref(), &qual].concat();
-        let mut f = FastqParser::<CONFIG_PACKED_KEEP, _>::from_slice(&fastq).unwrap();
+        let mut f = parser::FastqParser::<CONFIG_PACKED_KEEP, _>::from_slice(&fastq).unwrap();
         while let Some(_) = f.next() {
             let s = f.get_dna_string();
             let p = f.get_dna_packed();
@@ -419,7 +419,7 @@ mod fastq {
         let seq = b"A".repeat(194);
         let qual = b"I".repeat(194);
         let fastq = [b"@s\n".as_ref(), &seq, b"\n+\n".as_ref(), &qual].concat();
-        let mut f = FastqParser::<CONFIG_PACKED_KEEP, _>::from_slice(&fastq).unwrap();
+        let mut f = parser::FastqParser::<CONFIG_PACKED_KEEP, _>::from_slice(&fastq).unwrap();
         while let Some(_) = f.next() {
             let string_len = f.get_dna_string().len();
             let packed_len = f.get_dna_packed().len();
@@ -440,7 +440,7 @@ mod fastq {
             .compute_quality()
             .config();
 
-        let mut parser = FastqParser::<CONFIG_ALL, _>::from_slice(crlf_data).unwrap();
+        let mut parser = parser::FastqParser::<CONFIG_ALL, _>::from_slice(crlf_data).unwrap();
         let mut headers = Vec::new();
         let mut seqs = Vec::new();
         let mut quals = Vec::new();
@@ -466,7 +466,7 @@ mod fastq {
             .split_non_actg()
             .config();
 
-        let mut parser = FastqParser::<CONFIG_SPLIT, _>::from_slice(crlf_data).unwrap();
+        let mut parser = parser::FastqParser::<CONFIG_SPLIT, _>::from_slice(crlf_data).unwrap();
         let mut chunks = Vec::new();
         while let Some(_event) = parser.next() {
             chunks.push(String::from_utf8(parser.get_dna_string().to_vec()).unwrap());
@@ -488,7 +488,8 @@ mod fastq {
             .compute_quality()
             .config();
 
-        let mut parser = FastqParser::<CONFIG_ALL, _>::from_slice(fastq.as_bytes()).unwrap();
+        let mut parser =
+            parser::FastqParser::<CONFIG_ALL, _>::from_slice(fastq.as_bytes()).unwrap();
         let mut count = 0;
         while let Some(_event) = parser.next() {
             count += 1;
@@ -512,7 +513,7 @@ mod paraseq_tests {
     #[test]
     fn test_fasta_record_index() {
         let fasta_data = b">r0\nACGT\n>r1\nTGCA\nTGCA\n>r2\nNNNN\n";
-        let mut parser = FastaParser::<CONFIG, _>::from_slice(fasta_data).unwrap();
+        let mut parser = parser::FastaParser::<CONFIG, _>::from_slice(fasta_data).unwrap();
         let mut indices = Vec::new();
         let mut trait_indices = Vec::new();
         while let Some(_) = parser.next() {
@@ -526,7 +527,7 @@ mod paraseq_tests {
     #[test]
     fn test_fastq_record_index() {
         let fastq_data = b"@r0\nACGT\n+\nIIII\n@r1\nTGCA\n+\nIIII\n@r2\nGGCC\n+\nIIII\n";
-        let mut parser = FastqParser::<CONFIG, _>::from_slice(fastq_data).unwrap();
+        let mut parser = parser::FastqParser::<CONFIG, _>::from_slice(fastq_data).unwrap();
         let mut indices = Vec::new();
         let mut trait_indices = Vec::new();
         while let Some(_) = parser.next() {

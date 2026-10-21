@@ -29,8 +29,9 @@ fn verify_record_lengths(format: Format, lengths: &[usize]) {
         let mut slice_parser = FastxParser::<FASTQ_CONFIG>::from_slice(&bytes).unwrap();
         let mut slice_packed = FastxParser::<PACKED_KEEP_CONFIG>::from_slice(&bytes).unwrap();
         let mut slice_records = Vec::new();
-        while let Some(_event) = slice_parser.next() {
-            slice_packed.next().unwrap();
+        while let Some(event) = slice_parser.next() {
+            event.unwrap();
+            slice_packed.next().unwrap().unwrap();
             slice_records.push((
                 slice_parser.get_header_owned(),
                 slice_parser.get_dna_string_owned(),
@@ -46,8 +47,9 @@ fn verify_record_lengths(format: Format, lengths: &[usize]) {
         let mut reader_packed =
             FastxParser::<PACKED_KEEP_CONFIG>::from_reader(Cursor::new(&bytes)).unwrap();
         let mut reader_records = Vec::new();
-        while let Some(_event) = reader_parser.next() {
-            reader_packed.next().unwrap();
+        while let Some(event) = reader_parser.next() {
+            event.unwrap();
+            reader_packed.next().unwrap().unwrap();
             reader_records.push((
                 reader_parser.get_header_owned(),
                 reader_parser.get_dna_string_owned(),

@@ -142,7 +142,7 @@ impl<'a, const CONFIG: Config> HelicaseParser for FastxParser<'a, CONFIG> {
 }
 
 impl<'a, const CONFIG: Config> Iterator for FastxParser<'a, CONFIG> {
-    type Item = Event;
+    type Item = Result<Event>;
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {

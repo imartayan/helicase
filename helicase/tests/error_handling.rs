@@ -16,8 +16,8 @@ const CONFIG: Config = ParserOptions::default().compute_quality().config();
 fn test_error_empty_slice() {
     // Empty input should fail initialization cleanly
     assert!(FastxParser::<CONFIG>::from_slice(b"").is_err());
-    assert!(FastaParser::<CONFIG, _>::from_slice(b"").is_err());
-    assert!(FastqParser::<CONFIG, _>::from_slice(b"").is_err());
+    assert!(parser::FastaParser::<CONFIG, _>::from_slice(b"").is_err());
+    assert!(parser::FastqParser::<CONFIG, _>::from_slice(b"").is_err());
 }
 
 #[test]
@@ -41,13 +41,13 @@ fn test_error_invalid_first_byte() {
 
 #[test]
 fn test_error_fasta_wrong_start_byte() {
-    let res = FastaParser::<CONFIG, _>::from_slice(b"@fastq_header\nACGT\n");
+    let res = parser::FastaParser::<CONFIG, _>::from_slice(b"@fastq_header\nACGT\n");
     assert!(res.is_err());
 }
 
 #[test]
 fn test_error_fastq_wrong_start_byte() {
-    let res = FastqParser::<CONFIG, _>::from_slice(b">fasta_header\nACGT\n");
+    let res = parser::FastqParser::<CONFIG, _>::from_slice(b">fasta_header\nACGT\n");
     assert!(res.is_err());
 }
 
@@ -169,8 +169,8 @@ fn test_corrupted_gzip_trailer_crc() {
 
         for event in parser.by_ref() {
             match event {
-                Event::Record(_) => records += 1,
-                Event::IoError(err) => {
+                Ok(Event::Record(_)) => records += 1,
+                Err(err) => {
                     error_seen = true;
                     assert!(
                         err.to_string().to_lowercase().contains("checksum")
@@ -214,8 +214,8 @@ fn test_corrupted_gzip_trailer_crc() {
 
         for event in parser.by_ref() {
             match event {
-                Event::Record(_) => records += 1,
-                Event::IoError(err) => {
+                Ok(Event::Record(_)) => records += 1,
+                Err(err) => {
                     error_seen = true;
                     assert!(
                         err.to_string().to_lowercase().contains("checksum")
@@ -263,8 +263,8 @@ fn test_corrupted_gzip_trailer_crc_fasta() {
 
     for event in parser.by_ref() {
         match event {
-            Event::Record(_) => records += 1,
-            Event::IoError(_) => {
+            Ok(Event::Record(_)) => records += 1,
+            Err(_) => {
                 error_seen = true;
             }
             _ => {}

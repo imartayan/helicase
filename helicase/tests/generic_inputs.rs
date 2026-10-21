@@ -24,9 +24,12 @@ struct ParsedRecord {
     qual: Option<Vec<u8>>,
 }
 
-fn parse_all<P: HelicaseParser + Iterator<Item = Event>>(mut parser: P) -> Vec<ParsedRecord> {
+fn parse_all<P: HelicaseParser + Iterator<Item = parser::Result<Event>>>(
+    mut parser: P,
+) -> Vec<ParsedRecord> {
     let mut records = Vec::new();
-    while let Some(_event) = parser.next() {
+    while let Some(event) = parser.next() {
+        event.unwrap();
         records.push(ParsedRecord {
             header: parser.get_header_owned(),
             dna: parser.get_dna_string_owned(),

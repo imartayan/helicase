@@ -277,8 +277,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
     #[inline(always)]
-    fn return_error_or_none(&mut self) -> Option<Event> {
-        self.pending_error.take().map(Event::IoError)
+    fn return_error_or_none(&mut self) -> Option<Result<Event>> {
+        self.pending_error.take().map(Err)
     }
 
     #[inline(always)]
@@ -384,7 +384,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
 }
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CONFIG, I> {
-    type Item = Event;
+    type Item = Result<Event>;
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
@@ -593,7 +593,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         if at_newline {
                             self.line_count = 2;
                         }
-                        return Some(Event::DnaChunk(self.dna_range.clone()));
+                        return Some(Ok(Event::DnaChunk(self.dna_range.clone())));
                     }
                     if at_newline {
                         break 'seq_line;
@@ -679,7 +679,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                 self.line_count = 0;
             }
             if flag_is_set(CONFIG, RETURN_RECORD) {
-                return Some(Event::Record(self.record_start..self.global_pos()));
+                return Some(Ok(Event::Record(self.record_start..self.global_pos())));
             }
         }
     }

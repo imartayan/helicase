@@ -24,7 +24,8 @@ fn main() -> std::io::Result<()> {
     let mut reader = parse_fastx_file("reads.fastq.gz")?;
     let mut total_bases = 0;
 
-    while let Some(_event) = reader.next() {
+    while let Some(event) = reader.next() {
+        event?;
         let header = reader.id();
         let seq = reader.seq();
         total_bases += reader.num_bases();
@@ -55,7 +56,8 @@ fn main() -> std::io::Result<()> {
     let mut parser = FastxParser::<CONFIG>::from_file("reads.fastq.gz")?;
     let mut total_bases = 0;
 
-    while let Some(_event) = parser.next() {
+    while let Some(event) = parser.next() {
+        event?;
         let header = parser.get_header();
         let seq = parser.get_dna_string();
         total_bases += parser.get_dna_len();
@@ -77,7 +79,8 @@ Key points:
   ```rust
   const CONFIG: Config = ParserOptions::default().dna_packed().config();
 
-  while let Some(_event) = parser.next() {
+  while let Some(event) = parser.next() {
+      event?;
       let packed = parser.get_dna_packed();
       let words = packed.as_slice();
   }
@@ -149,7 +152,7 @@ fn main() -> std::io::Result<()> {
             |mut parser| {
                 let mut records = 0;
                 let mut len = 0;
-                while let Some(_event) = parser.next() {
+                while let Some(Ok(_event)) = parser.next() {
                     records += 1;
                     len += parser.get_dna_len();
                 }
@@ -181,7 +184,7 @@ fn main() -> std::io::Result<()> {
         .threads(8)
         .for_each(|mut parser| {
             let mut local = Vec::with_capacity(1024);
-            while let Some(_event) = parser.next() {
+            while let Some(Ok(_event)) = parser.next() {
                 local.push(parser.get_dna_len());
             }
             dest.lock().unwrap().extend_from_slice(&local);

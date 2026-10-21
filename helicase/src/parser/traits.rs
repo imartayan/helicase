@@ -144,6 +144,6 @@ pub trait HelicaseParser {
     }
 }
 
-pub trait HelicaseParserIter: HelicaseParser + Iterator<Item = Event> {}
+pub trait HelicaseParserIter: HelicaseParser + Iterator<Item = Result<Event>> {}
 
-impl<T: HelicaseParser + Iterator<Item = Event>> HelicaseParserIter for T {}
+impl<T: HelicaseParser + Iterator<Item = Result<Event>>> HelicaseParserIter for T {}

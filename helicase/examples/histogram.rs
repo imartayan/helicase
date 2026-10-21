@@ -8,17 +8,18 @@ const CONFIG: Config = ParserOptions::default()
     .dna_columnar()
     .config();
 
-fn main() {
+fn main() -> std::io::Result<()> {
     let path = std::env::args().nth(1).expect("No input file given");
 
     // create a parser with the desired options
-    let mut parser = FastxParser::<CONFIG>::from_file(&path).expect("Cannot open file");
+    let mut parser = FastxParser::<CONFIG>::from_file(&path)?;
     let mut num_a = 0;
     let mut num_c = 0;
     let mut num_t = 0;
     let mut num_g = 0;
 
-    while let Some(_event) = parser.next() {
+    while let Some(event) = parser.next() {
+        event?;
         let cdna = parser.get_dna_columnar();
         let (high_bits, hi) = cdna.high_bits();
         let (low_bits, lo) = cdna.low_bits();
@@ -41,4 +42,5 @@ fn main() {
     println!("c: {num_c}");
     println!("t: {num_t}");
     println!("g: {num_g}");
+    Ok(())
 }

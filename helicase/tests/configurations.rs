@@ -141,7 +141,7 @@ fn test_config_split_non_actg_yields_pure_actg_chunks() {
 
     let mut parser = FastxParser::<CFG>::from_slice(&bytes).unwrap();
     let mut chunk_count = 0;
-    while let Some(event) = parser.next() {
+    while let Some(Ok(event)) = parser.next() {
         if let Event::DnaChunk(_) = event {
             chunk_count += 1;
             let chunk = parser.get_dna_string();
@@ -337,7 +337,7 @@ fn test_config_skip_non_actg_merges_chunks() {
 
     let mut parser = FastxParser::<CFG>::from_slice(raw).unwrap();
     let mut count = 0;
-    while let Some(event) = parser.next() {
+    while let Some(Ok(event)) = parser.next() {
         if let Event::Record(_) = event {
             count += 1;
             assert_eq!(parser.get_dna_string(), b"ACGTACGT");
@@ -427,7 +427,7 @@ fn test_config_ignore_dna() {
 
     let mut parser = FastxParser::<CFG>::from_slice(&bytes).unwrap();
     let mut count = 0;
-    while let Some(event) = parser.next() {
+    while let Some(Ok(event)) = parser.next() {
         if let Event::Record(_) = event {
             let expected_header = format!("record_{count}");
             assert_eq!(parser.get_header(), expected_header.as_bytes());
@@ -452,7 +452,7 @@ fn test_config_split_non_actg_return_both_chunk_and_record() {
     let mut parser = FastxParser::<CFG>::from_slice(raw).unwrap();
     let mut chunk_count = 0;
     let mut record_count = 0;
-    while let Some(event) = parser.next() {
+    while let Some(Ok(event)) = parser.next() {
         match event {
             Event::DnaChunk(_) => {
                 chunk_count += 1;
@@ -462,7 +462,6 @@ fn test_config_split_non_actg_return_both_chunk_and_record() {
                 record_count += 1;
                 assert_eq!(parser.get_header(), b"read1");
             }
-            Event::IoError(err) => panic!("unexpected error: {err}"),
         }
     }
     assert_eq!(chunk_count, 2);

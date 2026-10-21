@@ -132,25 +132,10 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Lexer<'a, CONFIG, I> {
     }
 
     #[inline(always)]
-    pub(crate) fn next_in_header(&mut self) -> Option<io::Result<Chunk>> {
+    pub(crate) fn next_block<const MODE: u8>(&mut self) -> Option<io::Result<Chunk>> {
         self.input.next().map(|res| {
             res.map(|chunk| {
-                Chunk::from_mask::<CONFIG>(
-                    chunk.len(),
-                    extract_bitmask::<CONFIG, SCAN_MODE_HEADER>(chunk),
-                )
-            })
-        })
-    }
-
-    #[inline(always)]
-    pub(crate) fn next_in_non_dna(&mut self) -> Option<io::Result<Chunk>> {
-        self.input.next().map(|res| {
-            res.map(|chunk| {
-                Chunk::from_mask::<CONFIG>(
-                    chunk.len(),
-                    extract_bitmask::<CONFIG, SCAN_MODE_QUALITY>(chunk),
-                )
+                Chunk::from_mask::<CONFIG>(chunk.len(), extract_bitmask::<CONFIG, MODE>(chunk))
             })
         })
     }
@@ -257,14 +242,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for Lexer<'a, CONFIG, 
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
-        self.input.next().map(|res| {
-            res.map(|chunk| {
-                Chunk::from_mask::<CONFIG>(
-                    chunk.len(),
-                    extract_bitmask::<CONFIG, SCAN_MODE_DNA>(chunk),
-                )
-            })
-        })
+        self.next_block::<SCAN_MODE_DNA>()
     }
 }
 

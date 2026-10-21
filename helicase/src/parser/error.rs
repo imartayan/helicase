@@ -16,9 +16,6 @@ pub struct Error {
 /// The specific category of parser error.
 #[derive(Debug)]
 pub enum ErrorKind {
-    /// The input data was empty.
-    EmptyInput,
-
     /// The first record does not begin with an expected format marker
     /// (`>` for FASTA, `@` for FASTQ, or either for auto-detection).
     InvalidRecordStart { expected: &'static str, found: u8 },
@@ -50,13 +47,6 @@ impl Error {
         Self {
             repr: Box::new(kind),
         }
-    }
-
-    /// Constructs an [`ErrorKind::EmptyInput`] error.
-    #[cold]
-    #[inline(never)]
-    pub fn empty_input() -> Self {
-        Self::new(ErrorKind::EmptyInput)
     }
 
     /// Constructs an [`ErrorKind::InvalidRecordStart`] error.
@@ -91,7 +81,6 @@ impl Error {
 impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::EmptyInput => write!(f, "input data is empty"),
             Self::InvalidRecordStart { expected, found } => {
                 write!(
                     f,

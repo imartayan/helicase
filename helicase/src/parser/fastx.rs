@@ -37,7 +37,12 @@ impl<'a, const CONFIG: Config, I: InputData<'a> + 'a> FromInputData<'a, I>
     for FastxParser<'a, CONFIG>
 {
     fn from_input(input: I) -> Result<Self> {
-        match Format::try_from_byte(input.first_byte())? {
+        let format = if input.buffer().is_empty() {
+            Format::Fasta
+        } else {
+            Format::try_from_byte(input.first_byte())?
+        };
+        match format {
             Format::Fasta => Ok(Self(Box::new(FastaParser::<CONFIG, I>::from_input(input)?))),
             Format::Fastq => Ok(Self(Box::new(FastqParser::<CONFIG, I>::from_input(input)?))),
         }

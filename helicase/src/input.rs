@@ -238,18 +238,15 @@ pub struct SliceInput<'a> {
 }
 
 impl<'a> SliceInput<'a> {
-    pub fn new(data: &'a [u8]) -> Result<Self> {
-        if data.is_empty() {
-            return Err(crate::parser::Error::empty_input());
-        }
+    pub fn new(data: &'a [u8]) -> Self {
         let mut last_block = [0; 64];
         last_block[..data.len() % 64].copy_from_slice(&data[(data.len() / 64) * 64..]);
-        Ok(Self {
+        Self {
             data,
             pos: 0,
-            first_byte: data[0],
+            first_byte: data.first().copied().unwrap_or(0),
             last_block,
-        })
+        }
     }
 }
 
@@ -328,7 +325,7 @@ pub trait FromSlice<'a>: FromInputData<'a, SliceInput<'a>> {
     /// It does not support transparent decompression.
     #[inline(always)]
     fn from_slice(data: &'a [u8]) -> Result<Self> {
-        Self::from_input(SliceInput::new(data)?)
+        Self::from_input(SliceInput::new(data))
     }
 }
 
@@ -350,7 +347,7 @@ impl<'a> MmapInput<'a> {
         let _mmap = unsafe { Mmap::map(&file)? };
         let data = unsafe { core::slice::from_raw_parts(_mmap.as_ptr(), _mmap.len()) };
         Ok(Self {
-            slice: SliceInput::new(data)?,
+            slice: SliceInput::new(data),
             _mmap,
         })
     }

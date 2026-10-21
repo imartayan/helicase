@@ -37,6 +37,14 @@ impl DnaBitpackers {
     }
 
     #[inline(always)]
+    pub fn pad<const CONFIG: Config>(&mut self) {
+        #[cfg(feature = "packed-seq")]
+        if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
+            self.packed.pad();
+        }
+    }
+
+    #[inline(always)]
     pub fn pop_base<const CONFIG: Config>(&mut self) {
         if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
             self.packed.pop_base();

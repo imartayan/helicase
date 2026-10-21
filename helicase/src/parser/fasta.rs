@@ -111,7 +111,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FromInputData<'a, I>
 {
     fn from_input(input: I) -> Result<Self> {
         let lexer = Lexer::from_input(input)?;
-        if lexer.input.first_byte() != b'>' {
+        if !lexer.input.buffer().is_empty() && lexer.input.first_byte() != b'>' {
             return Err(Error::invalid_record_start("'>'", lexer.input.first_byte()));
         }
         Ok(Self::from_lexer(lexer))
@@ -347,22 +347,31 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
     }
 
     #[inline(always)]
+    fn next_block<const MODE: u8>(&mut self) -> bool {
+        match self.lexer.next_block::<MODE>() {
+            Some(Ok(b)) => {
+                self.block.set::<CONFIG>(b);
+                self.block_counter += 1;
+                true
+            }
+            Some(Err(e)) => {
+                self.pending_error = Some(e);
+                self.finished = true;
+                false
+            }
+            None => {
+                self.finished = true;
+                false
+            }
+        }
+    }
+
+    #[inline(always)]
     fn increment_pos(&mut self) {
         if self.pos_in_block + 1 < self.block.len {
             self.pos_in_block += 1;
-        } else {
-            match self.lexer.next() {
-                Some(Ok(b)) => {
-                    self.block.set::<CONFIG>(b);
-                    self.block_counter += 1;
-                    self.pos_in_block = 0;
-                }
-                Some(Err(e)) => {
-                    self.pending_error = Some(e);
-                    self.finished = true;
-                }
-                None => self.finished = true,
-            };
+        } else if self.next_block::<SCAN_MODE_DNA>() {
+            self.pos_in_block = 0;
         }
     }
 
@@ -438,33 +447,26 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             {
                 self.lexer.input.make_room(self.header_range.start);
             }
-            match self.lexer.next_in_header() {
-                Some(Ok(b)) => self.block.set::<CONFIG>(b),
-                Some(Err(e)) => {
-                    self.finished = true;
-                    self.pending_error = Some(e);
+            if !self.next_block::<SCAN_MODE_HEADER>() {
+                if self.pending_error.is_some() {
                     return Some(self.return_error_or_none());
                 }
-                None => {
-                    self.pos_in_block = self.block.len;
-                    self.finished = true;
-                    if flag_is_set(CONFIG, COMPUTE_HEADER) {
-                        let end_pos = self.global_pos();
-                        let crlf = if !self.crlf_detected
-                            && end_pos > 0
-                            && self.lexer.input.slice(end_pos - 1..end_pos) == b"\r"
-                        {
-                            1
-                        } else {
-                            self.crlf_len
-                        };
-                        self.header_range.end = end_pos.saturating_sub(crlf);
-                    }
-                    self.state = State::Sequence;
-                    break;
+                self.pos_in_block = self.block.len;
+                if flag_is_set(CONFIG, COMPUTE_HEADER) {
+                    let end_pos = self.global_pos();
+                    let crlf = if !self.crlf_detected
+                        && end_pos > 0
+                        && self.lexer.input.slice(end_pos - 1..end_pos) == b"\r"
+                    {
+                        1
+                    } else {
+                        self.crlf_len
+                    };
+                    self.header_range.end = end_pos.saturating_sub(crlf);
                 }
+                self.state = State::Sequence;
+                break;
             }
-            self.block_counter += 1;
             self.pos_in_block = 0;
             position = self.block.newline;
         }
@@ -506,20 +508,13 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             let mut position = (self.block.is_dna | self.block.newline) & mask;
             while position == 0 {
                 self.make_room_record(self.global_pos());
-                match self.lexer.next() {
-                    Some(Ok(b)) => self.block.set::<CONFIG>(b),
-                    Some(Err(e)) => {
-                        self.finished = true;
-                        self.pending_error = Some(e);
+                if !self.next_block::<SCAN_MODE_DNA>() {
+                    if self.pending_error.is_some() {
                         return Some(self.return_error_or_none());
                     }
-                    None => {
-                        self.pos_in_block = self.block.len;
-                        self.finished = true;
-                        break;
-                    }
+                    self.pos_in_block = self.block.len;
+                    break;
                 }
-                self.block_counter += 1;
                 self.pos_in_block = 0;
                 position = self.block.is_dna | self.block.newline;
             }
@@ -676,11 +671,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
     }
 }
 
-impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CONFIG, I> {
-    type Item = Result<Event>;
-
+impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
     #[inline(always)]
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next_event(&mut self) -> Option<Result<Event>> {
         'parser_loop: loop {
             match self.state {
                 State::EmitRecord => {
@@ -740,23 +733,14 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                             if self.pos_in_block > 0 {
                                 self.make_room_record(line_start);
                                 self.append_dna_range(self.pos_in_block, 64 - self.pos_in_block);
-                                match self.lexer.next() {
-                                    Some(Ok(b)) => {
-                                        self.block.set::<CONFIG>(b);
-                                        self.block_counter += 1;
-                                        self.pos_in_block = 0;
-                                        position = !self.block.is_dna;
-                                    }
-                                    Some(Err(e)) => {
-                                        self.finished = true;
-                                        self.pending_error = Some(e);
-                                        return self.return_error_or_none();
-                                    }
-                                    None => {
-                                        self.pos_in_block = 64;
-                                        self.finished = true;
-                                        position = 1;
-                                    }
+                                if self.next_block::<SCAN_MODE_DNA>() {
+                                    self.pos_in_block = 0;
+                                    position = !self.block.is_dna;
+                                } else if self.pending_error.is_some() {
+                                    return self.return_error_or_none();
+                                } else {
+                                    self.pos_in_block = 64;
+                                    position = 1;
                                 }
                             }
                             let mut dna_blocks: usize = 0;
@@ -777,20 +761,13 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                                     dna_blocks = 15;
                                 }
 
-                                match self.lexer.next() {
-                                    Some(Ok(b)) => self.block.set::<CONFIG>(b),
-                                    Some(Err(e)) => {
-                                        self.finished = true;
-                                        self.pending_error = Some(e);
+                                if !self.next_block::<SCAN_MODE_DNA>() {
+                                    if self.pending_error.is_some() {
                                         return self.return_error_or_none();
                                     }
-                                    None => {
-                                        self.pos_in_block = 64;
-                                        self.finished = true;
-                                        break;
-                                    }
+                                    self.pos_in_block = 64;
+                                    break;
                                 }
-                                self.block_counter += 1;
                                 position = !self.block.is_dna;
                             }
                             if !self.finished {
@@ -834,23 +811,10 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
 
                         if self.pos_in_block >= self.block.len {
                             self.make_room_record(line_start);
-                            match self.lexer.next() {
-                                Some(Ok(b)) => {
-                                    self.block.set::<CONFIG>(b);
-                                    self.block_counter += 1;
-                                    self.pos_in_block = 0;
-                                }
-                                Some(Err(e)) => {
-                                    self.pending_error = Some(e);
-                                    self.finished = true;
-                                }
-                                None => {
-                                    self.finished = true;
-                                }
-                            }
-                            if self.finished {
+                            if !self.next_block::<SCAN_MODE_DNA>() {
                                 return self.finish_record_eof();
                             }
+                            self.pos_in_block = 0;
                         }
 
                         if flag_is_set(CONFIG, SPLIT_NON_ACTG)
@@ -914,5 +878,16 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CO
                 }
             }
         }
+    }
+}
+
+impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastaParser<'a, CONFIG, I> {
+    type Item = Result<Event>;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        let event = self.next_event();
+        self.bitpackers.pad::<CONFIG>();
+        event
     }
 }

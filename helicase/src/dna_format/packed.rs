@@ -1,4 +1,3 @@
-use core::cell::UnsafeCell;
 use core::fmt::{self, Write};
 
 #[cfg(feature = "packed-seq")]
@@ -8,23 +7,30 @@ type T = u64;
 const BITS_PER_BP: usize = 2;
 const BITS_PER_BLOCK: usize = T::BITS as usize;
 const BP_PER_BLOCK: usize = BITS_PER_BLOCK / BITS_PER_BP;
-#[cfg(feature = "packed-seq")]
-const PADDING: usize = 6; // 48 bytes / 8 bytes per u64 = 6 u64s
+const WORD_BYTES: usize = size_of::<T>();
+// `cur` followed by the 48 bytes of padding of `PackedSeq`
+const MARGIN: usize = if cfg!(feature = "packed-seq") {
+    1 + 6
+} else {
+    0
+};
 
 #[derive(Default)]
 pub struct PackedDNA {
-    bits: UnsafeCell<Vec<T>>,
+    bits: Vec<u8>,
     cur: T,
     num_bits: usize,
+    init_bytes: usize,
 }
 
 impl Clone for PackedDNA {
     fn clone(&self) -> Self {
-        Self {
-            bits: UnsafeCell::new(unsafe { &*self.bits.get() }.clone()),
-            cur: self.cur,
-            num_bits: self.num_bits,
-        }
+        let mut res = Self::with_capacity(self.num_words());
+        res.bits.extend_from_slice(&self.bits);
+        res.cur = self.cur;
+        res.num_bits = self.num_bits;
+        res.init_bytes = res.bits.len();
+        res
     }
 }
 
@@ -32,18 +38,20 @@ impl PackedDNA {
     #[inline(always)]
     pub const fn new() -> Self {
         Self {
-            bits: UnsafeCell::new(Vec::new()),
+            bits: Vec::new(),
             cur: 0,
             num_bits: 0,
+            init_bytes: 0,
         }
     }
 
     #[inline(always)]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            bits: UnsafeCell::new(Vec::with_capacity(capacity)),
+            bits: Vec::with_capacity((capacity + MARGIN) * WORD_BYTES),
             cur: 0,
             num_bits: 0,
+            init_bytes: 0,
         }
     }
 
@@ -59,18 +67,47 @@ impl PackedDNA {
 
     #[inline(always)]
     pub fn capacity(&self) -> usize {
-        unsafe { (*self.bits.get()).capacity() }
+        (self.bits.capacity() / WORD_BYTES).saturating_sub(MARGIN)
+    }
+
+    #[inline(always)]
+    fn num_words(&self) -> usize {
+        self.bits.len() / WORD_BYTES
+    }
+
+    #[inline(always)]
+    unsafe fn word_ptr(&mut self, word: usize) -> *mut T {
+        unsafe { self.bits.as_mut_ptr().add(word * WORD_BYTES) as *mut T }
+    }
+
+    #[inline(always)]
+    unsafe fn set_num_words(&mut self, num_words: usize) {
+        unsafe { self.bits.set_len(num_words * WORD_BYTES) }
+    }
+
+    #[inline(always)]
+    fn ensure_spare(&mut self, additional_words: usize) {
+        if self.bits.len() + (additional_words + MARGIN) * WORD_BYTES > self.bits.capacity() {
+            self.grow(additional_words);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn grow(&mut self, additional_words: usize) {
+        self.bits.reserve((additional_words + MARGIN) * WORD_BYTES);
+        // A reallocation only preserves the bytes in `0..len`.
+        self.init_bytes = self.bits.len();
     }
 
     #[inline(always)]
     pub fn reserve(&mut self, additional_bases: usize) {
-        let additional_words = additional_bases / BP_PER_BLOCK + 2;
-        self.bits.get_mut().reserve(additional_words);
+        self.ensure_spare(additional_bases / BP_PER_BLOCK + 2);
     }
 
     #[inline(always)]
     pub fn clear(&mut self) {
-        self.bits.get_mut().clear();
+        self.bits.clear();
         self.cur = 0;
         self.num_bits = 0;
     }
@@ -80,9 +117,11 @@ impl PackedDNA {
         if self.num_bits >= BITS_PER_BP {
             let rem = self.num_bits % BITS_PER_BLOCK;
             self.num_bits -= BITS_PER_BP;
-            let bits = self.bits.get_mut();
             if rem == 0 {
-                if let Some(last) = bits.pop() {
+                let last_word = self.num_words() - 1;
+                unsafe {
+                    let last = self.word_ptr(last_word).read_unaligned();
+                    self.set_num_words(last_word);
                     self.cur = last & ((1u64 << (BITS_PER_BLOCK - BITS_PER_BP)) - 1);
                 }
             } else if rem >= BITS_PER_BP {
@@ -93,27 +132,24 @@ impl PackedDNA {
 
     #[inline(always)]
     pub fn append_block(&mut self, packed: u128) {
+        self.ensure_spare(2);
         let lo = packed as u64;
         let hi = (packed >> 64) as u64;
         let rem = self.num_bits % BITS_PER_BLOCK;
         self.num_bits += 128;
-        let bits = self.bits.get_mut();
-        let len = bits.len();
-        if len + 2 > bits.capacity() {
-            bits.reserve(128);
-        }
+        let len = self.num_words();
         unsafe {
-            let ptr = bits.as_mut_ptr().add(len);
+            let ptr = self.word_ptr(len);
             if rem == 0 {
-                ptr.write(lo);
-                ptr.add(1).write(hi);
+                ptr.write_unaligned(lo);
+                ptr.add(1).write_unaligned(hi);
             } else {
                 let inv = BITS_PER_BLOCK - rem;
-                ptr.write(self.cur | (lo << rem));
-                ptr.add(1).write((lo >> inv) | (hi << rem));
+                ptr.write_unaligned(self.cur | (lo << rem));
+                ptr.add(1).write_unaligned((lo >> inv) | (hi << rem));
                 self.cur = hi >> inv;
             }
-            bits.set_len(len + 2);
+            self.set_num_words(len + 2);
         }
     }
 
@@ -123,18 +159,17 @@ impl PackedDNA {
         data: &[u8],
         q: usize,
     ) {
+        self.ensure_spare(2 * q);
         let rem = self.num_bits % BITS_PER_BLOCK;
         self.num_bits += 128 * q;
-        let bits = self.bits.get_mut();
-        let start_len = bits.len();
+        let start_len = self.num_words();
         unsafe {
-            bits.set_len(start_len + 2 * q);
-            let mut p = bits.as_mut_ptr().add(start_len);
+            let mut p = self.word_ptr(start_len);
             if rem == 0 {
                 for k in 0..q {
                     let m = crate::simd::extract_dna_bitmask::<CONFIG>(&data[64 * k..64 * (k + 1)]);
-                    p.write(m.two_bits as u64);
-                    p.add(1).write((m.two_bits >> 64) as u64);
+                    p.write_unaligned(m.two_bits as u64);
+                    p.add(1).write_unaligned((m.two_bits >> 64) as u64);
                     p = p.add(2);
                 }
             } else {
@@ -144,13 +179,14 @@ impl PackedDNA {
                     let m = crate::simd::extract_dna_bitmask::<CONFIG>(&data[64 * k..64 * (k + 1)]);
                     let lo = m.two_bits as u64;
                     let hi = (m.two_bits >> 64) as u64;
-                    p.write(cur | (lo << rem));
-                    p.add(1).write((lo >> inv) | (hi << rem));
+                    p.write_unaligned(cur | (lo << rem));
+                    p.add(1).write_unaligned((lo >> inv) | (hi << rem));
                     cur = hi >> inv;
                     p = p.add(2);
                 }
                 self.cur = cur;
             }
+            self.set_num_words(start_len + 2 * q);
         }
     }
 
@@ -179,9 +215,13 @@ impl PackedDNA {
         let x = val & mask;
         let rem = self.num_bits % BITS_PER_BLOCK;
         self.num_bits += num_bits;
-        let bits = self.bits.get_mut();
         if rem + num_bits >= BITS_PER_BLOCK {
-            bits.push(self.cur | (x << rem));
+            self.ensure_spare(1);
+            let len = self.num_words();
+            unsafe {
+                self.word_ptr(len).write_unaligned(self.cur | (x << rem));
+                self.set_num_words(len + 1);
+            }
             self.cur = if rem > 0 && num_bits > (BITS_PER_BLOCK - rem) {
                 x >> (BITS_PER_BLOCK - rem)
             } else {
@@ -194,20 +234,22 @@ impl PackedDNA {
 
     #[inline(always)]
     pub fn bits(&self) -> (&[T], T) {
-        let bits = unsafe { &*self.bits.get() };
-        (&bits[..self.num_bits / BITS_PER_BLOCK], self.cur)
+        let (prefix, words, _) = unsafe { self.bits.align_to::<T>() };
+        assert!(prefix.is_empty(), "unaligned PackedDNA buffer");
+        (words, self.cur)
     }
 
     #[inline(always)]
     pub fn get(&self, i: usize) -> u8 {
-        let bits = unsafe { &*self.bits.get() };
         let block_idx = i / BP_PER_BLOCK;
         let bit_offset = 2 * (i % BP_PER_BLOCK);
-        if block_idx < bits.len() {
-            ((bits[block_idx] >> bit_offset) & 0b11) as u8
+        let word = if block_idx < self.num_words() {
+            let bytes = &self.bits[block_idx * WORD_BYTES..(block_idx + 1) * WORD_BYTES];
+            T::from_ne_bytes(bytes.try_into().unwrap())
         } else {
-            ((self.cur >> bit_offset) & 0b11) as u8
-        }
+            self.cur
+        };
+        ((word >> bit_offset) & 0b11) as u8
     }
 
     #[inline(always)]
@@ -216,44 +258,67 @@ impl PackedDNA {
         LUT[self.get(i) as usize]
     }
 
+    /// Required before [`as_packed_seq`](Self::as_packed_seq), parsers call it after each event.
     #[cfg(feature = "packed-seq")]
     #[inline(always)]
-    pub(crate) fn ensure_padding(&self) {
-        let bits = unsafe { &mut *self.bits.get() };
-        let len = self.num_bits / BITS_PER_BLOCK;
-        bits.resize(len + 1 + PADDING, 0);
-        bits[len] = self.cur;
+    pub fn pad(&mut self) {
+        self.ensure_spare(0);
+        if self.init_bytes < self.bits.len() + MARGIN * WORD_BYTES {
+            self.init_padding();
+        }
+        let len = self.num_words();
+        unsafe { self.word_ptr(len).write_unaligned(self.cur) };
     }
 
     #[cfg(feature = "packed-seq")]
-    #[allow(clippy::missing_transmute_annotations)]
+    #[cold]
+    #[inline(never)]
+    fn init_padding(&mut self) {
+        let start = self.init_bytes.max(self.bits.len());
+        let end = self.bits.len() + MARGIN * WORD_BYTES;
+        unsafe { core::ptr::write_bytes(self.bits.as_mut_ptr().add(start), 0, end - start) };
+        self.init_bytes = end;
+    }
+
+    #[cfg(feature = "packed-seq")]
+    #[inline(always)]
+    fn padded_bytes(&self) -> &[u8] {
+        static EMPTY: [u8; MARGIN * WORD_BYTES] = [0; MARGIN * WORD_BYTES];
+        if self.bits.capacity() == 0 && self.num_bits == 0 {
+            return &EMPTY;
+        }
+        let len = self.bits.len();
+        let padded_len = len + MARGIN * WORD_BYTES;
+        assert!(
+            self.init_bytes >= padded_len,
+            "PackedDNA::pad must be called first"
+        );
+        // Safety: `init_bytes` is reset on reallocation, so these bytes are initialized.
+        let padded = unsafe { core::slice::from_raw_parts(self.bits.as_ptr(), padded_len) };
+        let stored_cur = T::from_ne_bytes(padded[len..len + WORD_BYTES].try_into().unwrap());
+        assert!(
+            stored_cur == self.cur,
+            "PackedDNA::pad must be called first"
+        );
+        padded
+    }
+
+    #[cfg(feature = "packed-seq")]
     #[inline(always)]
     pub fn as_packed_seq(&self) -> PackedSeq<'_> {
-        self.ensure_padding();
-        let bits = unsafe { &*self.bits.get() };
-        let len = self.len();
-        let data = bits.as_ptr() as *const u8;
-        let data_len = bits.len() * BITS_PER_BLOCK / 8;
-        let seq = unsafe { core::slice::from_raw_parts(data, data_len) };
-        PackedSeq::from_raw_parts(seq, 0, len)
+        PackedSeq::from_raw_parts(self.padded_bytes(), 0, self.len())
     }
 
     #[cfg(feature = "packed-seq")]
-    #[allow(
-        clippy::missing_transmute_annotations,
-        clippy::unsound_collection_transmute
-    )]
     #[inline(always)]
     pub fn into_packed_seq_vec(mut self) -> PackedSeqVec {
-        self.ensure_padding();
+        self.pad();
         let len = self.len();
-        let mut bits = core::mem::take(self.bits.get_mut());
-        let data_len = bits.len() * BITS_PER_BLOCK / 8;
-        let data_cap = bits.capacity() * BITS_PER_BLOCK / 8;
-        let data = bits.as_mut_ptr() as *mut u8;
-        core::mem::forget(bits);
-        let seq = unsafe { Vec::from_raw_parts(data, data_len, data_cap) };
-        PackedSeqVec::from_raw_parts(seq, len)
+        let padded_len = self.bits.len() + MARGIN * WORD_BYTES;
+        let mut bits = core::mem::take(&mut self.bits);
+        // Safety: `pad` initialized `cur` and the padding, `from_raw_parts` then only truncates.
+        unsafe { bits.set_len(padded_len) };
+        PackedSeqVec::from_raw_parts(bits, len)
     }
 }
 
@@ -414,5 +479,41 @@ mod tests {
         dna.pop_base();
         assert_eq!(dna.len(), 63 + 63);
         assert_eq!(format!("{dna}"), "A".repeat(63) + &"G".repeat(63));
+    }
+
+    #[cfg(feature = "packed-seq")]
+    #[test]
+    fn test_packed_seq_padding() {
+        use packed_seq::SeqVec;
+        let seq = "ACGT".repeat(20) + "TTG";
+        let mut dna = PackedDNA::new();
+        let (packed, num_bits) = encode(&seq[..60]);
+        dna.append(packed, num_bits);
+        let (packed, num_bits) = encode(&seq[60..]);
+        dna.append(packed, num_bits);
+        dna.pad();
+        let to_string = |s: PackedSeq| String::from_utf8(s.unpack()).unwrap();
+        assert_eq!(to_string(dna.as_packed_seq()), seq);
+        let mut copy = dna.clone();
+        copy.pad();
+        assert_eq!(to_string(copy.as_packed_seq()), seq);
+        dna.pop_base();
+        dna.pad();
+        assert_eq!(to_string(dna.as_packed_seq()), seq[..seq.len() - 1]);
+        assert_eq!(
+            to_string(dna.into_packed_seq_vec().as_slice()),
+            seq[..seq.len() - 1]
+        );
+        assert_eq!(to_string(PackedDNA::new().as_packed_seq()), "");
+    }
+
+    #[cfg(feature = "packed-seq")]
+    #[test]
+    #[should_panic]
+    fn test_packed_seq_requires_padding() {
+        let mut dna = PackedDNA::new();
+        dna.pad();
+        dna.append(0b11, 2);
+        dna.as_packed_seq();
     }
 }

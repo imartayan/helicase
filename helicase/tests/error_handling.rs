@@ -12,23 +12,42 @@ use std::io::Write;
 
 const CONFIG: Config = ParserOptions::default().compute_quality().config();
 
+fn count_events<P: Iterator<Item = Result<Event, Error>>>(parser: P) -> usize {
+    parser.collect::<Result<Vec<_>, _>>().unwrap().len()
+}
+
 #[test]
-fn test_error_empty_slice() {
-    // Empty input should fail initialization cleanly with ErrorKind::EmptyInput
-    match FastxParser::<CONFIG>::from_slice(b"") {
-        Err(e) => assert!(matches!(e.kind(), ErrorKind::EmptyInput)),
-        Ok(_) => panic!("Expected error for empty slice"),
-    }
-
-    match parser::FastaParser::<CONFIG, _>::from_slice(b"") {
-        Err(e) => assert!(matches!(e.kind(), ErrorKind::EmptyInput)),
-        Ok(_) => panic!("Expected error for empty slice"),
-    }
-
-    match parser::FastqParser::<CONFIG, _>::from_slice(b"") {
-        Err(e) => assert!(matches!(e.kind(), ErrorKind::EmptyInput)),
-        Ok(_) => panic!("Expected error for empty slice"),
-    }
+fn test_empty_input_yields_no_records() {
+    const PACKED: Config = ParserOptions::default().dna_packed().config();
+    let empty: &[u8] = b"";
+    assert_eq!(
+        count_events(FastxParser::<CONFIG>::from_slice(empty).unwrap()),
+        0
+    );
+    assert_eq!(
+        count_events(FastxParser::<PACKED>::from_slice(empty).unwrap()),
+        0
+    );
+    assert_eq!(
+        count_events(FastxParser::<CONFIG>::from_reader(empty).unwrap()),
+        0
+    );
+    assert_eq!(
+        count_events(FastxParser::<PACKED>::from_reader(empty).unwrap()),
+        0
+    );
+    assert_eq!(
+        count_events(parser::FastaParser::<CONFIG, _>::from_slice(empty).unwrap()),
+        0
+    );
+    assert_eq!(
+        count_events(parser::FastqParser::<CONFIG, _>::from_slice(empty).unwrap()),
+        0
+    );
+    assert_eq!(
+        count_events(parser::FastqParser::<PACKED, _>::from_reader(empty).unwrap()),
+        0
+    );
 }
 
 #[test]

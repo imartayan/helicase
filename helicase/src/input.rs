@@ -1,5 +1,6 @@
 //! Input types and helpers.
 
+use crate::parser::Result;
 use core::marker::PhantomData;
 use core::ops::Range;
 use deko::read::AnyDecoder;
@@ -224,7 +225,7 @@ pub trait InputData<'a>: Iterator<Item = io::Result<&'a [u8]>> {
 
 pub trait FromInputData<'a, I: InputData<'a>>: Sized {
     /// Build the struct from a type implementing [`InputData`].
-    fn from_input(input: I) -> io::Result<Self>;
+    fn from_input(input: I) -> Result<Self>;
 }
 
 /// Slice input.
@@ -237,9 +238,9 @@ pub struct SliceInput<'a> {
 }
 
 impl<'a> SliceInput<'a> {
-    pub fn new(data: &'a [u8]) -> io::Result<Self> {
+    pub fn new(data: &'a [u8]) -> Result<Self> {
         if data.is_empty() {
-            return Err(io::Error::other("Input data is empty"));
+            return Err(crate::parser::Error::empty_input());
         }
         let mut last_block = [0; 64];
         last_block[..data.len() % 64].copy_from_slice(&data[(data.len() / 64) * 64..]);
@@ -326,7 +327,7 @@ pub trait FromSlice<'a>: FromInputData<'a, SliceInput<'a>> {
     /// Build the struct from a slice.
     /// It does not support transparent decompression.
     #[inline(always)]
-    fn from_slice(data: &'a [u8]) -> io::Result<Self> {
+    fn from_slice(data: &'a [u8]) -> Result<Self> {
         Self::from_input(SliceInput::new(data)?)
     }
 }
@@ -341,7 +342,7 @@ pub struct MmapInput<'a> {
 }
 
 impl<'a> MmapInput<'a> {
-    pub fn new<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         // Unsafe: mmap are intrisically unsafe.
         // Here we add on the top of that a slice of [u8] that will live as long as file is not dropped.
         // To enforce this, we keep the file in the struct.
@@ -419,7 +420,7 @@ pub trait FromMmap<'a>: FromInputData<'a, MmapInput<'a>> {
     ///
     /// Also see [`from_file`](FromFile::from_file) to use a file reader.
     #[inline(always)]
-    fn from_file_mmap<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+    fn from_file_mmap<P: AsRef<Path>>(path: P) -> Result<Self> {
         Self::from_input(MmapInput::new(path)?)
     }
 }
@@ -797,7 +798,7 @@ pub trait FromReader<'a, R: Read + Send + 'a>: FromInputData<'a, ReaderInput<'a,
     /// Build the struct from a reader.
     /// It supports transparent decompression.
     #[inline(always)]
-    fn from_reader(reader: R) -> io::Result<Self> {
+    fn from_reader(reader: R) -> Result<Self> {
         Self::from_input(ReaderInput::new(reader)?)
     }
 }
@@ -821,7 +822,7 @@ pub trait FromFile: FromInputData<'static, FileInput> {
     ///
     /// Also see [`from_file_mmap`](FromMmap::from_file_mmap) to use a memory-mapped file.
     #[inline(always)]
-    fn from_file<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+    fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         Self::from_input(FileInput::open(path)?)
     }
 }

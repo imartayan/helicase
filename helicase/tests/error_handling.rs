@@ -5,7 +5,7 @@ use flate2::Compression;
 use flate2::write::GzEncoder;
 use helicase::config::*;
 use helicase::input::*;
-use helicase::parser::Event;
+use helicase::parser::{Error, ErrorKind, Event};
 use helicase::*;
 #[cfg(feature = "gz")]
 use std::io::Write;
@@ -14,10 +14,21 @@ const CONFIG: Config = ParserOptions::default().compute_quality().config();
 
 #[test]
 fn test_error_empty_slice() {
-    // Empty input should fail initialization cleanly
-    assert!(FastxParser::<CONFIG>::from_slice(b"").is_err());
-    assert!(parser::FastaParser::<CONFIG, _>::from_slice(b"").is_err());
-    assert!(parser::FastqParser::<CONFIG, _>::from_slice(b"").is_err());
+    // Empty input should fail initialization cleanly with ErrorKind::EmptyInput
+    match FastxParser::<CONFIG>::from_slice(b"") {
+        Err(e) => assert!(matches!(e.kind(), ErrorKind::EmptyInput)),
+        Ok(_) => panic!("Expected error for empty slice"),
+    }
+
+    match parser::FastaParser::<CONFIG, _>::from_slice(b"") {
+        Err(e) => assert!(matches!(e.kind(), ErrorKind::EmptyInput)),
+        Ok(_) => panic!("Expected error for empty slice"),
+    }
+
+    match parser::FastqParser::<CONFIG, _>::from_slice(b"") {
+        Err(e) => assert!(matches!(e.kind(), ErrorKind::EmptyInput)),
+        Ok(_) => panic!("Expected error for empty slice"),
+    }
 }
 
 #[test]
@@ -30,25 +41,104 @@ fn test_error_invalid_first_byte() {
     ];
 
     for input in invalid_inputs {
-        let res = FastxParser::<CONFIG>::from_slice(input);
-        assert!(
-            res.is_err(),
-            "Expected error for input starting with byte {:?}, but got Ok",
-            input.first()
-        );
+        match FastxParser::<CONFIG>::from_slice(input) {
+            Err(e) => assert!(matches!(
+                e.kind(),
+                ErrorKind::InvalidRecordStart {
+                    expected: _,
+                    found: _
+                }
+            )),
+            Ok(_) => panic!(
+                "Expected error for input starting with byte {:?}, but got Ok",
+                input.first()
+            ),
+        }
     }
 }
 
 #[test]
 fn test_error_fasta_wrong_start_byte() {
-    let res = parser::FastaParser::<CONFIG, _>::from_slice(b"@fastq_header\nACGT\n");
-    assert!(res.is_err());
+    match parser::FastaParser::<CONFIG, _>::from_slice(b"@fastq_header\nACGT\n") {
+        Err(e) => assert!(matches!(
+            e.kind(),
+            ErrorKind::InvalidRecordStart {
+                expected: "'>'",
+                found: b'@'
+            }
+        )),
+        Ok(_) => panic!("Expected error for wrong start byte"),
+    }
 }
 
 #[test]
 fn test_error_fastq_wrong_start_byte() {
-    let res = parser::FastqParser::<CONFIG, _>::from_slice(b">fasta_header\nACGT\n");
+    match parser::FastqParser::<CONFIG, _>::from_slice(b">fasta_header\nACGT\n") {
+        Err(e) => assert!(matches!(
+            e.kind(),
+            ErrorKind::InvalidRecordStart {
+                expected: "'@'",
+                found: b'>'
+            }
+        )),
+        Ok(_) => panic!("Expected error for wrong start byte"),
+    }
+}
+
+#[test]
+fn test_error_size_is_pointer_sized() {
+    assert_eq!(std::mem::size_of::<Error>(), std::mem::size_of::<usize>());
+    assert_eq!(
+        std::mem::size_of::<Result<Event, Error>>(),
+        std::mem::size_of::<Event>()
+    );
+}
+
+#[test]
+fn test_truncated_record_error() {
+    // Truncated in header (no trailing newline)
+    let raw = b"@header_no_newline";
+    let mut parser = parser::FastqParser::<CONFIG, _>::from_slice(raw).unwrap();
+    let res = parser.next().unwrap();
     assert!(res.is_err());
+    assert!(matches!(
+        res.unwrap_err().kind(),
+        ErrorKind::TruncatedRecord
+    ));
+    assert!(parser.next().is_none());
+
+    // Truncated in sequence (seq ends without newline or plus)
+    let raw = b"@h\nACGT";
+    let mut parser = parser::FastqParser::<CONFIG, _>::from_slice(raw).unwrap();
+    let res = parser.next().unwrap();
+    assert!(res.is_err());
+    assert!(matches!(
+        res.unwrap_err().kind(),
+        ErrorKind::TruncatedRecord
+    ));
+    assert!(parser.next().is_none());
+
+    // Truncated in plus line
+    let raw = b"@h\nACGT\n+";
+    let mut parser = parser::FastqParser::<CONFIG, _>::from_slice(raw).unwrap();
+    let res = parser.next().unwrap();
+    assert!(res.is_err());
+    assert!(matches!(
+        res.unwrap_err().kind(),
+        ErrorKind::TruncatedRecord
+    ));
+    assert!(parser.next().is_none());
+
+    // Truncated in quality (seq has 4 bp, but qual only has 2 bytes before EOF)
+    let raw = b"@h\nACGT\n+\nII";
+    let mut parser = parser::FastqParser::<CONFIG, _>::from_slice(raw).unwrap();
+    let res = parser.next().unwrap();
+    assert!(res.is_err());
+    assert!(matches!(
+        res.unwrap_err().kind(),
+        ErrorKind::TruncatedRecord
+    ));
+    assert!(parser.next().is_none());
 }
 
 #[test]

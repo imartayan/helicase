@@ -2,7 +2,7 @@
 
 use crate::config::{advanced::*, *};
 use crate::input::*;
-use crate::parser::DnaBitpackers;
+use crate::parser::{DnaBitpackers, Result};
 use crate::simd::extract_bitmask;
 use core::marker::PhantomData;
 use std::io;
@@ -114,7 +114,7 @@ pub struct Lexer<'a, const CONFIG: Config, I: InputData<'a>> {
 }
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> FromInputData<'a, I> for Lexer<'a, CONFIG, I> {
-    fn from_input(input: I) -> io::Result<Self> {
+    fn from_input(input: I) -> Result<Self> {
         Ok(Self {
             input,
             _phantom: PhantomData,

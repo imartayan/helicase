@@ -105,10 +105,10 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
 impl<'a, const CONFIG: Config, I: InputData<'a>> FromInputData<'a, I>
     for FastqParser<'a, CONFIG, I>
 {
-    fn from_input(input: I) -> io::Result<Self> {
+    fn from_input(input: I) -> Result<Self> {
         let lexer = Lexer::from_input(input)?;
         if lexer.input.first_byte() != b'@' {
-            return Err(io::Error::other("Invalid record start, expected '@'"));
+            return Err(Error::invalid_record_start("'@'", lexer.input.first_byte()));
         }
         Ok(Self::from_lexer(lexer))
     }
@@ -281,7 +281,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
 impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
     #[inline(always)]
     fn return_error_or_none(&mut self) -> Option<Result<Event>> {
-        self.pending_error.take().map(Err)
+        self.pending_error.take().map(Error::from).map(Err)
     }
 
     #[inline(always)]
@@ -426,7 +426,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                         }
                         None => {
                             self.finished = true;
-                            return self.return_error_or_none();
+                            return Some(Err(Error::truncated_record()));
                         }
                     }
                     self.block_counter += 1;
@@ -472,7 +472,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                                 }
                                 None => {
                                     self.finished = true;
-                                    return self.return_error_or_none();
+                                    return Some(Err(Error::truncated_record()));
                                 }
                             }
                             self.block_counter += 1;
@@ -521,7 +521,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                                 }
                                 None => {
                                     self.finished = true;
-                                    return self.return_error_or_none();
+                                    return Some(Err(Error::truncated_record()));
                                 }
                             }
                             self.block_counter += 1;
@@ -554,7 +554,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                                 }
                                 None => {
                                     self.finished = true;
-                                    return self.return_error_or_none();
+                                    return Some(Err(Error::truncated_record()));
                                 }
                             }
                             self.block_counter += 1;
@@ -616,7 +616,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                     }
                     None => {
                         self.finished = true;
-                        return self.return_error_or_none();
+                        return Some(Err(Error::truncated_record()));
                     }
                 }
                 self.block_counter += 1;
@@ -652,6 +652,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                     keep_anchor,
                 );
             }
+            let mut qual_hit_eof = false;
             while self.block.newline == 0 {
                 self.make_room_record();
                 self.make_room_quality();
@@ -664,6 +665,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
                     }
                     None => {
                         self.finished = true;
+                        qual_hit_eof = true;
                         break;
                     }
                 }
@@ -674,6 +676,11 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for FastqParser<'a, CO
             if flag_is_set(CONFIG, COMPUTE_QUALITY) {
                 self.pos_in_block = self.pos_in_block.min(self.block.len);
                 self.quality_range.end = self.global_pos().saturating_sub(self.crlf_len);
+            }
+            if qual_hit_eof
+                && self.global_pos().saturating_sub(self.crlf_len) < qual_start + seq_len
+            {
+                return Some(Err(Error::truncated_record()));
             }
             self.make_room_record_end();
             self.make_room_quality_end();

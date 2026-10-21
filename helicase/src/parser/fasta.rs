@@ -109,10 +109,10 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
 impl<'a, const CONFIG: Config, I: InputData<'a>> FromInputData<'a, I>
     for FastaParser<'a, CONFIG, I>
 {
-    fn from_input(input: I) -> io::Result<Self> {
+    fn from_input(input: I) -> Result<Self> {
         let lexer = Lexer::from_input(input)?;
         if lexer.input.first_byte() != b'>' {
-            return Err(io::Error::other("Invalid record start, expected '>'"));
+            return Err(Error::invalid_record_start("'>'", lexer.input.first_byte()));
         }
         Ok(Self::from_lexer(lexer))
     }
@@ -283,7 +283,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastaParser<
 impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
     #[inline(always)]
     fn return_error_or_none(&mut self) -> Option<Result<Event>> {
-        self.pending_error.take().map(Err)
+        self.pending_error.take().map(Error::from).map(Err)
     }
 
     #[inline(always)]

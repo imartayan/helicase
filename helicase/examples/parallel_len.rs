@@ -22,7 +22,7 @@ fn collect_record_lengths(
     ParallelFastxParser::<CONFIG>::from_file(path)?
         .threads(threads)
         .for_each(|mut parser| {
-            LOCAL_BUF.with_borrow_mut(|buf| -> std::io::Result<()> {
+            LOCAL_BUF.with_borrow_mut(|buf| -> parser::Result<()> {
                 buf.clear(); // Reuses allocated capacity across chunks on this thread
                 while let Some(event) = parser.next() {
                     event?;

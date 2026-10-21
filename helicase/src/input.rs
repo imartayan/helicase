@@ -733,7 +733,6 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
         if let ReaderDecoder::Deko(decoder) = &mut self.decoder {
             let format = decoder.kind()?;
             let mapped = match format {
-                deko::Format::Verbatim => None,
                 #[cfg(feature = "bz2")]
                 deko::Format::Bz => Some(CompressionFormat::Bzip2),
                 #[cfg(feature = "xz")]

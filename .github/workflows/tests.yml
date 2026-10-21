@@ -22,7 +22,18 @@ jobs:
         uses: actions/checkout@v4
       - name: Setup Rust (stable)
         uses: dtolnay/rust-toolchain@stable
+      - name: Get CPU identifier
+        id: cpu
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            echo "id=$(grep -m1 'model name' /proc/cpuinfo | md5sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+          else
+            echo "id=$(sysctl -n machdep.cpu.brand_string | md5 | cut -c1-12)" >> "$GITHUB_OUTPUT"
+          fi
       - name: Configure cache
         uses: Swatinem/rust-cache@v2
+        with:
+          key: cpu-${{ steps.cpu.outputs.id }}
       - name: Run tests
         run: cargo test -p helicase --lib --no-default-features

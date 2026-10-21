@@ -22,13 +22,15 @@ fn collect_record_lengths(
     ParallelFastxParser::<CONFIG>::from_file(path)?
         .threads(threads)
         .for_each(|mut parser| {
-            LOCAL_BUF.with_borrow_mut(|buf| {
+            LOCAL_BUF.with_borrow_mut(|buf| -> std::io::Result<()> {
                 buf.clear(); // Reuses allocated capacity across chunks on this thread
-                while let Some(Ok(_event)) = parser.next() {
+                while let Some(event) = parser.next() {
+                    event?;
                     buf.push(parser.get_dna_len());
                 }
                 dest.lock().unwrap().extend_from_slice(buf);
-            });
+                Ok(())
+            })
         })?;
 
     Ok(dest.into_inner().unwrap())

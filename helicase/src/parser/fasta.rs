@@ -20,23 +20,26 @@ enum State {
 ///
 /// ```rust,no_run
 /// use helicase::input::*;
+/// use helicase::parser::FastaParser;
 /// use helicase::*;
 ///
 /// // set the options of the parser (at compile-time)
 /// const CONFIG: Config = ParserOptions::default().config();
 ///
-/// fn main() {
+/// fn main() -> std::io::Result<()> {
 ///     let path = "...";
 ///
 ///     // create a parser with the desired options
-///     let mut parser = FastaParser::<CONFIG, _>::from_file(&path).expect("Cannot open file");
+///     let mut parser = FastaParser::<CONFIG, _>::from_file(&path)?;
 ///
 ///     // iterate over records
-///     while let Some(_event) = parser.next() {
+///     while let Some(event) = parser.next() {
+///         event?;
 ///         let header = parser.get_header();
 ///         let seq = parser.get_dna_string();
 ///         // ...
 ///     }
+///     Ok(())
 /// }
 /// ```
 pub struct FastaParser<'a, const CONFIG: Config, I: InputData<'a>> {

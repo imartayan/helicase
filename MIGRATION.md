@@ -135,40 +135,9 @@ Helicase implements `paraseq::Record` for `&FastxParser`, so `record.seq_raw()` 
 
 Helicase native parallel parsing uses closures instead of processor traits.
 
-#### `reduce` for aggregations
-
-Instead of atomic counters or shared mutexes, use `reduce` with a thread-local accumulator:
-
-```rust
-use helicase::config::*;
-use helicase::*;
-
-const CONFIG: Config = ParserOptions::default().ignore_headers().config();
-
-fn main() -> std::io::Result<()> {
-    let (total_records, total_len) = ParallelFastxParser::<CONFIG>::from_file("reads.fastq")?
-        .threads(8)
-        .reduce(
-            |mut parser| {
-                let mut records = 0;
-                let mut len = 0;
-                while let Some(Ok(_event)) = parser.next() {
-                    records += 1;
-                    len += parser.get_dna_len();
-                }
-                (records, len)
-            },
-            |acc, val| (acc.0 + val.0, acc.1 + val.1),
-        )?;
-
-    println!("Records: {total_records}, Total len: {total_len}");
-    Ok(())
-}
-```
-
 #### `for_each` for batching
 
-To collect results into a shared buffer across threads:
+To process records or collect results into a shared buffer across threads with error propagation:
 
 ```rust
 use helicase::config::*;
@@ -184,13 +153,47 @@ fn main() -> std::io::Result<()> {
         .threads(8)
         .for_each(|mut parser| {
             let mut local = Vec::with_capacity(1024);
-            while let Some(Ok(_event)) = parser.next() {
+            while let Some(event) = parser.next() {
+                event?;
                 local.push(parser.get_dna_len());
             }
             dest.lock().unwrap().extend_from_slice(&local);
+            Ok(())
         })?;
 
     let all_lengths = dest.into_inner().unwrap();
+    Ok(())
+}
+```
+
+#### `reduce` for aggregations
+
+Instead of atomic counters or shared mutexes, use `reduce` with a thread-local accumulator and error propagation:
+
+```rust
+use helicase::config::*;
+use helicase::*;
+
+const CONFIG: Config = ParserOptions::default().ignore_headers().config();
+
+fn main() -> std::io::Result<()> {
+    let (total_records, total_len) = ParallelFastxParser::<CONFIG>::from_file("reads.fastq")?
+        .threads(8)
+        .reduce(
+            |mut parser| {
+                let mut records = 0;
+                let mut len = 0;
+                while let Some(event) = parser.next() {
+                    event?;
+                    records += 1;
+                    len += parser.get_dna_len();
+                }
+                Ok((records, len))
+            },
+            |acc, val| (acc.0 + val.0, acc.1 + val.1),
+        )?;
+
+    println!("Records: {total_records}, Total len: {total_len}");
     Ok(())
 }
 ```

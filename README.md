@@ -150,7 +150,8 @@ fn main() -> std::io::Result<()> {
     let mut parser = FastxParser::<CONFIG>::from_file(&path)?;
 
     // iterate over each chunk of ACTG bases
-    while let Some(_event) = parser.next() {
+    while let Some(event) = parser.next() {
+        event?;
         // headers are still accessible between chunks
         let header = parser.get_header();
 
@@ -185,11 +186,13 @@ fn main() -> std::io::Result<()> {
     ParallelFastxParser::<CONFIG>::from_file(&path)?
         .threads(8)
         .for_each(|mut parser| {
-            while let Some(_event) = parser.next() {
+            while let Some(event) = parser.next() {
+                event?;
                 let header = parser.get_header();
                 let seq = parser.get_dna_string();
                 // ...
             }
+            Ok(())
         })?;
 
     Ok(())
@@ -204,10 +207,11 @@ let total_len: usize = ParallelFastxParser::<CONFIG>::from_file(&path)?
     .reduce(
         |mut parser| {
             let mut local_len = 0;
-            while let Some(_event) = parser.next() {
+            while let Some(event) = parser.next() {
+                event?;
                 local_len += parser.get_dna_string().len();
             }
-            local_len
+            Ok(local_len)
         },
         |acc, val| acc + val,
     )?;

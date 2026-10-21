@@ -76,10 +76,11 @@ pub fn bench_helicase_parallel(
             .reduce(
                 |mut parser| {
                     let mut len = 0;
-                    while parser.next().is_some() {
+                    while let Some(event) = parser.next() {
+                        event?;
                         len += parser.get_dna_string().len();
                     }
-                    len
+                    Ok(len)
                 },
                 |a, b| a + b,
             )
@@ -96,10 +97,11 @@ pub fn bench_helicase_parallel(
             .reduce(
                 |mut parser| {
                     let mut len = 0;
-                    while parser.next().is_some() {
+                    while let Some(event) = parser.next() {
+                        event?;
                         len += parser.get_dna_string().len();
                     }
-                    len
+                    Ok(len)
                 },
                 |a, b| a + b,
             )
@@ -126,10 +128,11 @@ pub fn bench_helicase_packed(
             .reduce(
                 |mut parser| {
                     let mut len = 0;
-                    while parser.next().is_some() {
+                    while let Some(event) = parser.next() {
+                        event?;
                         len += parser.get_dna_packed().len();
                     }
-                    len
+                    Ok(len)
                 },
                 |a, b| a + b,
             )
@@ -146,10 +149,11 @@ pub fn bench_helicase_packed(
             .reduce(
                 |mut parser| {
                     let mut len = 0;
-                    while parser.next().is_some() {
+                    while let Some(event) = parser.next() {
+                        event?;
                         len += parser.get_dna_packed().len();
                     }
-                    len
+                    Ok(len)
                 },
                 |a, b| a + b,
             )
@@ -218,10 +222,11 @@ pub fn bench_helicase_file_parallel(
             .reduce(
                 |mut parser| {
                     let mut len = 0;
-                    while parser.next().is_some() {
+                    while let Some(event) = parser.next() {
+                        event?;
                         len += parser.get_dna_string().len();
                     }
-                    len
+                    Ok(len)
                 },
                 |a, b| a + b,
             )
@@ -244,10 +249,11 @@ pub fn bench_helicase_file_parallel(
             .reduce(
                 |mut parser| {
                     let mut len = 0;
-                    while parser.next().is_some() {
+                    while let Some(event) = parser.next() {
+                        event?;
                         len += parser.get_dna_string().len();
                     }
-                    len
+                    Ok(len)
                 },
                 |a, b| a + b,
             )
@@ -595,10 +601,11 @@ pub fn run_parallel_file_benchmarks(
                 .reduce(
                     |mut parser| {
                         let mut len = 0;
-                        while parser.next().is_some() {
+                        while let Some(event) = parser.next() {
+                            event?;
                             len += parser.get_dna_string().len();
                         }
-                        len
+                        Ok(len)
                     },
                     |a, b| a + b,
                 )
@@ -613,10 +620,11 @@ pub fn run_parallel_file_benchmarks(
                 .reduce(
                     |mut parser| {
                         let mut len = 0;
-                        while parser.next().is_some() {
+                        while let Some(event) = parser.next() {
+                            event?;
                             len += parser.get_dna_string().len();
                         }
-                        len
+                        Ok(len)
                     },
                     |a, b| a + b,
                 )
@@ -834,10 +842,11 @@ pub fn run_parallel_mmap_benchmarks(
                 .reduce(
                     |mut parser| {
                         let mut len = 0;
-                        while parser.next().is_some() {
+                        while let Some(event) = parser.next() {
+                            event?;
                             len += parser.get_dna_string().len();
                         }
-                        len
+                        Ok(len)
                     },
                     |a, b| a + b,
                 )
@@ -852,10 +861,11 @@ pub fn run_parallel_mmap_benchmarks(
                 .reduce(
                     |mut parser| {
                         let mut len = 0;
-                        while parser.next().is_some() {
+                        while let Some(event) = parser.next() {
+                            event?;
                             len += parser.get_dna_string().len();
                         }
-                        len
+                        Ok(len)
                     },
                     |a, b| a + b,
                 )

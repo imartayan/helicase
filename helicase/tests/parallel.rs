@@ -23,10 +23,11 @@ fn test_parallel_fasta_unwrapped() {
             .reduce(
                 |mut parser| {
                     let mut len = 0;
-                    while let Some(_) = parser.next() {
+                    while let Some(event) = parser.next() {
+                        event?;
                         len += parser.get_dna_string().len();
                     }
-                    len
+                    Ok(len)
                 },
                 |a, b| a + b,
             )
@@ -54,10 +55,11 @@ fn test_parallel_fasta_wrapped() {
             .reduce(
                 |mut parser| {
                     let mut len = 0;
-                    while let Some(_) = parser.next() {
+                    while let Some(event) = parser.next() {
+                        event?;
                         len += parser.get_dna_string().len();
                     }
-                    len
+                    Ok(len)
                 },
                 |a, b| a + b,
             )
@@ -89,11 +91,12 @@ fn test_parallel_fastq_with_at_qualities() {
                 |mut parser| {
                     let mut recs = 0;
                     let mut len = 0;
-                    while let Some(_) = parser.next() {
+                    while let Some(event) = parser.next() {
+                        event?;
                         recs += 1;
                         len += parser.get_dna_string().len();
                     }
-                    (recs, len)
+                    Ok((recs, len))
                 },
                 |a, b| (a.0 + b.0, a.1 + b.1),
             )
@@ -127,10 +130,11 @@ fn test_parallel_packed_and_columnar() {
             .reduce(
                 |mut parser| {
                     let mut len = 0;
-                    while let Some(_) = parser.next() {
+                    while let Some(event) = parser.next() {
+                        event?;
                         len += parser.get_dna_packed().len();
                     }
-                    len
+                    Ok(len)
                 },
                 |a, b| a + b,
             )
@@ -141,10 +145,11 @@ fn test_parallel_packed_and_columnar() {
             .reduce(
                 |mut parser| {
                     let mut len = 0;
-                    while let Some(_) = parser.next() {
+                    while let Some(event) = parser.next() {
+                        event?;
                         len += parser.get_dna_columnar().len();
                     }
-                    len
+                    Ok(len)
                 },
                 |a, b| a + b,
             )
@@ -167,10 +172,11 @@ fn test_parallel_giant_chromosome_spanning_chunks() {
             .reduce(
                 |mut parser| {
                     let mut c = 0;
-                    for _ in parser.by_ref() {
+                    for event in parser.by_ref() {
+                        event?;
                         c += 1;
                     }
-                    c
+                    Ok(c)
                 },
                 |a, b| a + b,
             )
@@ -203,10 +209,11 @@ fn test_parallel_file_parsing() {
             .reduce(
                 |mut parser| {
                     let mut len = 0;
-                    while let Some(_) = parser.next() {
+                    while let Some(event) = parser.next() {
+                        event?;
                         len += parser.get_dna_string().len();
                     }
-                    len
+                    Ok(len)
                 },
                 |a, b| a + b,
             )
@@ -242,10 +249,11 @@ fn test_parallel_multi_reader_file_parsing() {
             .reduce(
                 |mut parser| {
                     let mut len = 0;
-                    while let Some(_) = parser.next() {
+                    while let Some(event) = parser.next() {
+                        event?;
                         len += parser.get_dna_string().len();
                     }
-                    len
+                    Ok(len)
                 },
                 |a, b| a + b,
             )
@@ -278,10 +286,11 @@ fn test_parallel_multi_reader_file_parsing() {
             .reduce(
                 |mut parser| {
                     let mut len = 0;
-                    while let Some(_) = parser.next() {
+                    while let Some(event) = parser.next() {
+                        event?;
                         len += parser.get_dna_string().len();
                     }
-                    len
+                    Ok(len)
                 },
                 |a, b| a + b,
             )
@@ -308,10 +317,11 @@ fn test_parallel_fastx_parser_builder() {
         .reduce(
             |mut p| {
                 let mut len = 0;
-                while let Some(_) = p.next() {
+                while let Some(event) = p.next() {
+                    event?;
                     len += p.get_dna_string().len();
                 }
-                len
+                Ok(len)
             },
             |a, b| a + b,
         )
@@ -325,10 +335,11 @@ fn test_parallel_fastx_parser_builder() {
         .reduce(
             |mut parser| {
                 let mut len = 0;
-                while let Some(_) = parser.next() {
+                while let Some(event) = parser.next() {
+                    event?;
                     len += parser.get_dna_string().len();
                 }
-                len
+                Ok(len)
             },
             |a, b| a + b,
         )
@@ -341,10 +352,11 @@ fn test_parallel_fastx_parser_builder() {
         .reduce(
             |mut parser| {
                 let mut c = 0;
-                for _ in parser.by_ref() {
+                for event in parser.by_ref() {
+                    event?;
                     c += 1;
                 }
-                c
+                Ok(c)
             },
             |a, b| a + b,
         )
@@ -358,10 +370,11 @@ fn test_parallel_fastx_parser_builder() {
         .reduce(
             |mut parser| {
                 let mut len = 0;
-                while let Some(_) = parser.next() {
+                while let Some(event) = parser.next() {
+                    event?;
                     len += parser.get_dna_string().len();
                 }
-                len
+                Ok(len)
             },
             |a, b| a + b,
         )
@@ -375,10 +388,11 @@ fn test_parallel_fastx_parser_builder() {
         .reduce(
             |mut parser| {
                 let mut len = 0;
-                while let Some(_) = parser.next() {
+                while let Some(event) = parser.next() {
+                    event?;
                     len += parser.get_dna_string().len();
                 }
-                len
+                Ok(len)
             },
             |a, b| a + b,
         )
@@ -459,11 +473,12 @@ fn test_parallel_records_fewer_than_threads() {
                         |mut parser| {
                             let mut recs = 0;
                             let mut bases = 0;
-                            while let Some(_event) = parser.next() {
+                            while let Some(event) = parser.next() {
+                                event?;
                                 recs += 1;
                                 bases += parser.get_dna_string().len();
                             }
-                            (recs, bases)
+                            Ok((recs, bases))
                         },
                         |acc, val| (acc.0 + val.0, acc.1 + val.1),
                     )
@@ -480,11 +495,12 @@ fn test_parallel_records_fewer_than_threads() {
                         |mut parser| {
                             let mut recs = 0;
                             let mut bases = 0;
-                            while let Some(_event) = parser.next() {
+                            while let Some(event) = parser.next() {
+                                event?;
                                 recs += 1;
                                 bases += parser.get_dna_string().len();
                             }
-                            (recs, bases)
+                            Ok((recs, bases))
                         },
                         |acc, val| (acc.0 + val.0, acc.1 + val.1),
                     )
@@ -502,11 +518,12 @@ fn test_parallel_records_fewer_than_threads() {
                             |mut parser| {
                                 let mut recs = 0;
                                 let mut bases = 0;
-                                while let Some(_event) = parser.next() {
+                                while let Some(event) = parser.next() {
+                                    event?;
                                     recs += 1;
                                     bases += parser.get_dna_string().len();
                                 }
-                                (recs, bases)
+                                Ok((recs, bases))
                             },
                             |acc, val| (acc.0 + val.0, acc.1 + val.1),
                         )

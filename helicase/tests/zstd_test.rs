@@ -50,11 +50,12 @@ mod tests {
                     |mut parser| {
                         let mut count = 0;
                         let mut len = 0;
-                        while parser.next().is_some() {
+                        while let Some(event) = parser.next() {
+                            event?;
                             count += 1;
                             len += parser.get_dna_len();
                         }
-                        (count, len)
+                        Ok((count, len))
                     },
                     |a, b| (a.0 + b.0, a.1 + b.1),
                 )
@@ -115,11 +116,12 @@ mod tests {
                     |mut parser| {
                         let mut count = 0;
                         let mut len = 0;
-                        while parser.next().is_some() {
+                        while let Some(event) = parser.next() {
+                            event?;
                             count += 1;
                             len += parser.get_dna_len();
                         }
-                        (count, len)
+                        Ok((count, len))
                     },
                     |a, b| (a.0 + b.0, a.1 + b.1),
                 )
@@ -148,11 +150,12 @@ mod tests {
                     |mut parser| {
                         let mut count = 0;
                         let mut len = 0;
-                        while parser.next().is_some() {
+                        while let Some(event) = parser.next() {
+                            event?;
                             count += 1;
                             len += parser.get_dna_len();
                         }
-                        (count, len)
+                        Ok((count, len))
                     },
                     |a, b| (a.0 + b.0, a.1 + b.1),
                 )
@@ -194,7 +197,8 @@ mod tests {
                             let mut count = 0;
                             let mut len = 0;
                             let mut recs = Vec::new();
-                            while parser.next().is_some() {
+                            while let Some(event) = parser.next() {
+                                event?;
                                 count += 1;
                                 len += parser.get_dna_len();
                                 recs.push((
@@ -202,7 +206,7 @@ mod tests {
                                     parser.get_dna_string().to_vec(),
                                 ));
                             }
-                            (count, len, recs)
+                            Ok((count, len, recs))
                         },
                         |mut a, b| {
                             a.0 += b.0;
@@ -254,11 +258,12 @@ mod tests {
                         |mut parser| {
                             let mut count = 0;
                             let mut len = 0;
-                            while parser.next().is_some() {
+                            while let Some(event) = parser.next() {
+                                event?;
                                 count += 1;
                                 len += parser.get_dna_len();
                             }
-                            (count, len)
+                            Ok((count, len))
                         },
                         |a, b| (a.0 + b.0, a.1 + b.1),
                     )
@@ -311,11 +316,12 @@ mod tests {
                     |mut parser| {
                         let mut count = 0;
                         let mut len = 0;
-                        while parser.next().is_some() {
+                        while let Some(event) = parser.next() {
+                            event?;
                             count += 1;
                             len += parser.get_dna_len();
                         }
-                        (count, len)
+                        Ok((count, len))
                     },
                     |a, b| (a.0 + b.0, a.1 + b.1),
                 )

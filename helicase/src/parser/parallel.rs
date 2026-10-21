@@ -6,7 +6,7 @@
 use super::*;
 use crate::config::*;
 use crate::input::*;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -127,10 +127,10 @@ fn par_for_each_chunk<const CONFIG: Config, State, Process, Reduce>(
     num_threads: usize,
     process: Process,
     reduce: Reduce,
-) -> io::Result<State>
+) -> Result<State>
 where
     State: Send + Default,
-    Process: Fn(FastxParser<'_, CONFIG>) -> State + Sync,
+    Process: Fn(FastxParser<'_, CONFIG>) -> Result<State> + Sync,
     Reduce: Fn(State, State) -> State + Sync,
 {
     if data.is_empty() {
@@ -142,7 +142,7 @@ where
     let threads = num_threads.max(1);
     if threads == 1 || data.len() < 32 * 1024 {
         let parser = FastxParser::from_slice(data)?;
-        return Ok(process(parser));
+        return process(parser);
     }
 
     let num_chunks = (threads * 4).min((data.len() / (16 * 1024)).max(1));
@@ -153,34 +153,44 @@ where
 
     if chunks.len() == 1 {
         let parser = FastxParser::from_slice(data)?;
-        return Ok(process(parser));
+        return process(parser);
     }
 
     let worker_threads = threads.min(chunks.len());
     let next_chunk = AtomicUsize::new(0);
+    let stop_flag = AtomicBool::new(false);
     let process = &process;
     let reduce = &reduce;
+    let stop_flag_ref = &stop_flag;
 
     let results = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..worker_threads)
             .map(|_| {
-                scope.spawn(|| {
+                scope.spawn(|| -> Result<Option<State>> {
                     let mut thread_state: Option<State> = None;
                     loop {
+                        if stop_flag_ref.load(Ordering::Relaxed) {
+                            break;
+                        }
                         let idx = next_chunk.fetch_add(1, Ordering::Relaxed);
                         if idx >= chunks.len() {
                             break;
                         }
                         let (start, end) = chunks[idx];
-                        if let Ok(parser) = FastxParser::from_slice(&data[start..end]) {
-                            let chunk_res = process(parser);
-                            thread_state = Some(match thread_state {
-                                Some(acc) => reduce(acc, chunk_res),
-                                None => chunk_res,
-                            });
-                        }
+                        let parser = FastxParser::from_slice(&data[start..end])?;
+                        let chunk_res = match process(parser) {
+                            Ok(res) => res,
+                            Err(e) => {
+                                stop_flag_ref.store(true, Ordering::Relaxed);
+                                return Err(e);
+                            }
+                        };
+                        thread_state = Some(match thread_state {
+                            Some(acc) => reduce(acc, chunk_res),
+                            None => chunk_res,
+                        });
                     }
-                    thread_state
+                    Ok(thread_state)
                 })
             })
             .collect();
@@ -191,12 +201,28 @@ where
             .collect::<Vec<_>>()
     });
 
+    let mut first_err = None;
     let mut total: Option<State> = None;
-    for result in results.into_iter().flatten() {
-        total = Some(match total {
-            Some(acc) => reduce(acc, result),
-            None => result,
-        });
+    for result in results {
+        match result {
+            Ok(Some(res)) => {
+                if first_err.is_none() {
+                    total = Some(match total {
+                        Some(acc) => reduce(acc, res),
+                        None => res,
+                    });
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
+        }
+    }
+    if let Some(err) = first_err {
+        return Err(err);
     }
     Ok(total.unwrap_or_default())
 }
@@ -242,6 +268,27 @@ fn probe_file_record_start(
     }
 }
 
+/// Trait for return types of [`ParallelFastxParser::for_each`] closures.
+///
+/// Implemented for `()` (infallible) and [`Result<()>`].
+pub trait ParallelResult {
+    fn into_result(self) -> Result<()>;
+}
+
+impl ParallelResult for () {
+    #[inline(always)]
+    fn into_result(self) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl ParallelResult for Result<()> {
+    #[inline(always)]
+    fn into_result(self) -> Result<()> {
+        self
+    }
+}
+
 #[inline]
 fn default_threads() -> usize {
     std::thread::available_parallelism()
@@ -260,8 +307,8 @@ enum ParallelSource<'a> {
 /// Configured via [`ParserOptions`].
 ///
 /// Partitions files or in-memory buffers into record-aligned chunks and distributes them
-/// to worker threads. The caller drives the parser loop inside [`reduce`](ParallelFastxParser::reduce)
-/// or [`for_each`](ParallelFastxParser::for_each).
+/// to worker threads. The caller drives the parser loop inside [`for_each`](ParallelFastxParser::for_each)
+/// or [`reduce`](ParallelFastxParser::reduce).
 ///
 /// # Example
 ///
@@ -275,19 +322,18 @@ enum ParallelSource<'a> {
 /// fn main() -> std::io::Result<()> {
 ///     let path = "...";
 ///
-///     // process records in parallel with manual loop and reduce
-///     let total_len = ParallelFastxParser::<CONFIG>::from_file(path)?
+///     // process records in parallel with for_each
+///     ParallelFastxParser::<CONFIG>::from_file(path)?
 ///         .threads(8)
-///         .reduce(
-///             |mut parser| {
-///                 let mut len = 0;
-///                 while let Some(_event) = parser.next() {
-///                     len += parser.get_dna_string().len();
-///                 }
-///                 len
-///             },
-///             |acc, val| acc + val,
-///         )?;
+///         .for_each(|mut parser| {
+///             while let Some(event) = parser.next() {
+///                 event?;
+///                 let header = parser.get_header();
+///                 let seq = parser.get_dna_string();
+///                 // ...
+///             }
+///             Ok(())
+///         })?;
 ///     # Ok(())
 /// }
 /// ```
@@ -314,7 +360,7 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     /// bounding memory to ~1 MB total RAM across 8 threads.
     ///
     /// Also see [`from_file_mmap`](Self::from_file_mmap) for zero-copy memory mapping on local SSD/NVMe.
-    pub fn from_file(path: impl AsRef<Path>) -> io::Result<Self> {
+    pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         let _ = File::open(&path)?;
         Ok(Self {
@@ -329,7 +375,7 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     /// Yields maximum throughput on local SSD/NVMe storage.
     ///
     /// Also see [`from_file`](Self::from_file) for streaming multi-reader mode with bounded memory.
-    pub fn from_file_mmap(path: impl AsRef<Path>) -> io::Result<Self> {
+    pub fn from_file_mmap(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         let _ = File::open(&path)?;
         Ok(Self {
@@ -367,16 +413,85 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
         self
     }
 
-    /// Executes parallel processing across worker threads, allowing the caller to drive
-    /// the parser loop directly on each chunk's [`FastxParser`], and combining thread results with `reduce`.
+    /// Executes parallel processing across worker threads without reduction.
     ///
-    /// The reduction `State` type is inferred automatically from the return type of `process`,
-    /// and must implement [`Send`] and [`Default`]. Because empty inputs and initial thread
-    /// accumulators use [`Default::default()`], no initial state closure argument is required.
+    /// Distributes chunks of the input to worker threads and allows the caller
+    /// to drive the record loop directly on each worker chunk's [`FastxParser`].
+    /// The closure can return `()` (infallible) or `Result<()>` (enabling `event?;` error propagation).
+    ///
+    /// If any worker thread encounters an error, sibling worker threads abort early
+    /// and the error is returned to the caller.
     ///
     /// # Examples
     ///
-    /// **Summing sequence lengths:**
+    /// Simple record iteration with error propagation:
+    /// ```rust,no_run
+    /// use helicase::config::*;
+    /// use helicase::*;
+    ///
+    /// const CONFIG: Config = ParserOptions::default().config();
+    ///
+    /// # fn main() -> std::io::Result<()> {
+    /// ParallelFastxParser::<CONFIG>::from_file("reads.fastq")?
+    ///     .threads(8)
+    ///     .for_each(|mut parser| {
+    ///         while let Some(event) = parser.next() {
+    ///             event?;
+    ///             let header = parser.get_header();
+    ///             let seq = parser.get_dna_string();
+    ///             // process record...
+    ///         }
+    ///         Ok(())
+    ///     })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// Collecting per-record lengths into a shared thread-safe buffer:
+    /// ```rust,no_run
+    /// use helicase::config::*;
+    /// use helicase::*;
+    /// use std::sync::Mutex;
+    ///
+    /// const CONFIG: Config = ParserOptions::default().ignore_headers().config();
+    ///
+    /// # fn main() -> std::io::Result<()> {
+    /// let dest = Mutex::new(Vec::new());
+    ///
+    /// ParallelFastxParser::<CONFIG>::from_file("reads.fastq")?
+    ///     .threads(8)
+    ///     .for_each(|mut parser| {
+    ///         let mut local = Vec::new();
+    ///         while let Some(event) = parser.next() {
+    ///             event?;
+    ///             local.push(parser.get_dna_len());
+    ///         }
+    ///         dest.lock().unwrap().extend(local);
+    ///         Ok(())
+    ///     })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn for_each<Process, Res>(self, process: Process) -> Result<()>
+    where
+        Res: ParallelResult,
+        Process: Fn(FastxParser<'_, CONFIG>) -> Res + Sync,
+    {
+        self.reduce(move |parser| process(parser).into_result(), |(), ()| ())
+    }
+
+    /// Executes parallel processing across worker threads, combining thread results with a reduction function.
+    ///
+    /// The caller drives the parser loop on each worker chunk's [`FastxParser`], returning
+    /// `Result<State>` (enabling `event?;` error propagation). The reduction `State` type is
+    /// inferred automatically from the return type of `process`, and must implement [`Send`] and [`Default`].
+    ///
+    /// If any worker thread encounters an error, sibling worker threads abort early and the error
+    /// is returned to the caller.
+    ///
+    /// # Examples
+    ///
+    /// Summing sequence lengths across worker threads:
     /// ```rust,no_run
     /// use helicase::config::*;
     /// use helicase::*;
@@ -389,10 +504,11 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     ///     .reduce(
     ///         |mut parser| {
     ///             let mut len = 0;
-    ///             while let Some(_event) = parser.next() {
+    ///             while let Some(event) = parser.next() {
+    ///                 event?;
     ///                 len += parser.get_dna_len();
     ///             }
-    ///             len
+    ///             Ok(len)
     ///         },
     ///         |acc, val| acc + val,
     ///     )?;
@@ -400,7 +516,7 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     /// # }
     /// ```
     ///
-    /// **Collecting per-record lengths in parallel:**
+    /// Collecting per-record lengths in parallel:
     /// ```rust,no_run
     /// use helicase::config::*;
     /// use helicase::*;
@@ -413,10 +529,11 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     ///     .reduce(
     ///         |mut parser| {
     ///             let mut local = Vec::new();
-    ///             while let Some(_event) = parser.next() {
+    ///             while let Some(event) = parser.next() {
+    ///                 event?;
     ///                 local.push(parser.get_dna_len());
     ///             }
-    ///             local
+    ///             Ok(local)
     ///         },
     ///         |mut acc, chunk| {
     ///             acc.extend(chunk);
@@ -426,14 +543,10 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn reduce<State, Process, Reduce>(
-        self,
-        process: Process,
-        reduce: Reduce,
-    ) -> io::Result<State>
+    pub fn reduce<State, Process, Reduce>(self, process: Process, reduce: Reduce) -> Result<State>
     where
         State: Send + Default,
-        Process: Fn(FastxParser<'_, CONFIG>) -> State + Sync,
+        Process: Fn(FastxParser<'_, CONFIG>) -> Result<State> + Sync,
         Reduce: Fn(State, State) -> State + Sync,
     {
         match self.source {
@@ -459,19 +572,9 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
                     );
                 }
                 let parser = FastxParser::<CONFIG>::from_reader(reader)?;
-                Ok(process(parser))
+                process(parser)
             }
         }
-    }
-
-    /// Executes parallel processing across chunks without reduction (a reduce on unit `()`).
-    ///
-    /// The caller receives each chunk's [`FastxParser`] and drives the parser loop directly.
-    pub fn for_each<Process>(self, process: Process) -> io::Result<()>
-    where
-        Process: Fn(FastxParser<'_, CONFIG>) + Sync,
-    {
-        self.reduce(process, |(), ()| ())
     }
 
     /// Executes parallel processing across worker threads using a Paraseq [`ParallelProcessor`](paraseq::parallel::ParallelProcessor).
@@ -479,20 +582,23 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     /// Drives worker threads via Helicase's lock-free work-stealing engine, passing each
     /// record as a zero-copy [`paraseq::Record`] reference into [`process_record`](paraseq::parallel::ParallelProcessor::process_record).
     #[cfg(feature = "paraseq")]
-    pub fn process_parallel<P>(self, processor: &mut P) -> io::Result<()>
+    pub fn process_parallel<P>(self, processor: &mut P) -> Result<()>
     where
         P: for<'b, 'c> paraseq::parallel::ParallelProcessor<&'b FastxParser<'c, CONFIG>> + Sync,
     {
         let proc = processor.clone();
-        self.for_each(move |mut parser| {
+        self.for_each(move |mut parser| -> Result<()> {
             let mut local_proc = proc.clone();
-            while let Some(_event) = parser.next() {
-                if let Err(e) = local_proc.process_record(&parser) {
-                    eprintln!("Paraseq processor error: {e}");
-                    break;
-                }
+            while let Some(event) = parser.next() {
+                event?;
+                local_proc
+                    .process_record(&parser)
+                    .map_err(|e| io::Error::other(e.to_string()))?;
             }
-            let _ = local_proc.on_thread_complete();
+            local_proc
+                .on_thread_complete()
+                .map_err(|e| io::Error::other(e.to_string()))?;
+            Ok(())
         })
     }
 }
@@ -505,10 +611,10 @@ fn run_multi_reader<const CONFIG: Config, State, Process, Reduce>(
     custom_chunks: Option<usize>,
     process: Process,
     reduce: Reduce,
-) -> io::Result<State>
+) -> Result<State>
 where
     State: Send + Default,
-    Process: Fn(FastxParser<'_, CONFIG>) -> State + Sync,
+    Process: Fn(FastxParser<'_, CONFIG>) -> Result<State> + Sync,
     Reduce: Fn(State, State) -> State + Sync,
 {
     let num_threads = num_threads.max(1);
@@ -527,15 +633,17 @@ where
             if num_threads == 1 || file_len < 32 * 1024 {
                 file.seek(SeekFrom::Start(0))?;
                 let parser = FastxParser::<CONFIG>::from_reader(file)?;
-                return Ok(process(parser));
+                return process(parser);
             }
 
             let num_chunks = custom_chunks.unwrap_or(num_threads * 4).max(1);
             let approx_chunk_size = file_len / num_chunks as u64;
             let worker_threads = num_threads.min(num_chunks);
             let next_chunk = AtomicUsize::new(0);
+            let stop_flag = AtomicBool::new(false);
             let process = &process;
             let reduce = &reduce;
+            let stop_flag_ref = &stop_flag;
 
             let splits: Vec<std::sync::OnceLock<u64>> = (0..=num_chunks)
                 .map(|_| std::sync::OnceLock::new())
@@ -547,12 +655,15 @@ where
             let results = std::thread::scope(|scope| {
                 let handles: Vec<_> = (0..worker_threads)
                     .map(|_| {
-                        scope.spawn(|| -> io::Result<Option<State>> {
+                        scope.spawn(|| -> Result<Option<State>> {
                             let mut thread_state: Option<State> = None;
                             let mut file = File::open(path)?;
                             let mut probe_buf = vec![0u8; 64 * 1024];
 
                             loop {
+                                if stop_flag_ref.load(Ordering::Relaxed) {
+                                    break;
+                                }
                                 let idx = next_chunk.fetch_add(1, Ordering::Relaxed);
                                 if idx >= num_chunks {
                                     break;
@@ -578,7 +689,13 @@ where
                                 file.seek(SeekFrom::Start(start))?;
                                 let reader = (&mut file).take(take_len);
                                 let parser = FastxParser::<CONFIG>::from_reader(reader)?;
-                                let chunk_res = process(parser);
+                                let chunk_res = match process(parser) {
+                                    Ok(res) => res,
+                                    Err(e) => {
+                                        stop_flag_ref.store(true, Ordering::Relaxed);
+                                        return Err(e);
+                                    }
+                                };
                                 thread_state = Some(match thread_state {
                                     Some(acc) => reduce(acc, chunk_res),
                                     None => chunk_res,
@@ -595,14 +712,28 @@ where
                     .collect::<Vec<_>>()
             });
 
+            let mut first_err = None;
             let mut total: Option<State> = None;
             for result in results {
-                if let Some(res) = result? {
-                    total = Some(match total {
-                        Some(acc) => reduce(acc, res),
-                        None => res,
-                    });
+                match result {
+                    Ok(Some(res)) => {
+                        if first_err.is_none() {
+                            total = Some(match total {
+                                Some(acc) => reduce(acc, res),
+                                None => res,
+                            });
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        if first_err.is_none() {
+                            first_err = Some(e);
+                        }
+                    }
                 }
+            }
+            if let Some(err) = first_err {
+                return Err(err);
             }
             Ok(total.unwrap_or_default())
         }
@@ -620,13 +751,13 @@ where
                     );
                 }
                 let parser = FastxParser::<CONFIG>::from_file(path)?;
-                Ok(process(parser))
+                process(parser)
             }
             #[cfg(not(feature = "sirocco"))]
             {
                 let file = File::open(path)?;
                 let parser = FastxParser::<CONFIG>::from_reader(file)?;
-                Ok(process(parser))
+                process(parser)
             }
         }
         Some(CompressionFormat::Pzstd) => {
@@ -645,13 +776,13 @@ where
                     );
                 }
                 let parser = FastxParser::<CONFIG>::from_file(path)?;
-                Ok(process(parser))
+                process(parser)
             }
             #[cfg(not(feature = "zstd"))]
             {
                 let file = File::open(path)?;
                 let parser = FastxParser::<CONFIG>::from_reader(file)?;
-                Ok(process(parser))
+                process(parser)
             }
         }
         Some(
@@ -661,7 +792,7 @@ where
             | CompressionFormat::Xz,
         ) => {
             let parser = FastxParser::<CONFIG>::from_file(path)?;
-            Ok(process(parser))
+            process(parser)
         }
     }
 }
@@ -826,10 +957,10 @@ fn run_bgzf_multi_reader_sirocco<const CONFIG: Config, State, Process, Reduce>(
     num_threads: usize,
     process: Process,
     reduce: Reduce,
-) -> io::Result<State>
+) -> Result<State>
 where
     State: Send + Default,
-    Process: Fn(FastxParser<'_, CONFIG>) -> State + Sync,
+    Process: Fn(FastxParser<'_, CONFIG>) -> Result<State> + Sync,
     Reduce: Fn(State, State) -> State + Sync,
 {
     let blocks = index_bgzf_blocks(compressed);
@@ -872,7 +1003,7 @@ where
     let results = std::thread::scope(|s| {
         let handles: Vec<_> = (0..num_threads)
             .map(|i| {
-                s.spawn(move || -> io::Result<State> {
+                s.spawn(move || -> Result<State> {
                     let (start_block, start_skip) = get_split(i);
                     let (end_block, end_take) = get_split(i + 1);
 
@@ -890,7 +1021,7 @@ where
                         end_take,
                     );
                     let parser = FastxParser::<CONFIG>::from_reader(reader)?;
-                    Ok(process(parser))
+                    process(parser)
                 })
             })
             .collect();
@@ -902,11 +1033,15 @@ where
         res
     });
 
-    let mut total = State::default();
+    let mut total: Option<State> = None;
     for res in results {
-        total = reduce(total, res?);
+        let val = res?;
+        total = Some(match total {
+            Some(acc) => reduce(acc, val),
+            None => val,
+        });
     }
-    Ok(total)
+    Ok(total.unwrap_or_default())
 }
 
 #[cfg(feature = "zstd")]
@@ -1106,10 +1241,10 @@ fn run_zstd_multi_reader<const CONFIG: Config, State, Process, Reduce>(
     num_threads: usize,
     process: Process,
     reduce: Reduce,
-) -> io::Result<State>
+) -> Result<State>
 where
     State: Send + Default,
-    Process: Fn(FastxParser<'_, CONFIG>) -> State + Sync,
+    Process: Fn(FastxParser<'_, CONFIG>) -> Result<State> + Sync,
     Reduce: Fn(State, State) -> State + Sync,
 {
     let format = {
@@ -1147,7 +1282,7 @@ where
     let results = std::thread::scope(|s| {
         let handles: Vec<_> = (0..num_threads)
             .map(|i| {
-                s.spawn(move || -> io::Result<State> {
+                s.spawn(move || -> Result<State> {
                     let (start_frame, start_skip) = get_split(i);
                     let (end_frame, end_take) = get_split(i + 1);
 
@@ -1165,7 +1300,7 @@ where
                         end_take,
                     )?;
                     let parser = FastxParser::<CONFIG>::from_reader(reader)?;
-                    Ok(process(parser))
+                    process(parser)
                 })
             })
             .collect();
@@ -1177,9 +1312,13 @@ where
         res
     });
 
-    let mut total = State::default();
+    let mut total: Option<State> = None;
     for res in results {
-        total = reduce(total, res?);
+        let val = res?;
+        total = Some(match total {
+            Some(acc) => reduce(acc, val),
+            None => val,
+        });
     }
-    Ok(total)
+    Ok(total.unwrap_or_default())
 }

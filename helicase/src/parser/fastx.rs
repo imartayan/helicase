@@ -31,9 +31,9 @@ use crate::input::*;
 ///     Ok(())
 /// }
 /// ```
-pub struct FastxParser<'a, const CONFIG: Config>(Box<dyn HelicaseParserIter + 'a>);
+pub struct FastxParser<'a, const CONFIG: Config>(Box<dyn HelicaseParserIter + Send + 'a>);
 
-impl<'a, const CONFIG: Config, I: InputData<'a> + 'a> FromInputData<'a, I>
+impl<'a, const CONFIG: Config, I: InputData<'a> + Send + 'a> FromInputData<'a, I>
     for FastxParser<'a, CONFIG>
 {
     fn from_input(input: I) -> Result<Self> {

@@ -221,3 +221,14 @@ fn test_borrowed_vs_owned_equivalence() {
         assert_eq!(recs_borrow, recs_owned);
     }
 }
+
+#[test]
+fn test_fastx_parser_is_send() {
+    fn assert_send<T: Send>(_: &T) {}
+    let data = b">r\nACGT\n";
+    assert_send(&FastxParser::<CONFIG>::from_slice(data).unwrap());
+    assert_send(&FastxParser::<CONFIG>::from_reader(Cursor::new(data)).unwrap());
+    let parser = FastxParser::<CONFIG>::from_slice(data).unwrap();
+    let count = std::thread::spawn(move || parser.count()).join().unwrap();
+    assert_eq!(count, 1);
+}

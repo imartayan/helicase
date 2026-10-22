@@ -7,10 +7,20 @@ use deko::read::AnyDecoder;
 use memmap2::Mmap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
+use std::mem::{replace, take};
 use std::path::Path;
+use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
 
-const BUFFER_DEFAULT_SIZE: usize = 1 << 17;
+// Bytes read into a buffer at once, and initial size of the direct reader's buffer.
+const BUFFER_LEN: usize = 1 << 18;
+// Buffers for longer records double until this size, then grow linearly.
 const BUFFER_DOUBLE_UNTIL: usize = 1 << 24;
+// The read-ahead reader (`FileInput`) keeps up to `BUFFERS_AHEAD` buffers ready, each read at its
+// end. The free room before is used to prepend the end of the previous buffer without copying
+// the new one, and grows to `BUFFER_MAX_HEADROOM` once a record does not fit.
+const BUFFERS_AHEAD: usize = 2;
+const BUFFER_MIN_HEADROOM: usize = 1 << 16;
+const BUFFER_MAX_HEADROOM: usize = 1 << 20;
 
 /// Supported compression formats for FASTX files and streams.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -567,15 +577,42 @@ impl<R: Read> Read for ReaderDecoder<R> {
     }
 }
 
+enum Source<R: Read> {
+    Direct(ReaderDecoder<R>),
+    ReadAhead(BufferReceiver),
+}
+
+// Buffers filled by the background thread, with their data at `buf[headroom(buf)..][..len]`,
+// the channel to give used buffers back, and a buffer for records longer than the headroom.
+struct BufferReceiver {
+    filled: Receiver<io::Result<(Vec<u8>, usize)>>,
+    free: Sender<Vec<u8>>,
+    headroom: usize,
+    long: Vec<u8>,
+    in_long: bool,
+}
+
+impl BufferReceiver {
+    fn recycle(&self, mut buf: Vec<u8>) {
+        if buf.len() < BUFFER_LEN {
+            return;
+        }
+        // Growing the buffer at the end grows its headroom.
+        buf.resize(buf.len().max(self.headroom + BUFFER_LEN + 64), 0);
+        let _ = self.free.send(buf);
+    }
+}
+
 /// Reader input.
 /// It supports transparent decompression.
 pub struct ReaderInput<'a, R: Read + Send + 'a> {
     data: Vec<u8>,
+    start: usize,
     len: usize,
     pos: usize,
     offset: usize,
     first_byte: u8,
-    decoder: ReaderDecoder<R>,
+    source: Source<R>,
     pending_err: Option<io::Error>,
     errored: bool,
     compression: Option<CompressionFormat>,
@@ -583,9 +620,33 @@ pub struct ReaderInput<'a, R: Read + Send + 'a> {
 }
 
 impl<'a, R: Read + Send + 'a> ReaderInput<'a, R> {
-    fn fill_buffer(&mut self) {
+    // Keeps the buffer from `keep_start` and appends new data after it.
+    // Returns whether new data was read.
+    fn refill(&mut self, keep_start: usize) -> bool {
+        let refilled = match &mut self.source {
+            Source::Direct(_) => self.refill_direct(keep_start),
+            Source::ReadAhead(_) => self.refill_read_ahead(keep_start),
+        };
+        let end = self.start + self.len;
+        self.data[end..end.next_multiple_of(64)].fill(0);
+        refilled
+    }
+
+    fn refill_direct(&mut self, keep_start: usize) -> bool {
+        let Source::Direct(decoder) = &mut self.source else {
+            unreachable!()
+        };
+        if keep_start > 0 {
+            self.data.copy_within(keep_start..self.len, 0);
+            self.len -= keep_start;
+            self.pos -= keep_start;
+            self.offset += keep_start;
+        } else if self.len == self.data.len() {
+            self.data.resize(grown_len(self.data.len(), 0), 0);
+        }
+        let prev_len = self.len;
         while self.pending_err.is_none() && self.len < self.data.len() {
-            match self.decoder.read(&mut self.data[self.len..]) {
+            match decoder.read(&mut self.data[self.len..]) {
                 Ok(0) => break,
                 Ok(n) => self.len += n,
                 Err(e) => {
@@ -594,11 +655,71 @@ impl<'a, R: Read + Send + 'a> ReaderInput<'a, R> {
                 }
             }
         }
-        let padded = self.len.next_multiple_of(64);
-        self.data[self.len..padded].fill(0);
+        self.len > prev_len
+    }
+
+    fn refill_read_ahead(&mut self, keep_start: usize) -> bool {
+        let Source::ReadAhead(receiver) = &mut self.source else {
+            unreachable!()
+        };
+        let (buffer, filled_len) = match receiver.filled.recv() {
+            Ok(Ok(buffer)) => buffer,
+            Ok(Err(e)) => {
+                self.pending_err = Some(e);
+                return false;
+            }
+            Err(_) => return false,
+        };
+        let kept = self.start + keep_start..self.start + self.len;
+        let kept_len = kept.len();
+        let room = headroom(&buffer);
+        if kept_len <= room {
+            let mut buffer = buffer;
+            self.start = room - kept_len;
+            buffer[self.start..room].copy_from_slice(&self.data[kept]);
+            let used = replace(&mut self.data, buffer);
+            if receiver.in_long {
+                receiver.long = used;
+                receiver.in_long = false;
+            } else {
+                receiver.recycle(used);
+            }
+        } else {
+            receiver.headroom = BUFFER_MAX_HEADROOM;
+            let needed = kept_len + filled_len + 64;
+            if receiver.in_long {
+                if self.data.len() < needed {
+                    self.data.resize(grown_len(self.data.len(), needed), 0);
+                }
+                if keep_start > 0 {
+                    self.data.copy_within(kept, 0);
+                }
+            } else {
+                let mut long = take(&mut receiver.long);
+                if long.len() < needed {
+                    long.resize(grown_len(long.len(), needed), 0);
+                }
+                long[..kept_len].copy_from_slice(&self.data[kept]);
+                receiver.recycle(replace(&mut self.data, long));
+                receiver.in_long = true;
+            }
+            self.data[kept_len..kept_len + filled_len]
+                .copy_from_slice(&buffer[room..room + filled_len]);
+            self.start = 0;
+            receiver.recycle(buffer);
+        }
+        self.offset += keep_start;
+        self.pos -= keep_start;
+        self.len = kept_len + filled_len;
+        true
     }
 
     pub fn new(reader: R) -> io::Result<Self> {
+        let (decoder, compression) = Self::decoder(reader)?;
+        Self::with_source(Source::Direct(decoder), compression)
+    }
+
+    fn decoder(reader: R) -> io::Result<(ReaderDecoder<R>, Option<CompressionFormat>)> {
         let mut buf_reader = BufReader::with_capacity(64 * 1024, reader);
         let compression = {
             let peek = buf_reader.fill_buf()?;
@@ -626,26 +747,35 @@ impl<'a, R: Read + Send + 'a> ReaderInput<'a, R> {
             _ => ReaderDecoder::Deko(Box::new(AnyDecoder::new(buf_reader))),
         };
 
+        Ok((decoder, compression))
+    }
+
+    fn with_source(source: Source<R>, compression: Option<CompressionFormat>) -> io::Result<Self> {
+        let data = match source {
+            Source::Direct(_) => vec![0; BUFFER_LEN],
+            Source::ReadAhead(_) => vec![0; 64],
+        };
         let mut s = Self {
-            data: vec![0; BUFFER_DEFAULT_SIZE],
+            data,
+            start: 0,
             len: 0,
             pos: 0,
             offset: 0,
             first_byte: 0,
-            decoder,
+            source,
             pending_err: None,
             errored: false,
             compression,
             _phantom: PhantomData,
         };
-        s.fill_buffer();
+        s.refill(0);
         if s.len == 0
             && let Some(e) = s.pending_err.take()
         {
             return Err(e);
         }
         if s.len > 0 {
-            s.first_byte = s.data[0];
+            s.first_byte = s.data[s.start];
         }
         Ok(s)
     }
@@ -661,16 +791,11 @@ impl<'a, R: Read + Send + 'a> ReaderInput<'a, R> {
                 self.errored = true;
                 return Some(Err(err));
             }
-            // Save state so we can restore it on EOF, keeping the buffer valid for
-            // zero-copy callers (e.g. get_dna_string) that run after next() returns None.
-            let (saved_offset, saved_pos, saved_len) = (self.offset, self.pos, self.len);
-            self.offset += self.len;
-            self.pos = 0;
-            self.len = 0;
-            self.fill_buffer();
-            if self.len == 0 {
-                // EOF or error: roll back so buffer() still returns the last valid window.
-                (self.offset, self.pos, self.len) = (saved_offset, saved_pos, saved_len);
+            // On EOF, the buffer stays valid for zero-copy callers (e.g. get_dna_string)
+            // that run after next() returns None.
+            let saved = (self.offset, self.pos, self.len);
+            if !self.refill(self.len) {
+                (self.offset, self.pos, self.len) = saved;
                 if let Some(err) = self.pending_err.take() {
                     self.errored = true;
                     return Some(Err(err));
@@ -683,10 +808,28 @@ impl<'a, R: Read + Send + 'a> ReaderInput<'a, R> {
         let len = (self.len - pos).min(64);
         unsafe {
             Some(Ok(core::slice::from_raw_parts(
-                self.data.as_ptr().add(pos),
+                self.data.as_ptr().add(self.start + pos),
                 len,
             )))
         }
+    }
+}
+
+impl<R: Read + Send + 'static> ReaderInput<'static, R> {
+    /// Build a reader input that reads and decompresses ahead in a background thread.
+    pub fn with_read_ahead(reader: R) -> io::Result<Self> {
+        let (decoder, compression) = Self::decoder(reader)?;
+        let (filled_sender, filled) = sync_channel(BUFFERS_AHEAD);
+        let (free, free_receiver) = channel();
+        std::thread::spawn(move || read_buffers(decoder, filled_sender, free_receiver));
+        let receiver = BufferReceiver {
+            filled,
+            free,
+            headroom: BUFFER_MIN_HEADROOM,
+            long: Vec::new(),
+            in_long: false,
+        };
+        Self::with_source(Source::ReadAhead(receiver), compression)
     }
 }
 
@@ -700,7 +843,7 @@ impl<'a, R: Read + Send + 'a> Iterator for ReaderInput<'a, R> {
             self.pos = pos + 64;
             return unsafe {
                 Some(Ok(core::slice::from_raw_parts(
-                    self.data.as_ptr().add(pos),
+                    self.data.as_ptr().add(self.start + pos),
                     64,
                 )))
             };
@@ -719,7 +862,9 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
 
     #[inline(always)]
     fn current_block(&self) -> &[u8] {
-        unsafe { core::slice::from_raw_parts(self.data.as_ptr().add(self.pos - 64), 64) }
+        unsafe {
+            core::slice::from_raw_parts(self.data.as_ptr().add(self.start + self.pos - 64), 64)
+        }
     }
 
     #[inline(always)]
@@ -727,7 +872,7 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
         if self.compression.is_some() {
             return Ok(self.compression);
         }
-        if let ReaderDecoder::Deko(decoder) = &mut self.decoder {
+        if let Source::Direct(ReaderDecoder::Deko(decoder)) = &mut self.source {
             let format = decoder.kind()?;
             let mapped = match format {
                 #[cfg(feature = "bz2")]
@@ -749,7 +894,7 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
 
     #[inline(always)]
     fn buffer(&self) -> &[u8] {
-        &self.data[..self.len]
+        &self.data[self.start..self.start + self.len]
     }
 
     #[inline(always)]
@@ -768,20 +913,7 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
         // Round the shift down to a 64-byte multiple so that `pos` (which is
         // always a multiple of 64) stays aligned after the copy.
         let aligned_shift = (keep_from.saturating_sub(self.offset) / 64) * 64;
-        if aligned_shift > 0 {
-            self.data.copy_within(aligned_shift..self.len, 0);
-            self.len -= aligned_shift;
-            self.pos -= aligned_shift;
-            self.offset += aligned_shift;
-        } else if self.len == self.data.len() {
-            let new_size = if self.data.len() < BUFFER_DOUBLE_UNTIL {
-                self.data.len() * 2
-            } else {
-                self.data.len() + BUFFER_DOUBLE_UNTIL
-            };
-            self.data.resize(new_size, 0);
-        }
-        self.fill_buffer();
+        self.refill(aligned_shift);
     }
 
     #[inline(always)]
@@ -807,8 +939,14 @@ pub type FileInput = ReaderInput<'static, File>;
 
 impl ReaderInput<'static, File> {
     /// Open a file for reading with transparent decompression.
+    /// It reads ahead in a background thread when more than one CPU is available.
     pub fn open<P: AsRef<Path>>(path: P) -> io::Result<Self> {
-        Self::new(File::open(path)?)
+        let file = File::open(path)?;
+        if std::thread::available_parallelism().map_or(1, |n| n.get()) > 1 {
+            Self::with_read_ahead(file)
+        } else {
+            Self::new(file)
+        }
     }
 }
 
@@ -824,6 +962,57 @@ pub trait FromFile: FromInputData<'static, FileInput> {
 }
 
 impl<F: FromInputData<'static, FileInput>> FromFile for F {}
+
+fn grown_len(len: usize, needed: usize) -> usize {
+    let grown = if len < BUFFER_DOUBLE_UNTIL {
+        2 * len
+    } else {
+        len + BUFFER_DOUBLE_UNTIL
+    };
+    grown.max(needed)
+}
+
+#[inline(always)]
+fn headroom(buffer: &[u8]) -> usize {
+    buffer.len() - BUFFER_LEN - 64
+}
+
+// Background thread of `ReaderInput::with_read_ahead`, stops at the end of input,
+// on error, or when the input is dropped.
+fn read_buffers<R: Read>(
+    mut decoder: ReaderDecoder<R>,
+    filled: SyncSender<io::Result<(Vec<u8>, usize)>>,
+    free: Receiver<Vec<u8>>,
+) {
+    loop {
+        let mut buf = free
+            .try_recv()
+            .unwrap_or_else(|_| vec![0; BUFFER_MIN_HEADROOM + BUFFER_LEN + 64]);
+        let room = headroom(&buf);
+        let mut len = 0;
+        let mut error = None;
+        while len < BUFFER_LEN {
+            match decoder.read(&mut buf[room + len..room + BUFFER_LEN]) {
+                Ok(0) => break,
+                Ok(n) => len += n,
+                Err(e) => {
+                    error = Some(e);
+                    break;
+                }
+            }
+        }
+        if len > 0 && filled.send(Ok((buf, len))).is_err() {
+            return;
+        }
+        if let Some(e) = error {
+            let _ = filled.send(Err(e));
+            return;
+        }
+        if len < BUFFER_LEN {
+            return;
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

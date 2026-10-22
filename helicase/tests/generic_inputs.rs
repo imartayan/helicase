@@ -234,3 +234,57 @@ fn test_fastx_parser_is_send() {
     let count = std::thread::spawn(move || parser.count()).join().unwrap();
     assert_eq!(count, 1);
 }
+
+// `from_file` reads ahead in a background thread, `from_reader` reads on the parser thread.
+#[test]
+fn test_read_ahead_matches_direct_reader() {
+    let tmp_dir = std::env::temp_dir().join(format!("helicase_read_ahead_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+    let datasets = [
+        ("short", FastxGen::illumina(20_000).with_seed(1)),
+        (
+            "wrapped",
+            FastxGen::wrapped_fasta(200, 30_000, 60).with_seed(2),
+        ),
+        ("long", FastxGen::fasta(40, 200_000).with_seed(3)),
+    ];
+    for (name, generator) in datasets {
+        let raw = generator.generate_bytes();
+        let mut gz = GzEncoder::new(Vec::new(), Compression::fast());
+        gz.write_all(&raw).unwrap();
+        let gz = gz.finish().unwrap();
+        let truncated_gz = gz[..gz.len() * 2 / 3].to_vec();
+        for (kind, bytes) in [("raw", raw), ("gz", gz), ("truncated gz", truncated_gz)] {
+            if kind != "raw" && !cfg!(feature = "gz") {
+                continue;
+            }
+            let path = tmp_dir.join(format!("{name}.{}", kind.replace(' ', "_")));
+            std::fs::write(&path, &bytes).unwrap();
+            let read_ahead = parse_until_error(FastxParser::<CONFIG>::from_file(&path).unwrap());
+            let direct = parse_until_error(
+                FastxParser::<CONFIG>::from_reader(File::open(&path).unwrap()).unwrap(),
+            );
+            assert!(read_ahead == direct, "{name} {kind}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}
+
+fn parse_until_error<P: HelicaseParser + Iterator<Item = parser::Result<Event>>>(
+    mut parser: P,
+) -> (Vec<ParsedRecord>, Option<String>) {
+    let mut records = Vec::new();
+    while let Some(event) = parser.next() {
+        if let Err(e) = event {
+            return (records, Some(e.to_string()));
+        }
+        records.push(ParsedRecord {
+            header: parser.get_header_owned(),
+            dna: parser.get_dna_string_owned(),
+            packed: parser.get_dna_packed().to_string().into_bytes(),
+            columnar: parser.get_dna_columnar().to_string().into_bytes(),
+            qual: parser.get_quality_owned(),
+        });
+    }
+    (records, None)
+}

@@ -356,8 +356,8 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
 
     /// Creates a parallel parser for a file on disk using the streaming multi-reader engine.
     ///
-    /// Reads records in parallel using positional reads with a 128 KiB buffer per thread,
-    /// bounding memory to ~1 MB total RAM across 8 threads.
+    /// Reads records in parallel using positional reads with a 256 KiB buffer per thread,
+    /// bounding memory to ~2 MB total RAM across 8 threads.
     ///
     /// Also see [`from_file_mmap`](Self::from_file_mmap) for zero-copy memory mapping on local SSD/NVMe.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {

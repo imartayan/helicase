@@ -1,14 +1,15 @@
-//! Parallel multi-chunk parsing over contiguous in-memory slices and memory-mapped files.
+//! Parallel multi-chunk parsing.
 //!
-//! Provides zero-dependency, lock-free work-stealing execution across multiple threads
-//! using `std::thread::scope` and `AtomicUsize`.
+//! Provides lock-free work-stealing execution across multiple threads,
+//! for both reader and memory-mapped files.
 
 use crate::config::*;
 use crate::input::*;
 use crate::parser::*;
+use core::cell::RefCell;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -196,15 +197,14 @@ where
 
 /// Probes a file to determine the record boundary starting at or after `approx_pos`.
 fn probe_file_record_start(
-    path: &Path,
+    file: &mut File,
     approx_pos: u64,
     file_len: u64,
     format: Format,
-) -> io::Result<u64> {
+) -> Result<u64> {
     if approx_pos == 0 || approx_pos >= file_len {
         return Ok(approx_pos.min(file_len));
     }
-    let mut file = File::open(path)?;
     let mut buf = vec![0u8; 64 * 1024];
     let mut probe_pos = approx_pos.saturating_sub(1);
     loop {
@@ -288,16 +288,27 @@ where
         threads,
         (0, file_len),
         |i| {
-            let approx_pos = i as u64 * chunk_len;
-            probe_file_record_start(path, approx_pos, file_len, format).unwrap_or(approx_pos)
+            let pos = i as u64 * chunk_len;
+            with_thread_file(path, |f| probe_file_record_start(f, pos, file_len, format))
+                .unwrap_or(pos)
         },
         |start, end| {
-            let mut file = File::open(path)?;
-            file.seek(SeekFrom::Start(start))?;
-            process(FastxParser::from_reader(file.take(end - start))?)
+            with_thread_file(path, |file| {
+                file.seek(SeekFrom::Start(start))?;
+                process(FastxParser::from_reader(file.take(end - start))?)
+            })
         },
         reduce,
     )
+}
+
+/// Runs `f` on `path` opened once per worker (reopening it per chunk costs 5-10% at 8 threads).
+fn with_thread_file<T>(path: &Path, f: impl FnOnce(&mut File) -> Result<T>) -> Result<T> {
+    thread_local!(static FILE: RefCell<Option<File>> = const { RefCell::new(None) });
+    FILE.with_borrow_mut(|file| match file {
+        Some(file) => f(file),
+        None => f(file.insert(File::open(path)?)),
+    })
 }
 
 /// Trait for return types of [`ParallelFastxParser::for_each`] closures.
@@ -606,11 +617,11 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
                 event?;
                 local_proc
                     .process_record(&parser)
-                    .map_err(|e| io::Error::other(e.to_string()))?;
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
             }
             local_proc
                 .on_thread_complete()
-                .map_err(|e| io::Error::other(e.to_string()))?;
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
             Ok(())
         })
     }

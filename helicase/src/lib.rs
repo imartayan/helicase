@@ -276,7 +276,7 @@ pub mod config;
 pub mod dna_format;
 pub mod input;
 pub(crate) mod lexer;
-mod parallel;
+pub mod parallel;
 pub mod parser;
 
 pub use config::{Config, ParserOptions};

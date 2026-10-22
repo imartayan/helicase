@@ -161,13 +161,17 @@ fn test_config_split_non_actg_yields_pure_actg_chunks() {
 #[test]
 fn test_config_split_non_actg_long_runs() {
     let mut state = 42u64;
-    let mut seq: Vec<u8> = (0..20_000)
+    let mut seq: Vec<u8> = (0..600_000)
         .map(|_| {
             state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
             b"ACGTacgt"[(state >> 61) as usize]
         })
         .collect();
-    for pos in [1100, 1279, 1280, 3000, 3001, 3002, 5183, 9999, 19_990] {
+    // Long runs cross several line feed search windows and reader buffers.
+    for pos in [
+        1100, 1279, 1280, 3000, 3001, 3002, 5183, 9999, 19_990, 23_000, 262_100, 262_200, 524_300,
+        599_990,
+    ] {
         seq[pos] = b'N';
     }
     let expected: Vec<&[u8]> = seq
@@ -175,6 +179,11 @@ fn test_config_split_non_actg_long_runs() {
         .filter(|run| !run.is_empty())
         .collect();
     let fasta = [b">r\n".as_slice(), &seq, b"\n"].concat();
+    let wrapped: Vec<u8> = [b">r".as_slice()]
+        .into_iter()
+        .chain(seq.chunks(60))
+        .flat_map(|line| [line, b"\n"].concat())
+        .collect();
     let qual = vec![b'I'; seq.len()];
     let fastq = [b"@r\n".as_slice(), &seq, b"\n+\n", &qual, b"\n"].concat();
 
@@ -203,11 +212,47 @@ fn test_config_split_non_actg_long_runs() {
         }
         assert_eq!(chunks, expected.len());
     }
-    for data in [&fasta, &fastq] {
+
+    const SKIP: Config = ParserOptions::default()
+        .dna_packed()
+        .and_dna_columnar()
+        .skip_non_actg()
+        .config();
+    fn check_skip<P: HelicaseParser + Iterator<Item = Result<Event, parser::Error>>>(
+        mut parser: P,
+        merged: &[u8],
+    ) {
+        assert!(matches!(parser.next(), Some(Ok(Event::Record(_)))));
+        let packed = parser.get_dna_packed();
+        let columnar = parser.get_dna_columnar();
+        assert_eq!(packed.len(), merged.len());
+        assert_eq!(columnar.len(), merged.len());
+        for (i, &b) in merged.iter().enumerate() {
+            assert_eq!(
+                packed.get_char(i),
+                b.to_ascii_uppercase() as char,
+                "base {i}"
+            );
+            assert_eq!(
+                columnar.get_char(i),
+                b.to_ascii_uppercase() as char,
+                "base {i}"
+            );
+        }
+        assert!(parser.next().is_none());
+    }
+
+    let merged = expected.concat();
+    for data in [&fasta, &wrapped, &fastq] {
         check(FastxParser::<CFG>::from_slice(data).unwrap(), &expected);
         check(
             FastxParser::<CFG>::from_reader(data.as_slice()).unwrap(),
             &expected,
+        );
+        check_skip(FastxParser::<SKIP>::from_slice(data).unwrap(), &merged);
+        check_skip(
+            FastxParser::<SKIP>::from_reader(data.as_slice()).unwrap(),
+            &merged,
         );
     }
 }

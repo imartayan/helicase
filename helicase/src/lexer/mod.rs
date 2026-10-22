@@ -110,6 +110,7 @@ impl Chunk {
 
 pub struct Lexer<'a, const CONFIG: Config, I: InputData<'a>> {
     pub(crate) input: I,
+    last_found_line_feed: usize,
     _phantom: PhantomData<&'a [u8]>,
 }
 
@@ -117,6 +118,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FromInputData<'a, I> for Lexer<
     fn from_input(input: I) -> Result<Self> {
         Ok(Self {
             input,
+            last_found_line_feed: 0,
             _phantom: PhantomData,
         })
     }
@@ -167,7 +169,17 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Lexer<'a, CONFIG, I> {
             let data_len = data.len();
             if curr_pos < buf_off + data_len {
                 let local_curr = curr_pos - buf_off;
-                let nl_opt = memchr::memchr(b'\n', &data[local_curr..]);
+                let nl_opt = if self.last_found_line_feed >= curr_pos
+                    && self.last_found_line_feed < buf_off + data_len
+                {
+                    Some(self.last_found_line_feed - curr_pos)
+                } else {
+                    let nl_opt = memchr::memchr(b'\n', &data[local_curr..]);
+                    if let Some(nl_off) = nl_opt {
+                        self.last_found_line_feed = curr_pos + nl_off;
+                    }
+                    nl_opt
+                };
                 let rem_len = match nl_opt {
                     Some(nl_off) => nl_off,
                     None if I::RANDOM_ACCESS => data_len - local_curr,

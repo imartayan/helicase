@@ -271,12 +271,15 @@ impl DnaBitpackers {
     }
 }
 
+// Without a dedicated kernel, validating ahead is an extra pass over cheap per-block checks:
+// the blocks are only checked while packing.
 #[cfg(not(target_feature = "neon"))]
 #[inline(always)]
-fn all_actg(buf: &[u8]) -> bool {
-    (0..4).all(|k| extract_dna_bitmask::<SPLIT_NON_ACTG>(&buf[64 * k..64 * (k + 1)]).is_dna == !0)
+fn actg_prefix_blocks(_data: &[u8], _q: usize) -> usize {
+    0
 }
 
+#[cfg(target_feature = "neon")]
 #[inline(always)]
 fn actg_prefix_blocks(data: &[u8], q: usize) -> usize {
     let mut n = 0;

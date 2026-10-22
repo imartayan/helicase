@@ -175,6 +175,28 @@ fn test_all_inputs_mega_reads_fasta() {
 }
 
 #[test]
+fn test_reader_long_reads_without_headers() {
+    // Without headers the reader keeps no anchor, long sequences resume at the start of a buffer.
+    const KEEP_CFG: Config = ParserOptions::default()
+        .ignore_headers()
+        .dna_packed()
+        .keep_non_actg()
+        .config();
+    let raw_bytes = FastxGen::pacbio(100).with_seed(42).generate_bytes();
+    let mut p_slc = FastxParser::<KEEP_CFG>::from_slice(&raw_bytes).unwrap();
+    let mut p_rdr = FastxParser::<KEEP_CFG>::from_reader(Cursor::new(&raw_bytes)).unwrap();
+    while let (Some(e_slc), Some(e_rdr)) = (p_slc.next(), p_rdr.next()) {
+        e_slc.unwrap();
+        e_rdr.unwrap();
+        assert_eq!(
+            p_slc.get_dna_packed().to_string(),
+            p_rdr.get_dna_packed().to_string()
+        );
+    }
+    assert!(p_slc.next().is_none() && p_rdr.next().is_none());
+}
+
+#[test]
 fn test_all_inputs_mega_reads_fastq() {
     // Single FASTQ records spanning multiple 128KB buffer refills
     let generator = FastxGen::fastq(2, 600_000)

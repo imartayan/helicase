@@ -63,6 +63,10 @@ pub struct FastaParser<'a, const CONFIG: Config, I: InputData<'a>> {
     dna_range: Range<usize>,
     record_start: usize,
     contiguous_dna: bool,
+    record_line_width: usize,
+    retry_stride_after_non_actg: bool,
+    stride_backoff: u32,
+    stride_attempts_to_skip: u32,
     cur_dna_string: Vec<u8>,
     bitpackers: DnaBitpackers,
     dna_len: usize,
@@ -103,6 +107,10 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             dna_range: 0..0,
             record_start: 0,
             contiguous_dna: true,
+            record_line_width: 0,
+            retry_stride_after_non_actg: false,
+            stride_backoff: 0,
+            stride_attempts_to_skip: 0,
             cur_dna_string: Vec::new(),
             bitpackers: DnaBitpackers::new(),
             dna_len: 0,
@@ -138,6 +146,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastaParser<
 
     #[inline(always)]
     fn clear_record(&mut self) {
+        self.record_line_width = 0;
+        self.stride_backoff = 0;
+        self.stride_attempts_to_skip = 0;
         self.clear_chunk();
     }
 
@@ -583,6 +594,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             if flag_is_not_set(CONFIG, MERGE_DNA_CHUNKS) {
                 self.clear_chunk();
             }
+            self.retry_stride_after_non_actg = true;
             self.dna_range = self.global_pos()..self.global_pos();
             if at_newline {
                 return Some(None);
@@ -592,8 +604,17 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
     }
 
     #[inline(always)]
-    fn try_wrapped_stride(&mut self, next_line_start: usize) -> Option<Option<Result<Event>>> {
-        let line_width = self.dna_range.len();
+    fn try_wrapped_stride(
+        &mut self,
+        next_line_start: usize,
+        line_len: usize,
+    ) -> Option<Option<Result<Event>>> {
+        if self.stride_attempts_to_skip > 0 {
+            self.stride_attempts_to_skip -= 1;
+            return None;
+        }
+        // A chunk starting after a non-ACTG base has a shorter first line.
+        let line_width = line_len.max(self.record_line_width);
         let newline_len = next_line_start.saturating_sub(self.dna_range.end);
         if line_width == 0 || newline_len == 0 {
             return None;
@@ -662,9 +683,16 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             }
         }
 
+        if lines_read < 4 {
+            self.stride_backoff = (2 * self.stride_backoff + 1).min(63);
+            self.stride_attempts_to_skip = self.stride_backoff;
+        } else {
+            self.stride_backoff = 0;
+        }
         if lines_read == 0 {
             return None;
         }
+        self.record_line_width = line_width;
 
         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
             self.dna_len += lines_read * line_width;
@@ -950,17 +978,22 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
                                 | COMPUTE_DNA_PACKED
                                 | COMPUTE_DNA_COLUMNAR
                                 | COMPUTE_DNA_LEN,
-                        ) && self.contiguous_dna
+                        ) && (self.contiguous_dna
+                            || self.retry_stride_after_non_actg)
                             && !merge_chunks;
 
                         if should_stride {
-                            self.contiguous_dna = false;
-                            if flag_is_set(CONFIG, COMPUTE_DNA_STRING) {
+                            if self.contiguous_dna && flag_is_set(CONFIG, COMPUTE_DNA_STRING) {
                                 let dna_chunk = self.lexer.input.slice(self.dna_range.clone());
                                 self.cur_dna_string.extend_from_slice(dna_chunk);
                             }
+                            self.contiguous_dna = false;
+                            self.retry_stride_after_non_actg = false;
 
-                            if let Some(event_opt) = self.try_wrapped_stride(self.global_pos()) {
+                            let line_len = self.dna_range.end - line_start;
+                            if let Some(event_opt) =
+                                self.try_wrapped_stride(self.global_pos(), line_len)
+                            {
                                 if let Some(event) = event_opt {
                                     return Some(event);
                                 }
@@ -1075,7 +1108,13 @@ fn append_full_lines<const CONFIG: Config, const BLOCKS: usize>(
         );
         return (pos, lines, false);
     }
-    let batch_lines = (SCRATCH_LEN / line_width).max(1);
+    let max_batch_lines = (SCRATCH_LEN / line_width).max(1);
+    // When splitting, a chunk can end within a few lines: the batch doubles from 1 KiB.
+    let mut batch_lines = if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
+        (1024 / line_width).clamp(1, max_batch_lines)
+    } else {
+        max_batch_lines
+    };
     let mut lines = 0;
     loop {
         if !string {
@@ -1123,5 +1162,6 @@ fn append_full_lines<const CONFIG: Config, const BLOCKS: usize>(
         if batch < batch_lines {
             return (pos, lines, false);
         }
+        batch_lines = (2 * batch_lines).min(max_batch_lines);
     }
 }

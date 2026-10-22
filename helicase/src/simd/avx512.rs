@@ -19,32 +19,14 @@ const NEEDS_DNA_MASKS: Config = COMPUTE_DNA_COLUMNAR
 #[inline(always)]
 pub fn extract_bitmask<const CONFIG: Config, const MODE: u8>(buf: &[u8]) -> Bitmask {
     unsafe {
-        let ptr = buf.as_ptr() as *const __m512i;
-        let v = _mm512_loadu_si512(ptr);
+        let v = _mm512_loadu_si512(buf.as_ptr() as *const __m512i);
 
         if MODE == SCAN_MODE_DNA || flag_is_not_set(CONFIG, NEEDS_DNA_MASKS) {
-            let (is_dna, two_bits, high_bit, low_bit, mask_non_actg, mask_n) =
-                bitpack_dna::<CONFIG>(v);
-
-            let line_feeds = if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
-                if is_dna == !0 {
-                    0
-                } else {
-                    u8_mask(v, LINE_FEED)
-                }
-            } else {
-                u8_mask(v, LINE_FEED)
-            };
-
-            Bitmask {
-                line_feeds,
-                is_dna,
-                two_bits,
-                high_bit,
-                low_bit,
-                mask_non_actg,
-                mask_n,
+            let mut mask = bitpack_dna::<CONFIG>(v);
+            if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) || mask.is_dna != !0 {
+                mask.line_feeds = u8_mask(v, LINE_FEED);
             }
+            mask
         } else {
             let line_feeds = u8_mask(v, LINE_FEED);
             let skip_dna = if MODE == SCAN_MODE_QUALITY {
@@ -52,21 +34,13 @@ pub fn extract_bitmask<const CONFIG: Config, const MODE: u8>(buf: &[u8]) -> Bitm
             } else {
                 line_feeds == 0
             };
-            let (is_dna, two_bits, high_bit, low_bit, mask_non_actg, mask_n) = if skip_dna {
-                (!0, 0, 0, 0, 0, 0)
+            let mut mask = if skip_dna {
+                Bitmask::ALL_DNA
             } else {
                 bitpack_dna::<CONFIG>(v)
             };
-
-            Bitmask {
-                line_feeds,
-                is_dna,
-                two_bits,
-                high_bit,
-                low_bit,
-                mask_non_actg,
-                mask_n,
-            }
+            mask.line_feeds = line_feeds;
+            mask
         }
     }
 }
@@ -74,36 +48,19 @@ pub fn extract_bitmask<const CONFIG: Config, const MODE: u8>(buf: &[u8]) -> Bitm
 #[inline(always)]
 pub fn extract_dna_bitmask<const CONFIG: Config>(buf: &[u8]) -> Bitmask {
     unsafe {
-        let ptr = buf.as_ptr() as *const __m512i;
-        let v = _mm512_loadu_si512(ptr);
-        let (is_dna, two_bits, high_bit, low_bit, mask_non_actg, mask_n) = bitpack_dna::<CONFIG>(v);
-
-        Bitmask {
-            line_feeds: 0,
-            is_dna,
-            two_bits,
-            high_bit,
-            low_bit,
-            mask_non_actg,
-            mask_n,
-        }
+        let v = _mm512_loadu_si512(buf.as_ptr() as *const __m512i);
+        bitpack_dna::<CONFIG>(v)
     }
 }
 
 #[inline(always)]
-#[allow(unused_mut)]
-fn bitpack_dna<const CONFIG: Config>(v: __m512i) -> (u64, u128, u64, u64, u64, u64) {
+fn bitpack_dna<const CONFIG: Config>(v: __m512i) -> Bitmask {
     unsafe {
-        let mut is_dna = !0;
-        let mut two_bits = 0;
-        let mut high_bit = 0;
-        let mut low_bit = 0;
-        let mut mask_non_actg = 0;
-        let mut mask_n = 0;
+        let mut mask = Bitmask::ALL_DNA;
 
         if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
-            high_bit = _mm512_movepi8_mask(_mm512_slli_epi16(v, 5));
-            low_bit = _mm512_movepi8_mask(_mm512_slli_epi16(v, 6));
+            mask.high_bit = _mm512_movepi8_mask(_mm512_slli_epi16(v, 5));
+            mask.low_bit = _mm512_movepi8_mask(_mm512_slli_epi16(v, 6));
         }
 
         if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
@@ -115,7 +72,7 @@ fn bitpack_dna<const CONFIG: Config>(v: __m512i) -> (u64, u128, u64, u64, u64, u
                     | _pdep_u64(lo & 0xFFFFFFFF, 0x5555555555555555);
                 let mm_2 = _pdep_u64(hi >> 32, 0xAAAAAAAAAAAAAAAA)
                     | _pdep_u64(lo >> 32, 0x5555555555555555);
-                two_bits = (mm_1 as u128) | ((mm_2 as u128) << 64);
+                mask.two_bits = (mm_1 as u128) | ((mm_2 as u128) << 64);
             }
             #[cfg(any(not(target_feature = "bmi2"), feature = "no-pdep"))]
             {
@@ -126,7 +83,7 @@ fn bitpack_dna<const CONFIG: Config>(v: __m512i) -> (u64, u128, u64, u64, u64, u
                 let mm_hi = _mm512_movepi8_mask(_mm512_unpackhi_epi8(lo, hi));
                 let mm_1 = ((mm_hi as u32 as u64) << 32) | (mm_lo as u32 as u64);
                 let mm_2 = (mm_hi & 0xFFFFFFFF_00000000) | (mm_lo >> 32);
-                two_bits = (mm_1 as u128) | ((mm_2 as u128) << 64);
+                mask.two_bits = (mm_1 as u128) | ((mm_2 as u128) << 64);
             }
         }
 
@@ -143,17 +100,17 @@ fn bitpack_dna<const CONFIG: Config>(v: __m512i) -> (u64, u128, u64, u64, u64, u
                 uv,
             );
             if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
-                is_dna = mask_actg;
+                mask.is_dna = mask_actg;
             }
             if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
-                mask_non_actg = !mask_actg;
+                mask.mask_non_actg = !mask_actg;
             }
             if flag_is_set(CONFIG, COMPUTE_MASK_N) {
-                mask_n = u8_mask(uv, ASCII_N);
+                mask.mask_n = u8_mask(uv, ASCII_N);
             }
         }
 
-        (is_dna, two_bits, high_bit, low_bit, mask_non_actg, mask_n)
+        mask
     }
 }
 

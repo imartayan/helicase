@@ -39,12 +39,6 @@ pub enum CompressionFormat {
 }
 
 impl CompressionFormat {
-    /// Returns `true` if this compression format consists of independent parallel chunks/blocks (BGZF or PZSTD).
-    #[inline]
-    pub const fn is_parallel(&self) -> bool {
-        matches!(self, Self::Bgzf | Self::Pzstd)
-    }
-
     /// Returns the canonical name of the compression format.
     #[inline]
     pub const fn as_str(&self) -> &'static str {
@@ -54,18 +48,6 @@ impl CompressionFormat {
             Self::Zstd => "zstd",
             Self::Pzstd => "pzstd",
             Self::Bzip2 => "bzip2",
-            Self::Xz => "xz",
-        }
-    }
-
-    /// Returns the standard file extension for this format.
-    #[inline]
-    pub const fn extension(&self) -> &'static str {
-        match self {
-            Self::Gzip => "gz",
-            Self::Bgzf => "bgz",
-            Self::Zstd | Self::Pzstd => "zst",
-            Self::Bzip2 => "bz2",
             Self::Xz => "xz",
         }
     }
@@ -179,21 +161,6 @@ pub trait InputData<'a>: Iterator<Item = io::Result<&'a [u8]>> {
         Ok(None)
     }
 
-    /// Returns `true` if compression has been detected.
-    #[inline(always)]
-    fn is_compressed(&mut self) -> io::Result<bool> {
-        Ok(self.compression_format()?.is_some())
-    }
-
-    /// Get a reference to the complete slice of data.
-    ///
-    /// This is not available for reader-based implementations.
-    #[inline(always)]
-    fn data(&self) -> &'a [u8] {
-        assert!(Self::RANDOM_ACCESS);
-        unimplemented!()
-    }
-
     /// Get a reference to the internal buffer.
     ///
     /// This is only relevant for reader-based implementations.
@@ -304,11 +271,6 @@ impl<'a> InputData<'a> for SliceInput<'a> {
     }
 
     #[inline(always)]
-    fn data(&self) -> &'a [u8] {
-        self.data
-    }
-
-    #[inline(always)]
     fn buffer(&self) -> &[u8] {
         self.data
     }
@@ -390,28 +352,13 @@ impl<'a> InputData<'a> for MmapInput<'a> {
     }
 
     #[inline(always)]
-    fn data(&self) -> &'a [u8] {
-        self.slice.data()
-    }
-
-    #[inline(always)]
     fn buffer(&self) -> &[u8] {
         self.slice.buffer()
     }
 
     #[inline(always)]
-    fn buffer_offset(&self) -> usize {
-        self.slice.buffer_offset()
-    }
-
-    #[inline(always)]
     fn is_end_of_buffer(&self) -> bool {
         self.slice.is_end_of_buffer()
-    }
-
-    #[inline(always)]
-    fn make_room(&mut self, keep_from: usize) {
-        self.slice.make_room(keep_from);
     }
 
     #[inline(always)]
@@ -539,13 +486,9 @@ impl<R: BufRead> Read for SiroccoMultiGzReader<R> {
                 return Err(err);
             }
             self.fill()?;
-        }
-
-        if self.pending.is_empty() {
-            if let Some(err) = self.pending_err.take() {
-                return Err(err);
+            if self.pending.is_empty() {
+                return self.pending_err.take().map_or(Ok(0), Err);
             }
-            return Ok(0);
         }
 
         let n = self.pending.len().min(buf.len());
@@ -720,20 +663,11 @@ impl<'a, R: Read + Send + 'a> ReaderInput<'a, R> {
             CompressionFormat::from_bytes(peek)
         };
 
-        #[cfg(feature = "sirocco")]
         let decoder = match compression {
+            #[cfg(feature = "sirocco")]
             Some(CompressionFormat::Gzip | CompressionFormat::Bgzf) => {
                 ReaderDecoder::Sirocco(Box::new(SiroccoMultiGzReader::new(buf_reader)))
             }
-            #[cfg(feature = "zstd")]
-            Some(CompressionFormat::Zstd | CompressionFormat::Pzstd) => ReaderDecoder::Zstd(
-                Box::new(zstd::stream::read::Decoder::with_buffer(buf_reader)?),
-            ),
-            _ => ReaderDecoder::Deko(Box::new(AnyDecoder::new(buf_reader))),
-        };
-
-        #[cfg(not(feature = "sirocco"))]
-        let decoder = match compression {
             #[cfg(feature = "zstd")]
             Some(CompressionFormat::Zstd | CompressionFormat::Pzstd) => ReaderDecoder::Zstd(
                 Box::new(zstd::stream::read::Decoder::with_buffer(buf_reader)?),
@@ -878,11 +812,6 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
             return Ok(mapped);
         }
         Ok(None)
-    }
-
-    #[inline(always)]
-    fn is_compressed(&mut self) -> io::Result<bool> {
-        Ok(self.compression_format()?.is_some())
     }
 
     #[inline(always)]
@@ -1064,13 +993,6 @@ mod tests {
 
     #[test]
     fn test_compression_format_properties() {
-        assert!(CompressionFormat::Bgzf.is_parallel());
-        assert!(CompressionFormat::Pzstd.is_parallel());
-        assert!(!CompressionFormat::Gzip.is_parallel());
-        assert!(!CompressionFormat::Zstd.is_parallel());
-        assert!(!CompressionFormat::Bzip2.is_parallel());
-        assert!(!CompressionFormat::Xz.is_parallel());
-
         assert_eq!(CompressionFormat::Gzip.as_str(), "gzip");
         assert_eq!(CompressionFormat::Bgzf.as_str(), "bgzf");
         assert_eq!(CompressionFormat::Zstd.as_str(), "zstd");

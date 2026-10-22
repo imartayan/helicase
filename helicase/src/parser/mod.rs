@@ -1,10 +1,14 @@
 //! Parser types and traits.
 
+#[macro_use]
+mod macros;
 mod bitpack;
 mod error;
 mod fasta;
 mod fastq;
 mod fastx;
+#[cfg(any(feature = "sirocco", feature = "zstd"))]
+mod frames;
 mod line_index;
 mod parallel;
 #[cfg(feature = "paraseq")]
@@ -18,10 +22,10 @@ pub use error::{Error, ErrorKind};
 pub use fasta::*;
 pub use fastq::*;
 pub use fastx::*;
+#[cfg(feature = "zstd")]
+pub(crate) use frames::index_zstd_frames;
 use line_index::{LineIndex, scan_block};
 pub use parallel::ParallelFastxParser;
-#[cfg(feature = "zstd")]
-pub(crate) use parallel::index_zstd_frames;
 pub use traits::*;
 
 /// A specialized [`Result`] type for Helicase parser operations.

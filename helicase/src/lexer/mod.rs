@@ -48,6 +48,18 @@ pub struct Bitmask {
     pub mask_n: u64,
 }
 
+impl Bitmask {
+    pub const ALL_DNA: Self = Self {
+        line_feeds: 0,
+        is_dna: !0,
+        two_bits: 0,
+        high_bit: 0,
+        low_bit: 0,
+        mask_non_actg: 0,
+        mask_n: 0,
+    };
+}
+
 #[derive(Copy, Clone, Default, PartialEq, Eq)]
 pub struct Chunk {
     pub len: usize,
@@ -260,15 +272,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Lexer<'a, CONFIG, I> {
     }
 }
 
-impl<'a, const CONFIG: Config, I: InputData<'a>> Iterator for Lexer<'a, CONFIG, I> {
-    type Item = io::Result<Chunk>;
-
-    #[inline(always)]
-    fn next(&mut self) -> Option<Self::Item> {
-        self.next_block::<SCAN_MODE_DNA>()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,7 +282,7 @@ mod tests {
         let fasta = b">head\nACGT\n";
         let chunk = Lexer::<CONFIG_COLUMNAR, _>::from_slice(fasta)
             .unwrap()
-            .next()
+            .next_block::<SCAN_MODE_DNA>()
             .unwrap()
             .unwrap();
         assert_eq!(chunk.len, 11);

@@ -10,6 +10,7 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// Validates whether `cand` starts a genuine 4-line FASTQ record.
 #[inline(always)]
@@ -70,7 +71,7 @@ fn is_valid_record_start(data: &[u8], cand: usize, format: Format) -> bool {
 }
 
 /// Finds the exact byte index of the first record starting at or after `approx_pos`.
-fn find_record_start(data: &[u8], approx_pos: usize, format: Format) -> usize {
+pub(super) fn find_record_start(data: &[u8], approx_pos: usize, format: Format) -> usize {
     if approx_pos == 0 || approx_pos >= data.len() {
         return approx_pos.min(data.len());
     }
@@ -88,43 +89,79 @@ fn find_record_start(data: &[u8], approx_pos: usize, format: Format) -> usize {
     data.len()
 }
 
-/// Partitions a contiguous buffer into record-aligned `(start, end)` byte slices.
-fn partition_chunks(data: &[u8], num_chunks: usize, format: Format) -> Vec<(usize, usize)> {
-    if data.is_empty() {
-        return Vec::new();
-    }
-    if num_chunks <= 1 || data.len() < 32 * 1024 {
-        return vec![(0, data.len())];
-    }
-    let approx_chunk_size = data.len() / num_chunks;
-    let mut chunks = Vec::with_capacity(num_chunks);
-    let mut start = 0;
-
-    for chunk_idx in 1..num_chunks {
-        let approx_pos = chunk_idx * approx_chunk_size;
-        let end = if approx_pos <= start {
-            start
-        } else {
-            find_record_start(data, approx_pos, format)
-        };
-        if start < end {
-            chunks.push((start, end));
+/// Processes `num_chunks` chunks across `threads` with work stealing, and reduces the results.
+///
+/// Chunk `i` goes from split `i` to split `i + 1`. The first and last splits are given, the others
+/// are computed once by `split`, when a thread first needs them. Empty chunks are skipped.
+/// Thread `t` starts with chunk `t`, so results are in input order with one chunk per thread.
+/// If a chunk fails, the other threads stop and the first error is returned.
+pub(super) fn run_chunks<P, State, Split, Parse, Reduce>(
+    num_chunks: usize,
+    threads: usize,
+    (first, last): (P, P),
+    split: Split,
+    parse_chunk: Parse,
+    reduce: Reduce,
+) -> Result<State>
+where
+    P: Copy + PartialOrd + Send + Sync,
+    State: Send + Default,
+    Split: Fn(usize) -> P + Sync,
+    Parse: Fn(P, P) -> Result<State> + Sync,
+    Reduce: Fn(State, State) -> State + Sync,
+{
+    let splits: Vec<OnceLock<P>> = (0..=num_chunks).map(|_| OnceLock::new()).collect();
+    let _ = splits[0].set(first);
+    let _ = splits[num_chunks].set(last);
+    let split_at = &|i: usize| *splits[i].get_or_init(|| split(i));
+    let workers = threads.min(num_chunks);
+    let next_chunk = &AtomicUsize::new(workers);
+    let stop = &AtomicBool::new(false);
+    let (parse_chunk, reduce) = (&parse_chunk, &reduce);
+    let results = std::thread::scope(|scope| {
+        // Collected to spawn all the threads before joining them.
+        #[allow(clippy::needless_collect)]
+        let handles: Vec<_> = (0..workers)
+            .map(|first_chunk| {
+                scope.spawn(move || -> Result<Option<State>> {
+                    let mut thread_state = None;
+                    let mut idx = first_chunk;
+                    while idx < num_chunks && !stop.load(Ordering::Relaxed) {
+                        let (start, end) = (split_at(idx), split_at(idx + 1));
+                        if start < end {
+                            let res = parse_chunk(start, end)
+                                .inspect_err(|_| stop.store(true, Ordering::Relaxed))?;
+                            thread_state = Some(match thread_state {
+                                Some(acc) => reduce(acc, res),
+                                None => res,
+                            });
+                        }
+                        idx = next_chunk.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok(thread_state)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    let mut total = None;
+    for thread_state in results {
+        if let Some(res) = thread_state? {
+            total = Some(match total {
+                Some(acc) => reduce(acc, res),
+                None => res,
+            });
         }
-        start = end;
     }
-    if start < data.len() {
-        chunks.push((start, data.len()));
-    }
-    chunks
+    Ok(total.unwrap_or_default())
 }
 
-/// Executes parallel multi-chunk processing over `data` across `num_threads`.
-///
-/// Uses an atomic work-stealing counter over fine-grained virtual chunks ($4\times$ oversubscribed)
-/// to achieve dynamic load balancing without cross-thread lock contention.
-fn par_for_each_chunk<const CONFIG: Config, State, Process, Reduce>(
+fn run_slice<const CONFIG: Config, State, Process, Reduce>(
     data: &[u8],
-    num_threads: usize,
+    threads: usize,
     process: Process,
     reduce: Reduce,
 ) -> Result<State>
@@ -133,114 +170,38 @@ where
     Process: Fn(FastxParser<'_, CONFIG>) -> Result<State> + Sync,
     Reduce: Fn(State, State) -> State + Sync,
 {
-    if data.is_empty() {
+    let Some(&first_byte) = data.first() else {
         return Ok(State::default());
-    }
-
-    let format = Format::try_from_byte(data.first().copied().unwrap_or(0))?;
-
-    let threads = num_threads.max(1);
+    };
+    let format = Format::try_from_byte(first_byte)?;
     if threads == 1 || data.len() < 32 * 1024 {
-        let parser = FastxParser::from_slice(data)?;
-        return process(parser);
+        return process(FastxParser::from_slice(data)?);
     }
-
-    let num_chunks = (threads * 4).min((data.len() / (16 * 1024)).max(1));
-    let chunks = partition_chunks(data, num_chunks, format);
-    if chunks.is_empty() {
-        return Ok(State::default());
-    }
-
-    if chunks.len() == 1 {
-        let parser = FastxParser::from_slice(data)?;
-        return process(parser);
-    }
-
-    let worker_threads = threads.min(chunks.len());
-    let next_chunk = AtomicUsize::new(0);
-    let stop_flag = AtomicBool::new(false);
-    let process = &process;
-    let reduce = &reduce;
-    let stop_flag_ref = &stop_flag;
-
-    let results = std::thread::scope(|scope| {
-        let handles: Vec<_> = (0..worker_threads)
-            .map(|_| {
-                scope.spawn(|| -> Result<Option<State>> {
-                    let mut thread_state: Option<State> = None;
-                    loop {
-                        if stop_flag_ref.load(Ordering::Relaxed) {
-                            break;
-                        }
-                        let idx = next_chunk.fetch_add(1, Ordering::Relaxed);
-                        if idx >= chunks.len() {
-                            break;
-                        }
-                        let (start, end) = chunks[idx];
-                        let parser = FastxParser::from_slice(&data[start..end])?;
-                        let chunk_res = match process(parser) {
-                            Ok(res) => res,
-                            Err(e) => {
-                                stop_flag_ref.store(true, Ordering::Relaxed);
-                                return Err(e);
-                            }
-                        };
-                        thread_state = Some(match thread_state {
-                            Some(acc) => reduce(acc, chunk_res),
-                            None => chunk_res,
-                        });
-                    }
-                    Ok(thread_state)
-                })
-            })
-            .collect();
-
-        handles
-            .into_iter()
-            .map(|handle| handle.join().unwrap())
-            .collect::<Vec<_>>()
-    });
-
-    let mut first_err = None;
-    let mut total: Option<State> = None;
-    for result in results {
-        match result {
-            Ok(Some(res)) => {
-                if first_err.is_none() {
-                    total = Some(match total {
-                        Some(acc) => reduce(acc, res),
-                        None => res,
-                    });
-                }
-            }
-            Ok(None) => {}
-            Err(e) => {
-                if first_err.is_none() {
-                    first_err = Some(e);
-                }
-            }
-        }
-    }
-    if let Some(err) = first_err {
-        return Err(err);
-    }
-    Ok(total.unwrap_or_default())
+    let num_chunks = (threads * 4).min(data.len() / (16 * 1024));
+    let chunk_len = data.len() / num_chunks;
+    run_chunks(
+        num_chunks,
+        threads,
+        (0, data.len()),
+        |i| find_record_start(data, i * chunk_len, format),
+        |start, end| process(FastxParser::from_slice(&data[start..end])?),
+        reduce,
+    )
 }
 
 /// Probes a file to determine the record boundary starting at or after `approx_pos`.
 fn probe_file_record_start(
-    file: &mut File,
+    path: &Path,
     approx_pos: u64,
     file_len: u64,
     format: Format,
-    buf: &mut [u8],
 ) -> io::Result<u64> {
     if approx_pos == 0 || approx_pos >= file_len {
         return Ok(approx_pos.min(file_len));
     }
-
+    let mut file = File::open(path)?;
+    let mut buf = vec![0u8; 64 * 1024];
     let mut probe_pos = approx_pos.saturating_sub(1);
-
     loop {
         file.seek(SeekFrom::Start(probe_pos))?;
         let to_read = ((file_len - probe_pos) as usize).min(buf.len());
@@ -248,16 +209,12 @@ fn probe_file_record_start(
             return Ok(file_len);
         }
         file.read_exact(&mut buf[..to_read])?;
-        let slice = &buf[..to_read];
-
         let approx_in_slice = if approx_pos > probe_pos {
             (approx_pos - probe_pos) as usize
         } else {
             1
         };
-
-        let cand = find_record_start(slice, approx_in_slice, format);
-
+        let cand = find_record_start(&buf[..to_read], approx_in_slice, format);
         if cand < to_read {
             return Ok(probe_pos + cand as u64);
         }
@@ -266,6 +223,76 @@ fn probe_file_record_start(
         }
         probe_pos += to_read as u64 - 1;
     }
+}
+
+fn run_file<const CONFIG: Config, State, Process, Reduce>(
+    path: &Path,
+    threads: usize,
+    custom_chunks: Option<usize>,
+    process: Process,
+    reduce: Reduce,
+) -> Result<State>
+where
+    State: Send + Default,
+    Process: Fn(FastxParser<'_, CONFIG>) -> Result<State> + Sync,
+    Reduce: Fn(State, State) -> State + Sync,
+{
+    match CompressionFormat::from_path(path)? {
+        None => {}
+        #[cfg(feature = "sirocco")]
+        Some(CompressionFormat::Bgzf) if threads > 1 => {
+            let mmap = unsafe { memmap2::Mmap::map(&File::open(path)?)? };
+            let blocks = super::frames::index_bgzf_blocks(&mmap);
+            return super::frames::run_frames::<super::frames::BgzfDecoder, CONFIG, _, _, _>(
+                &mmap, &blocks, threads, process, reduce,
+            );
+        }
+        #[cfg(feature = "zstd")]
+        Some(CompressionFormat::Pzstd) if threads > 1 => {
+            let mmap = unsafe { memmap2::Mmap::map(&File::open(path)?)? };
+            let zstd_frames = super::frames::index_zstd_frames(&mmap);
+            if zstd_frames.len() > 1 {
+                return super::frames::run_frames::<super::frames::ZstdDecoder, CONFIG, _, _, _>(
+                    &mmap,
+                    &zstd_frames,
+                    threads,
+                    process,
+                    reduce,
+                );
+            }
+            return process(FastxParser::from_file(path)?);
+        }
+        Some(_) => return process(FastxParser::from_file(path)?),
+    }
+
+    let mut file = File::open(path)?;
+    let file_len = file.metadata()?.len();
+    if file_len == 0 {
+        return Ok(State::default());
+    }
+    let mut first_byte = [0u8; 1];
+    file.read_exact(&mut first_byte)?;
+    let format = Format::try_from_byte(first_byte[0])?;
+    if threads == 1 || file_len < 32 * 1024 {
+        return process(FastxParser::from_file(path)?);
+    }
+    let num_chunks = custom_chunks.unwrap_or(threads * 4);
+    let chunk_len = file_len / num_chunks as u64;
+    run_chunks(
+        num_chunks,
+        threads,
+        (0, file_len),
+        |i| {
+            let approx_pos = i as u64 * chunk_len;
+            probe_file_record_start(path, approx_pos, file_len, format).unwrap_or(approx_pos)
+        },
+        |start, end| {
+            let mut file = File::open(path)?;
+            file.seek(SeekFrom::Start(start))?;
+            process(FastxParser::from_reader(file.take(end - start))?)
+        },
+        reduce,
+    )
 }
 
 /// Trait for return types of [`ParallelFastxParser::for_each`] closures.
@@ -287,13 +314,6 @@ impl ParallelResult for Result<()> {
     fn into_result(self) -> Result<()> {
         self
     }
-}
-
-#[inline]
-fn default_threads() -> usize {
-    std::thread::available_parallelism()
-        .map(|count| count.get())
-        .unwrap_or(1)
 }
 
 enum ParallelSource<'a> {
@@ -344,14 +364,18 @@ pub struct ParallelFastxParser<'a, const CONFIG: Config> {
 }
 
 impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
+    fn with_source(source: ParallelSource<'a>) -> Self {
+        Self {
+            source,
+            threads: std::thread::available_parallelism().map_or(1, |n| n.get()),
+            chunks: None,
+        }
+    }
+
     /// Creates a parallel parser over an in-memory byte slice.
     #[inline]
     pub fn from_slice(slice: &'a [u8]) -> Self {
-        Self {
-            source: ParallelSource::Slice(slice),
-            threads: default_threads(),
-            chunks: None,
-        }
+        Self::with_source(ParallelSource::Slice(slice))
     }
 
     /// Creates a parallel parser for a file on disk using the streaming multi-reader engine.
@@ -361,13 +385,10 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     ///
     /// Also see [`from_file_mmap`](Self::from_file_mmap) for zero-copy memory mapping on local SSD/NVMe.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref().to_path_buf();
-        let _ = File::open(&path)?;
-        Ok(Self {
-            source: ParallelSource::File(path),
-            threads: default_threads(),
-            chunks: None,
-        })
+        File::open(&path)?;
+        Ok(Self::with_source(ParallelSource::File(
+            path.as_ref().to_path_buf(),
+        )))
     }
 
     /// Creates a parallel parser for a file on disk using zero-copy memory mapping (`mmap`).
@@ -376,13 +397,10 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     ///
     /// Also see [`from_file`](Self::from_file) for streaming multi-reader mode with bounded memory.
     pub fn from_file_mmap(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref().to_path_buf();
-        let _ = File::open(&path)?;
-        Ok(Self {
-            source: ParallelSource::Mmap(path),
-            threads: default_threads(),
-            chunks: None,
-        })
+        File::open(&path)?;
+        Ok(Self::with_source(ParallelSource::Mmap(
+            path.as_ref().to_path_buf(),
+        )))
     }
 
     /// Creates a parallel parser for an arbitrary streaming reader.
@@ -390,11 +408,7 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     /// Non-seekable streaming readers currently execute in single-threaded streaming mode.
     #[inline]
     pub fn from_reader<Reader: Read + Send + 'a>(reader: Reader) -> Self {
-        Self {
-            source: ParallelSource::Reader(Box::new(reader)),
-            threads: default_threads(),
-            chunks: None,
-        }
+        Self::with_source(ParallelSource::Reader(Box::new(reader)))
     }
 
     /// Sets the number of worker threads.
@@ -551,28 +565,22 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     {
         match self.source {
             ParallelSource::Slice(slice) => {
-                par_for_each_chunk::<CONFIG, State, _, _>(slice, self.threads, process, reduce)
+                run_slice::<CONFIG, State, _, _>(slice, self.threads, process, reduce)
             }
             ParallelSource::Mmap(path) => {
-                let file = File::open(&path)?;
-                let mmap = unsafe { memmap2::Mmap::map(&file)? };
-                par_for_each_chunk::<CONFIG, State, _, _>(&mmap, self.threads, process, reduce)
+                let mmap = unsafe { memmap2::Mmap::map(&File::open(&path)?)? };
+                run_slice::<CONFIG, State, _, _>(&mmap, self.threads, process, reduce)
             }
-            ParallelSource::File(path) => run_multi_reader::<CONFIG, State, _, _>(
-                &path,
-                self.threads,
-                self.chunks,
-                process,
-                reduce,
-            ),
+            ParallelSource::File(path) => {
+                run_file::<CONFIG, State, _, _>(&path, self.threads, self.chunks, process, reduce)
+            }
             ParallelSource::Reader(reader) => {
                 if self.threads > 1 {
                     eprintln!(
                         "Warning: ParallelFastxParser currently processes streaming readers in single-threaded mode."
                     );
                 }
-                let parser = FastxParser::<CONFIG>::from_reader(reader)?;
-                process(parser)
+                process(FastxParser::<CONFIG>::from_reader(reader)?)
             }
         }
     }
@@ -601,724 +609,4 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
             Ok(())
         })
     }
-}
-
-use crate::input::CompressionFormat;
-
-fn run_multi_reader<const CONFIG: Config, State, Process, Reduce>(
-    path: &Path,
-    num_threads: usize,
-    custom_chunks: Option<usize>,
-    process: Process,
-    reduce: Reduce,
-) -> Result<State>
-where
-    State: Send + Default,
-    Process: Fn(FastxParser<'_, CONFIG>) -> Result<State> + Sync,
-    Reduce: Fn(State, State) -> State + Sync,
-{
-    let num_threads = num_threads.max(1);
-    match CompressionFormat::from_path(path)? {
-        None => {
-            let mut file = File::open(path)?;
-            let file_len = file.metadata()?.len();
-            if file_len == 0 {
-                return Ok(State::default());
-            }
-
-            let mut first_byte = [0u8; 1];
-            file.read_exact(&mut first_byte)?;
-            let format = Format::try_from_byte(first_byte[0])?;
-
-            if num_threads == 1 || file_len < 32 * 1024 {
-                file.seek(SeekFrom::Start(0))?;
-                let parser = FastxParser::<CONFIG>::from_reader(file)?;
-                return process(parser);
-            }
-
-            let num_chunks = custom_chunks.unwrap_or(num_threads * 4).max(1);
-            let approx_chunk_size = file_len / num_chunks as u64;
-            let worker_threads = num_threads.min(num_chunks);
-            let next_chunk = AtomicUsize::new(0);
-            let stop_flag = AtomicBool::new(false);
-            let process = &process;
-            let reduce = &reduce;
-            let stop_flag_ref = &stop_flag;
-
-            let splits: Vec<std::sync::OnceLock<u64>> = (0..=num_chunks)
-                .map(|_| std::sync::OnceLock::new())
-                .collect();
-            splits[0].set(0).unwrap();
-            splits[num_chunks].set(file_len).unwrap();
-            let splits_ref = &splits;
-
-            let results = std::thread::scope(|scope| {
-                let handles: Vec<_> = (0..worker_threads)
-                    .map(|_| {
-                        scope.spawn(|| -> Result<Option<State>> {
-                            let mut thread_state: Option<State> = None;
-                            let mut file = File::open(path)?;
-                            let mut probe_buf = vec![0u8; 64 * 1024];
-
-                            loop {
-                                if stop_flag_ref.load(Ordering::Relaxed) {
-                                    break;
-                                }
-                                let idx = next_chunk.fetch_add(1, Ordering::Relaxed);
-                                if idx >= num_chunks {
-                                    break;
-                                }
-                                let get_split =
-                                    |chunk_idx: usize, file: &mut File, buf: &mut [u8]| -> u64 {
-                                        *splits_ref[chunk_idx].get_or_init(|| {
-                                            let approx_pos = chunk_idx as u64 * approx_chunk_size;
-                                            probe_file_record_start(
-                                                file, approx_pos, file_len, format, buf,
-                                            )
-                                            .unwrap_or(approx_pos)
-                                        })
-                                    };
-
-                                let start = get_split(idx, &mut file, &mut probe_buf);
-                                let end = get_split(idx + 1, &mut file, &mut probe_buf);
-
-                                if start >= end {
-                                    continue;
-                                }
-                                let take_len = end - start;
-                                file.seek(SeekFrom::Start(start))?;
-                                let reader = (&mut file).take(take_len);
-                                let parser = FastxParser::<CONFIG>::from_reader(reader)?;
-                                let chunk_res = match process(parser) {
-                                    Ok(res) => res,
-                                    Err(e) => {
-                                        stop_flag_ref.store(true, Ordering::Relaxed);
-                                        return Err(e);
-                                    }
-                                };
-                                thread_state = Some(match thread_state {
-                                    Some(acc) => reduce(acc, chunk_res),
-                                    None => chunk_res,
-                                });
-                            }
-                            Ok(thread_state)
-                        })
-                    })
-                    .collect();
-
-                handles
-                    .into_iter()
-                    .map(|handle| handle.join().unwrap())
-                    .collect::<Vec<_>>()
-            });
-
-            let mut first_err = None;
-            let mut total: Option<State> = None;
-            for result in results {
-                match result {
-                    Ok(Some(res)) => {
-                        if first_err.is_none() {
-                            total = Some(match total {
-                                Some(acc) => reduce(acc, res),
-                                None => res,
-                            });
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        if first_err.is_none() {
-                            first_err = Some(e);
-                        }
-                    }
-                }
-            }
-            if let Some(err) = first_err {
-                return Err(err);
-            }
-            Ok(total.unwrap_or_default())
-        }
-        Some(CompressionFormat::Bgzf) => {
-            #[cfg(feature = "sirocco")]
-            {
-                if num_threads > 1 {
-                    let file = File::open(path)?;
-                    let mmap = unsafe { memmap2::Mmap::map(&file)? };
-                    return run_bgzf_multi_reader_sirocco::<CONFIG, State, _, _>(
-                        &mmap,
-                        num_threads,
-                        process,
-                        reduce,
-                    );
-                }
-                let parser = FastxParser::<CONFIG>::from_file(path)?;
-                process(parser)
-            }
-            #[cfg(not(feature = "sirocco"))]
-            {
-                let file = File::open(path)?;
-                let parser = FastxParser::<CONFIG>::from_reader(file)?;
-                process(parser)
-            }
-        }
-        Some(CompressionFormat::Pzstd) => {
-            #[cfg(feature = "zstd")]
-            {
-                let file = File::open(path)?;
-                let mmap = unsafe { memmap2::Mmap::map(&file)? };
-                let frames = index_zstd_frames(&mmap);
-                if frames.len() > 1 && num_threads > 1 {
-                    return run_zstd_multi_reader::<CONFIG, State, _, _>(
-                        &mmap,
-                        &frames,
-                        num_threads,
-                        process,
-                        reduce,
-                    );
-                }
-                let parser = FastxParser::<CONFIG>::from_file(path)?;
-                process(parser)
-            }
-            #[cfg(not(feature = "zstd"))]
-            {
-                let file = File::open(path)?;
-                let parser = FastxParser::<CONFIG>::from_reader(file)?;
-                process(parser)
-            }
-        }
-        Some(
-            CompressionFormat::Gzip
-            | CompressionFormat::Zstd
-            | CompressionFormat::Bzip2
-            | CompressionFormat::Xz,
-        ) => {
-            let parser = FastxParser::<CONFIG>::from_file(path)?;
-            process(parser)
-        }
-    }
-}
-
-#[cfg(feature = "sirocco")]
-#[derive(Clone, Copy)]
-struct BgzfBlock {
-    comp_offset: usize,
-    comp_len: usize,
-    uncomp_len: usize,
-}
-
-#[cfg(feature = "sirocco")]
-fn index_bgzf_blocks(compressed: &[u8]) -> Vec<BgzfBlock> {
-    let mut blocks = Vec::with_capacity(compressed.len() / 2048);
-    let mut comp_offset = 0;
-
-    while comp_offset + 18 <= compressed.len() {
-        let block_header = &compressed[comp_offset..];
-        if block_header[0] != 0x1f || block_header[1] != 0x8b || (block_header[3] & 0x04) == 0 {
-            break;
-        }
-        if block_header[12] != b'B' || block_header[13] != b'C' {
-            break;
-        }
-        let bsize = u16::from_le_bytes([block_header[16], block_header[17]]) as usize;
-        let comp_len = bsize + 1;
-        if comp_offset + comp_len > compressed.len() {
-            break;
-        }
-        let block = &compressed[comp_offset..comp_offset + comp_len];
-        let uncomp_len = u32::from_le_bytes([
-            block[comp_len - 4],
-            block[comp_len - 3],
-            block[comp_len - 2],
-            block[comp_len - 1],
-        ]) as usize;
-
-        if uncomp_len > 0 {
-            blocks.push(BgzfBlock {
-                comp_offset,
-                comp_len,
-                uncomp_len,
-            });
-        }
-        comp_offset += comp_len;
-    }
-    blocks
-}
-
-#[cfg(feature = "sirocco")]
-struct BgzfBlockRangeReader<'a> {
-    compressed: &'a [u8],
-    blocks: &'a [BgzfBlock],
-    current_block: usize,
-    start_block: usize,
-    end_block: usize,
-    start_skip: usize,
-    end_take: usize,
-
-    decoder: sirocco::inflate::Decoder,
-    buf: Vec<u8>,
-    pos: usize,
-    len: usize,
-}
-
-#[cfg(feature = "sirocco")]
-impl<'a> BgzfBlockRangeReader<'a> {
-    fn new(
-        compressed: &'a [u8],
-        blocks: &'a [BgzfBlock],
-        start_block: usize,
-        end_block: usize,
-        start_skip: usize,
-        end_take: usize,
-    ) -> Self {
-        Self {
-            compressed,
-            blocks,
-            current_block: start_block,
-            start_block,
-            end_block,
-            start_skip,
-            end_take,
-            decoder: sirocco::inflate::Decoder::new(sirocco::Format::Gzip),
-            buf: Vec::with_capacity(65536),
-            pos: 0,
-            len: 0,
-        }
-    }
-}
-
-#[cfg(feature = "sirocco")]
-impl<'a> Read for BgzfBlockRangeReader<'a> {
-    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
-        while self.pos >= self.len {
-            if self.current_block > self.end_block
-                || (self.current_block == self.end_block && self.end_take == 0)
-                || self.current_block >= self.blocks.len()
-            {
-                return Ok(0);
-            }
-            let b = &self.blocks[self.current_block];
-            let block_bytes = &self.compressed[b.comp_offset..b.comp_offset + b.comp_len];
-            self.buf.resize(b.uncomp_len, 0);
-            let p = self
-                .decoder
-                .decompress(block_bytes, &mut self.buf, true)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{e:?}")))?;
-            self.decoder.reset();
-
-            let mut start = 0;
-            let mut end = p.output.len();
-
-            if self.current_block == self.start_block {
-                start = self.start_skip;
-            }
-            if self.current_block == self.end_block {
-                end = self.end_take;
-            }
-
-            self.pos = start;
-            self.len = end;
-            self.current_block += 1;
-        }
-
-        let n = (self.len - self.pos).min(out.len());
-        out[..n].copy_from_slice(&self.buf[self.pos..self.pos + n]);
-        self.pos += n;
-        Ok(n)
-    }
-}
-
-#[cfg(feature = "sirocco")]
-fn find_record_start_in_bgzf(
-    compressed: &[u8],
-    blocks: &[BgzfBlock],
-    mut block_idx: usize,
-    format: Format,
-) -> (usize, usize) {
-    let mut block_data = Vec::new();
-    let mut decoder = sirocco::inflate::Decoder::new(sirocco::Format::Gzip);
-    while block_idx < blocks.len() {
-        let b = &blocks[block_idx];
-        block_data.resize(b.uncomp_len, 0);
-        let block_bytes = &compressed[b.comp_offset..b.comp_offset + b.comp_len];
-        let _ = decoder.decompress(block_bytes, &mut block_data, true);
-        decoder.reset();
-
-        let cand = find_record_start(&block_data, 1, format);
-        if cand < block_data.len() {
-            return (block_idx, cand);
-        }
-        block_idx += 1;
-    }
-    (blocks.len(), 0)
-}
-
-#[cfg(feature = "sirocco")]
-fn run_bgzf_multi_reader_sirocco<const CONFIG: Config, State, Process, Reduce>(
-    compressed: &[u8],
-    num_threads: usize,
-    process: Process,
-    reduce: Reduce,
-) -> Result<State>
-where
-    State: Send + Default,
-    Process: Fn(FastxParser<'_, CONFIG>) -> Result<State> + Sync,
-    Reduce: Fn(State, State) -> State + Sync,
-{
-    let blocks = index_bgzf_blocks(compressed);
-    if blocks.is_empty() {
-        return Ok(State::default());
-    }
-
-    let format = {
-        let mut block0 = vec![0u8; 64];
-        let mut dec = sirocco::inflate::Decoder::new(sirocco::Format::Gzip);
-        let first_byte = dec
-            .decompress(&compressed[..blocks[0].comp_len], &mut block0, false)
-            .ok()
-            .and_then(|p| p.output.first().copied())
-            .unwrap_or(0);
-        Format::try_from_byte(first_byte)?
-    };
-
-    let num_threads = num_threads.max(1).min(blocks.len());
-    let process = &process;
-    let reduce = &reduce;
-    let blocks_ref = &blocks;
-
-    let split_points: Vec<std::sync::OnceLock<(usize, usize)>> = (0..=num_threads)
-        .map(|_| std::sync::OnceLock::new())
-        .collect();
-    split_points[0].set((0, 0)).unwrap();
-    split_points[num_threads]
-        .set((blocks_ref.len(), 0))
-        .unwrap();
-    let splits_ref = &split_points;
-
-    let get_split = |idx: usize| -> (usize, usize) {
-        *splits_ref[idx].get_or_init(|| {
-            let target_block = idx * blocks_ref.len() / num_threads;
-            find_record_start_in_bgzf(compressed, blocks_ref, target_block, format)
-        })
-    };
-
-    let results = std::thread::scope(|s| {
-        let handles: Vec<_> = (0..num_threads)
-            .map(|i| {
-                s.spawn(move || -> Result<State> {
-                    let (start_block, start_skip) = get_split(i);
-                    let (end_block, end_take) = get_split(i + 1);
-
-                    if start_block >= blocks_ref.len()
-                        || (start_block == end_block && start_skip >= end_take)
-                    {
-                        return Ok(State::default());
-                    }
-                    let reader = BgzfBlockRangeReader::new(
-                        compressed,
-                        blocks_ref,
-                        start_block,
-                        end_block,
-                        start_skip,
-                        end_take,
-                    );
-                    let parser = FastxParser::<CONFIG>::from_reader(reader)?;
-                    process(parser)
-                })
-            })
-            .collect();
-
-        let mut res = Vec::with_capacity(handles.len());
-        for h in handles {
-            res.push(h.join().unwrap());
-        }
-        res
-    });
-
-    let mut total: Option<State> = None;
-    for res in results {
-        let val = res?;
-        total = Some(match total {
-            Some(acc) => reduce(acc, val),
-            None => val,
-        });
-    }
-    Ok(total.unwrap_or_default())
-}
-
-#[cfg(feature = "zstd")]
-#[derive(Clone, Copy)]
-pub struct ZstdFrame {
-    pub comp_offset: usize,
-    pub comp_len: usize,
-    pub uncomp_len: usize,
-}
-
-#[cfg(feature = "zstd")]
-pub fn index_zstd_frames(compressed: &[u8]) -> Vec<ZstdFrame> {
-    let mut frames = Vec::with_capacity(compressed.len() / (1024 * 1024) + 1);
-    let mut comp_offset = 0;
-
-    while comp_offset + 4 <= compressed.len() {
-        let slice = &compressed[comp_offset..];
-        // Check for skippable frame: 0x184D2A50 to 0x184D2A5F
-        // Format: 4-byte magic + 4-byte frame size (u32 little-endian) + payload
-        if slice.len() >= 8
-            && slice[3] == 0x18
-            && slice[2] == 0x4d
-            && slice[1] == 0x2a
-            && (slice[0] & 0xf0) == 0x50
-        {
-            let user_size = u32::from_le_bytes([slice[4], slice[5], slice[6], slice[7]]) as usize;
-            comp_offset += 8 + user_size;
-            continue;
-        }
-
-        match zstd::zstd_safe::find_frame_compressed_size(slice) {
-            Ok(comp_len) if comp_len > 0 && comp_offset + comp_len <= compressed.len() => {
-                let uncomp_len = zstd::zstd_safe::get_frame_content_size(slice)
-                    .ok()
-                    .flatten()
-                    .unwrap_or(0) as usize;
-                frames.push(ZstdFrame {
-                    comp_offset,
-                    comp_len,
-                    uncomp_len,
-                });
-                comp_offset += comp_len;
-            }
-            _ => break,
-        }
-    }
-    frames
-}
-
-#[cfg(feature = "zstd")]
-struct ZstdFrameRangeReader<'a> {
-    compressed: &'a [u8],
-    frames: &'a [ZstdFrame],
-    current_frame: usize,
-    start_frame: usize,
-    end_frame: usize,
-    start_skip: usize,
-    end_take: usize,
-
-    decompressor: zstd::bulk::Decompressor<'static>,
-    buf: Vec<u8>,
-    pos: usize,
-    len: usize,
-}
-
-#[cfg(feature = "zstd")]
-impl<'a> ZstdFrameRangeReader<'a> {
-    fn new(
-        compressed: &'a [u8],
-        frames: &'a [ZstdFrame],
-        start_frame: usize,
-        end_frame: usize,
-        start_skip: usize,
-        end_take: usize,
-    ) -> io::Result<Self> {
-        Ok(Self {
-            compressed,
-            frames,
-            current_frame: start_frame,
-            start_frame,
-            end_frame,
-            start_skip,
-            end_take,
-            decompressor: zstd::bulk::Decompressor::new()?,
-            buf: Vec::new(),
-            pos: 0,
-            len: 0,
-        })
-    }
-}
-
-#[cfg(feature = "zstd")]
-impl<'a> Read for ZstdFrameRangeReader<'a> {
-    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
-        while self.pos >= self.len {
-            if self.current_frame > self.end_frame
-                || (self.current_frame == self.end_frame && self.end_take == 0)
-                || self.current_frame >= self.frames.len()
-            {
-                return Ok(0);
-            }
-            let f = &self.frames[self.current_frame];
-            let frame_bytes = &self.compressed[f.comp_offset..f.comp_offset + f.comp_len];
-
-            // Ignore skippable frames (magic 0x184D2A50..=0x184D2A5F)
-            if frame_bytes.len() >= 4
-                && (frame_bytes[0] & 0xF0) == 0x50
-                && frame_bytes[1] == 0x2A
-                && frame_bytes[2] == 0x4D
-                && frame_bytes[3] == 0x18
-            {
-                self.current_frame += 1;
-                continue;
-            }
-
-            if f.uncomp_len > 0 {
-                self.buf.resize(f.uncomp_len, 0);
-                let n = self
-                    .decompressor
-                    .decompress_to_buffer(frame_bytes, &mut self.buf)?;
-                self.buf.truncate(n);
-            } else {
-                self.buf.clear();
-                let mut decoder = zstd::stream::read::Decoder::new(frame_bytes)?;
-                decoder.read_to_end(&mut self.buf)?;
-            }
-
-            let mut start = 0;
-            let mut end = self.buf.len();
-
-            if self.current_frame == self.start_frame {
-                start = self.start_skip;
-            }
-            if self.current_frame == self.end_frame {
-                end = self.end_take;
-            }
-
-            self.pos = start;
-            self.len = end;
-            self.current_frame += 1;
-        }
-
-        let n = (self.len - self.pos).min(out.len());
-        out[..n].copy_from_slice(&self.buf[self.pos..self.pos + n]);
-        self.pos += n;
-        Ok(n)
-    }
-}
-
-#[cfg(feature = "zstd")]
-fn find_record_start_in_zstd(
-    compressed: &[u8],
-    frames: &[ZstdFrame],
-    mut frame_idx: usize,
-    format: Format,
-) -> (usize, usize) {
-    let mut frame_data = Vec::new();
-    let mut decompressor = match zstd::bulk::Decompressor::new() {
-        Ok(d) => d,
-        Err(_) => return (frames.len(), 0),
-    };
-
-    while frame_idx < frames.len() {
-        let f = &frames[frame_idx];
-        let frame_bytes = &compressed[f.comp_offset..f.comp_offset + f.comp_len];
-
-        let decomp_ok = if f.uncomp_len > 0 {
-            frame_data.resize(f.uncomp_len, 0);
-            decompressor
-                .decompress_to_buffer(frame_bytes, &mut frame_data)
-                .is_ok_and(|n| {
-                    frame_data.truncate(n);
-                    true
-                })
-        } else {
-            frame_data.clear();
-            zstd::stream::read::Decoder::new(frame_bytes)
-                .and_then(|mut r| r.read_to_end(&mut frame_data))
-                .is_ok()
-        };
-
-        if decomp_ok {
-            let cand = find_record_start(&frame_data, 1, format);
-            if cand < frame_data.len() {
-                return (frame_idx, cand);
-            }
-        }
-        frame_idx += 1;
-    }
-    (frames.len(), 0)
-}
-
-#[cfg(feature = "zstd")]
-fn run_zstd_multi_reader<const CONFIG: Config, State, Process, Reduce>(
-    compressed: &[u8],
-    frames: &[ZstdFrame],
-    num_threads: usize,
-    process: Process,
-    reduce: Reduce,
-) -> Result<State>
-where
-    State: Send + Default,
-    Process: Fn(FastxParser<'_, CONFIG>) -> Result<State> + Sync,
-    Reduce: Fn(State, State) -> State + Sync,
-{
-    let format = {
-        let f0 = &frames[0];
-        let frame_bytes = &compressed[f0.comp_offset..f0.comp_offset + f0.comp_len];
-        let mut header = [0u8; 64];
-        let n = zstd::stream::read::Decoder::new(frame_bytes)
-            .and_then(|mut r| r.read(&mut header))
-            .unwrap_or(0);
-        let first_byte = if n > 0 { header[0] } else { 0 };
-        Format::try_from_byte(first_byte)?
-    };
-
-    let num_threads = num_threads.max(1).min(frames.len());
-    let process = &process;
-    let reduce = &reduce;
-    let frames_ref = frames;
-
-    let split_points: Vec<std::sync::OnceLock<(usize, usize)>> = (0..=num_threads)
-        .map(|_| std::sync::OnceLock::new())
-        .collect();
-    split_points[0].set((0, 0)).unwrap();
-    split_points[num_threads]
-        .set((frames_ref.len(), 0))
-        .unwrap();
-    let splits_ref = &split_points;
-
-    let get_split = |idx: usize| -> (usize, usize) {
-        *splits_ref[idx].get_or_init(|| {
-            let target_frame = idx * frames_ref.len() / num_threads;
-            find_record_start_in_zstd(compressed, frames_ref, target_frame, format)
-        })
-    };
-
-    let results = std::thread::scope(|s| {
-        let handles: Vec<_> = (0..num_threads)
-            .map(|i| {
-                s.spawn(move || -> Result<State> {
-                    let (start_frame, start_skip) = get_split(i);
-                    let (end_frame, end_take) = get_split(i + 1);
-
-                    if start_frame >= frames_ref.len()
-                        || (start_frame == end_frame && start_skip >= end_take)
-                    {
-                        return Ok(State::default());
-                    }
-                    let reader = ZstdFrameRangeReader::new(
-                        compressed,
-                        frames_ref,
-                        start_frame,
-                        end_frame,
-                        start_skip,
-                        end_take,
-                    )?;
-                    let parser = FastxParser::<CONFIG>::from_reader(reader)?;
-                    process(parser)
-                })
-            })
-            .collect();
-
-        let mut res = Vec::with_capacity(handles.len());
-        for h in handles {
-            res.push(h.join().unwrap());
-        }
-        res
-    });
-
-    let mut total: Option<State> = None;
-    for res in results {
-        let val = res?;
-        total = Some(match total {
-            Some(acc) => reduce(acc, val),
-            None => val,
-        });
-    }
-    Ok(total.unwrap_or_default())
 }

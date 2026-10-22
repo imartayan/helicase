@@ -31,42 +31,19 @@ pub fn extract_bitmask<const CONFIG: Config, const MODE: u8>(buf: &[u8]) -> Bitm
         let ptr = buf.as_ptr();
 
         if flag_is_not_set(CONFIG, NEEDS_DNA_MASKS) {
-            let line_feeds = extract_bitmask_contiguous(ptr);
             return Bitmask {
-                line_feeds,
-                is_dna: !0,
-                two_bits: 0,
-                high_bit: 0,
-                low_bit: 0,
-                mask_non_actg: 0,
-                mask_n: 0,
+                line_feeds: extract_bitmask_contiguous(ptr),
+                ..Bitmask::ALL_DNA
             };
         }
 
         if MODE == SCAN_MODE_DNA {
             let v = vld4q_u8(ptr);
-            let (is_dna, two_bits, high_bit, low_bit, mask_non_actg, mask_n) =
-                bitpack_dna::<CONFIG>(v);
-
-            let line_feeds = if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
-                if is_dna == !0 {
-                    0
-                } else {
-                    movemask_64(map_8x16x4(v, |v| vceqq_u8(v, LINE_FEED)))
-                }
-            } else {
-                movemask_64(map_8x16x4(v, |v| vceqq_u8(v, LINE_FEED)))
-            };
-
-            Bitmask {
-                line_feeds,
-                is_dna,
-                two_bits,
-                high_bit,
-                low_bit,
-                mask_non_actg,
-                mask_n,
+            let mut mask = bitpack_dna::<CONFIG>(v);
+            if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) || mask.is_dna != !0 {
+                mask.line_feeds = movemask_64(map_8x16x4(v, |v| vceqq_u8(v, LINE_FEED)));
             }
+            mask
         } else {
             let line_feeds = extract_bitmask_contiguous(ptr);
             let skip_dna = if MODE == SCAN_MODE_QUALITY {
@@ -74,22 +51,13 @@ pub fn extract_bitmask<const CONFIG: Config, const MODE: u8>(buf: &[u8]) -> Bitm
             } else {
                 line_feeds == 0
             };
-            let (is_dna, two_bits, high_bit, low_bit, mask_non_actg, mask_n) = if skip_dna {
-                (!0, 0, 0, 0, 0, 0)
+            let mut mask = if skip_dna {
+                Bitmask::ALL_DNA
             } else {
-                let v = vld4q_u8(ptr);
-                bitpack_dna::<CONFIG>(v)
+                bitpack_dna::<CONFIG>(vld4q_u8(ptr))
             };
-
-            Bitmask {
-                line_feeds,
-                is_dna,
-                two_bits,
-                high_bit,
-                low_bit,
-                mask_non_actg,
-                mask_n,
-            }
+            mask.line_feeds = line_feeds;
+            mask
         }
     }
 }
@@ -114,32 +82,13 @@ unsafe fn extract_bitmask_contiguous(ptr: *const u8) -> u64 {
 
 #[inline(always)]
 pub fn extract_dna_bitmask<const CONFIG: Config>(buf: &[u8]) -> Bitmask {
-    unsafe {
-        let ptr = buf.as_ptr();
-        let v = vld4q_u8(ptr);
-        let (is_dna, two_bits, high_bit, low_bit, mask_non_actg, mask_n) = bitpack_dna::<CONFIG>(v);
-
-        Bitmask {
-            line_feeds: 0,
-            is_dna,
-            two_bits,
-            high_bit,
-            low_bit,
-            mask_non_actg,
-            mask_n,
-        }
-    }
+    unsafe { bitpack_dna::<CONFIG>(vld4q_u8(buf.as_ptr())) }
 }
 
 #[inline(always)]
-fn bitpack_dna<const CONFIG: Config>(v: uint8x16x4_t) -> (u64, u128, u64, u64, u64, u64) {
+fn bitpack_dna<const CONFIG: Config>(v: uint8x16x4_t) -> Bitmask {
     unsafe {
-        let mut is_dna = !0;
-        let mut two_bits = 0;
-        let mut high_bit = 0;
-        let mut low_bit = 0;
-        let mut mask_non_actg = 0;
-        let mut mask_n = 0;
+        let mut mask = Bitmask::ALL_DNA;
 
         let shift_5 = if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR | COMPUTE_DNA_PACKED) {
             map_8x16x4(v, |v| vshlq_n_u8::<5>(v))
@@ -149,8 +98,8 @@ fn bitpack_dna<const CONFIG: Config>(v: uint8x16x4_t) -> (u64, u128, u64, u64, u
 
         if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
             let shift_6 = map_8x16x4(v, |v| vshlq_n_u8::<6>(v));
-            high_bit = movemask_64(shift_5);
-            low_bit = movemask_64(shift_6);
+            mask.high_bit = movemask_64(shift_5);
+            mask.low_bit = movemask_64(shift_6);
         }
 
         if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
@@ -159,7 +108,7 @@ fn bitpack_dna<const CONFIG: Config>(v: uint8x16x4_t) -> (u64, u128, u64, u64, u
                 vsriq_n_u8(shift_5.1, shift_5.0, 2),
                 4,
             );
-            two_bits = transmute(bitpacked);
+            mask.two_bits = transmute(bitpacked);
         }
 
         if flag_is_set(
@@ -171,27 +120,25 @@ fn bitpack_dna<const CONFIG: Config>(v: uint8x16x4_t) -> (u64, u128, u64, u64, u
                 && flag_is_not_set(CONFIG, COMPUTE_MASK_NON_ACTG | COMPUTE_MASK_N)
             {
                 let all_and = vandq_u8(vandq_u8(eq.0, eq.1), vandq_u8(eq.2, eq.3));
-                if vminvq_u8(all_and) == 0xFF {
-                    is_dna = !0;
-                } else {
-                    is_dna = movemask_64(eq);
+                if vminvq_u8(all_and) != 0xFF {
+                    mask.is_dna = movemask_64(eq);
                 }
             } else {
                 let mask_actg = movemask_64(eq);
                 if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
-                    is_dna = mask_actg;
+                    mask.is_dna = mask_actg;
                 }
                 if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
-                    mask_non_actg = !mask_actg;
+                    mask.mask_non_actg = !mask_actg;
                 }
                 if flag_is_set(CONFIG, COMPUTE_MASK_N) {
-                    mask_n =
+                    mask.mask_n =
                         movemask_64(map_8x16x4(v, |v| vceqq_u8(vandq_u8(v, UPPERCASE), ASCII_N)));
                 }
             }
         }
 
-        (is_dna, two_bits, high_bit, low_bit, mask_non_actg, mask_n)
+        mask
     }
 }
 
@@ -271,15 +218,6 @@ mod tests {
     use super::*;
 
     const GREATER_THAN: uint8x16_t = unsafe { transmute([b'>'; 16]) };
-
-    #[test]
-    fn ld4_test() {
-        unsafe {
-            let buf: [u8; 256] = core::array::from_fn(|i| i as u8);
-            let vbuf = vld4q_u8(buf.as_ptr());
-            dbg!(vbuf.0);
-        }
-    }
 
     #[test]
     fn movemask_test() {

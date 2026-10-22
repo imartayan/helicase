@@ -59,7 +59,7 @@ pub fn run_legacy_bench<M: Measurement>(args: &LegacyArgs, path: &str) {
             std::process::exit(1);
         }
     };
-    let compressed = input_file.is_compressed().unwrap_or(false);
+    let compressed = input_file.compression_format().is_ok_and(|c| c.is_some());
     let data = match read(path) {
         Ok(d) => d,
         Err(e) => {

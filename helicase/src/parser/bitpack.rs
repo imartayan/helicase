@@ -4,7 +4,7 @@ use crate::lexer::Chunk;
 #[cfg(target_feature = "neon")]
 use crate::simd::all_actg;
 use crate::simd::extract_dna_bitmask;
-use core::mem::swap;
+use core::mem::replace;
 
 /// Unified container managing on-the-fly 2-bit bitpacking representations
 /// across FASTA and FASTQ parsers.
@@ -80,30 +80,26 @@ impl DnaBitpackers {
 
     #[inline(always)]
     pub fn take_packed(&mut self) -> PackedDNA {
-        let mut res = PackedDNA::with_capacity(self.packed.capacity());
-        swap(&mut res, &mut self.packed);
-        res
+        let capacity = self.packed.capacity();
+        replace(&mut self.packed, PackedDNA::with_capacity(capacity))
     }
 
     #[inline(always)]
     pub fn take_columnar(&mut self) -> ColumnarDNA {
-        let mut res = ColumnarDNA::with_capacity(self.columnar.capacity());
-        swap(&mut res, &mut self.columnar);
-        res
+        let capacity = self.columnar.capacity();
+        replace(&mut self.columnar, ColumnarDNA::with_capacity(capacity))
     }
 
     #[inline(always)]
     pub fn take_mask_non_actg(&mut self) -> BitMask {
-        let mut res = BitMask::with_capacity(self.mask_non_actg.capacity());
-        swap(&mut res, &mut self.mask_non_actg);
-        res
+        let capacity = self.mask_non_actg.capacity();
+        replace(&mut self.mask_non_actg, BitMask::with_capacity(capacity))
     }
 
     #[inline(always)]
     pub fn take_mask_n(&mut self) -> BitMask {
-        let mut res = BitMask::with_capacity(self.mask_n.capacity());
-        swap(&mut res, &mut self.mask_n);
-        res
+        let capacity = self.mask_n.capacity();
+        replace(&mut self.mask_n, BitMask::with_capacity(capacity))
     }
 
     #[inline(always)]
@@ -214,15 +210,11 @@ impl DnaBitpackers {
         let r = rem_len % 64;
         let mut curr_pos = 0;
 
-        let processed_blocks =
-            if need_packed && is_keep && !need_columnar && !need_mask_non_actg && !need_mask_n {
-                self.packed.pack_blocks::<CONFIG>(data, q);
-                q
-            } else if !need_mask_non_actg && !need_mask_n && q >= 4 {
-                self.pack_run::<CONFIG>(data, q)
-            } else {
-                self.pack_blocks_checked::<CONFIG>(data, 0, q)
-            };
+        let processed_blocks = if !need_mask_non_actg && !need_mask_n {
+            self.pack_run::<CONFIG>(data, q)
+        } else {
+            self.pack_blocks_checked::<CONFIG>(data, 0, q)
+        };
 
         if processed_blocks < q {
             return 64 * processed_blocks;

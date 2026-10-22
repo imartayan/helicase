@@ -275,7 +275,7 @@ impl DnaBitpackers {
 // the blocks are only checked while packing.
 #[cfg(not(target_feature = "neon"))]
 #[inline(always)]
-fn actg_prefix_blocks(_data: &[u8], _q: usize) -> usize {
+const fn actg_prefix_blocks(_data: &[u8], _q: usize) -> usize {
     0
 }
 

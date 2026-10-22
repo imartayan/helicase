@@ -179,8 +179,7 @@ fn test_config_split_non_actg_long_runs() {
         .filter(|run| !run.is_empty())
         .collect();
     let fasta = [b">r\n".as_slice(), &seq, b"\n"].concat();
-    let wrapped: Vec<u8> = [b">r".as_slice()]
-        .into_iter()
+    let wrapped: Vec<u8> = std::iter::once(b">r".as_slice())
         .chain(seq.chunks(60))
         .flat_map(|line| [line, b"\n"].concat())
         .collect();

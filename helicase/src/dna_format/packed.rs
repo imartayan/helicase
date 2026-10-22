@@ -66,17 +66,17 @@ impl PackedDNA {
     }
 
     #[inline(always)]
-    pub fn capacity(&self) -> usize {
+    pub const fn capacity(&self) -> usize {
         (self.bits.capacity() / WORD_BYTES).saturating_sub(MARGIN)
     }
 
     #[inline(always)]
-    fn num_words(&self) -> usize {
+    const fn num_words(&self) -> usize {
         self.bits.len() / WORD_BYTES
     }
 
     #[inline(always)]
-    unsafe fn word_ptr(&mut self, word: usize) -> *mut T {
+    const unsafe fn word_ptr(&mut self, word: usize) -> *mut T {
         unsafe { self.bits.as_mut_ptr().add(word * WORD_BYTES) as *mut T }
     }
 

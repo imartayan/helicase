@@ -26,7 +26,7 @@ fn without_index<T>(f: impl FnOnce() -> T) -> T {
 }
 
 #[derive(Default)]
-pub(crate) struct LineIndex {
+pub struct LineIndex {
     pub active: bool,
     pub next_start: usize,
     short_records: usize,
@@ -53,7 +53,7 @@ impl LineIndex {
     }
 
     #[inline(always)]
-    pub fn consume<const N: usize>(&mut self, next_start: usize) {
+    pub const fn consume<const N: usize>(&mut self, next_start: usize) {
         self.head += N;
         self.next_start = next_start;
         self.consumed = true;
@@ -139,7 +139,7 @@ impl LineIndex {
 
 // The last block is never indexed: the block parser handles the end of the buffer.
 #[inline(always)]
-fn scan_end(data: &[u8]) -> usize {
+const fn scan_end(data: &[u8]) -> usize {
     data.len().saturating_sub(1) & !63
 }
 
@@ -149,7 +149,12 @@ pub(super) fn scan_block(data: &[u8], pos: usize) -> u64 {
 }
 
 #[inline(always)]
-fn push_line_feeds(out: &mut [usize], mut len: usize, pos: usize, mut line_feeds: u64) -> usize {
+const fn push_line_feeds(
+    out: &mut [usize],
+    mut len: usize,
+    pos: usize,
+    mut line_feeds: u64,
+) -> usize {
     while line_feeds != 0 {
         out[len] = pos + line_feeds.trailing_zeros() as usize;
         line_feeds &= line_feeds - 1;

@@ -14,23 +14,22 @@ Add `helicase` with the `needletail` feature:
 cargo add helicase -F needletail
 ```
 
-This provides `parse_fastx_file`, `parse_fastx_reader`, `parse_fastx_slice`, and aliases for common record methods (`id()`, `seq()`, `raw_seq()`, `qual()`, `num_bases()`):
+This provides `parse_fastx_file`, `parse_fastx_reader` and `parse_fastx_slice`, whose `next()` yields a record with the usual methods (`id()`, `seq()`, `raw_seq()`, `qual()`, `num_bases()`, `format()`):
 
 ```rust
 use helicase::parse_fastx_file;
-use helicase::*;
 
-fn main() -> std::io::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut reader = parse_fastx_file("reads.fastq.gz")?;
     let mut total_bases = 0;
 
-    while let Some(event) = reader.next() {
-        event?;
-        let header = reader.id();
-        let seq = reader.seq();
-        total_bases += reader.num_bases();
+    while let Some(record) = reader.next() {
+        let rec = record?;
+        let header = rec.id();
+        let seq = rec.seq();
+        total_bases += rec.num_bases();
 
-        if let Some(qual) = reader.qual() {
+        if let Some(qual) = rec.qual() {
             // ...
         }
     }
@@ -40,7 +39,12 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-Unlike needletail, `next()` advances the parser in-place rather than allocating a separate record struct, so methods are called on the reader itself.
+The record is a view of the parser, it does not copy the sequence.
+
+Differences with needletail:
+- The reader is a `NeedletailReader`, not a `Box<dyn FastxReader>`, and errors are `helicase::parser::Error`, not `ParseError`.
+- `raw_seq()` on wrapped FASTA returns the joined sequence, without line feeds.
+- `normalize`, `write`, `start_line_number` and `line_ending` are not provided. For k-mers and normalization, needletail's `Sequence` trait still works on `rec.seq()`.
 
 ### Native API
 

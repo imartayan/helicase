@@ -1,9 +1,6 @@
 use super::*;
 use crate::dna_format::*;
 
-#[cfg(feature = "needletail")]
-use std::borrow::Cow;
-
 #[cfg(feature = "packed-seq")]
 use packed_seq::{PackedSeq, PackedSeqVec};
 
@@ -107,41 +104,6 @@ pub trait HelicaseParser {
     /// Get the 0-based index of the current record.
     #[cfg(feature = "paraseq")]
     fn record_index(&self) -> u64;
-
-    /// Needletail compatibility alias for [`get_header`](HelicaseParser::get_header).
-    #[cfg(feature = "needletail")]
-    #[inline(always)]
-    fn id(&self) -> &[u8] {
-        self.get_header()
-    }
-
-    /// Needletail compatibility alias for [`get_dna_string`](HelicaseParser::get_dna_string).
-    #[cfg(feature = "needletail")]
-    #[inline(always)]
-    fn seq(&self) -> Cow<'_, [u8]> {
-        Cow::Borrowed(self.get_dna_string())
-    }
-
-    /// Needletail compatibility alias for [`get_dna_string`](HelicaseParser::get_dna_string).
-    #[cfg(feature = "needletail")]
-    #[inline(always)]
-    fn raw_seq(&self) -> &[u8] {
-        self.get_dna_string()
-    }
-
-    /// Needletail compatibility alias for [`get_quality`](HelicaseParser::get_quality).
-    #[cfg(feature = "needletail")]
-    #[inline(always)]
-    fn qual(&self) -> Option<&[u8]> {
-        self.get_quality()
-    }
-
-    /// Needletail compatibility alias for [`get_dna_len`](HelicaseParser::get_dna_len).
-    #[cfg(feature = "needletail")]
-    #[inline(always)]
-    fn num_bases(&self) -> usize {
-        self.get_dna_len()
-    }
 }
 
 pub trait HelicaseParserIter: HelicaseParser + Iterator<Item = Result<Event>> {}

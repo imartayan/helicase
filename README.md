@@ -242,7 +242,7 @@ If you want an efficient implementation for these CPUs, we recommend using the `
 
 Helicase provides optional features to ease migration from `needletail` and `paraseq`.
 
-For `needletail`, it provides drop-in method aliases (`id`, `seq`, `raw_seq`, `qual`) and constructors like `parse_fastx_file`.
+For `needletail`, it provides constructors like `parse_fastx_file`, whose `next()` yields a record with the usual methods (`id`, `seq`, `raw_seq`, `qual`, `num_bases`).
 
 For `paraseq`, it implements `paraseq::Record` and provides `process_parallel` to run existing `ParallelProcessor` directly.
 

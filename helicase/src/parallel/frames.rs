@@ -1,9 +1,9 @@
 //! Parallel decompression of independent compressed frames (BGZF blocks, zstd frames).
 
-use super::parallel::{find_record_start, run_chunks};
-use super::*;
+use super::{find_record_start, run_chunks};
 use crate::config::*;
 use crate::input::*;
+use crate::parser::*;
 use std::io::{self, Read};
 
 #[derive(Clone, Copy)]

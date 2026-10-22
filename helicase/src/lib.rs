@@ -276,15 +276,15 @@ pub mod config;
 pub mod dna_format;
 pub mod input;
 pub(crate) mod lexer;
+mod parallel;
 pub mod parser;
 
 pub use config::{Config, ParserOptions};
-pub use parser::{FastxParser, HelicaseParser, ParallelFastxParser};
+pub use parallel::ParallelFastxParser;
+pub use parser::{FastxParser, HelicaseParser};
 
 #[cfg(feature = "needletail")]
-pub mod needletail_helpers;
-#[cfg(feature = "needletail")]
-pub use needletail_helpers::*;
+pub use parser::needletail_helpers::{parse_fastx_file, parse_fastx_reader, parse_fastx_slice};
 
 // The scalar fallback is a reference for the SIMD backends in tests.
 #[cfg(all(test, any(target_feature = "neon", target_feature = "ssse3")))]

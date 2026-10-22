@@ -108,7 +108,7 @@ impl CompressionFormat {
                 #[cfg(feature = "zstd")]
                 {
                     if let Ok(mmap) = unsafe { Mmap::map(&file) } {
-                        let frames = crate::parser::index_zstd_frames(&mmap);
+                        let frames = crate::parallel::index_zstd_frames(&mmap);
                         if frames.len() > 1 {
                             return Ok(Some(Self::Pzstd));
                         }

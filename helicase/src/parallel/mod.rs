@@ -3,14 +3,19 @@
 //! Provides zero-dependency, lock-free work-stealing execution across multiple threads
 //! using `std::thread::scope` and `AtomicUsize`.
 
-use super::*;
 use crate::config::*;
 use crate::input::*;
+use crate::parser::*;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+
+#[cfg(any(feature = "sirocco", feature = "zstd"))]
+mod frames;
+#[cfg(feature = "zstd")]
+pub(crate) use frames::index_zstd_frames;
 
 /// Validates whether `cand` starts a genuine 4-line FASTQ record.
 #[inline(always)]
@@ -71,7 +76,7 @@ fn is_valid_record_start(data: &[u8], cand: usize, format: Format) -> bool {
 }
 
 /// Finds the exact byte index of the first record starting at or after `approx_pos`.
-pub(super) fn find_record_start(data: &[u8], approx_pos: usize, format: Format) -> usize {
+fn find_record_start(data: &[u8], approx_pos: usize, format: Format) -> usize {
     if approx_pos == 0 || approx_pos >= data.len() {
         return approx_pos.min(data.len());
     }
@@ -95,7 +100,7 @@ pub(super) fn find_record_start(data: &[u8], approx_pos: usize, format: Format) 
 /// are computed once by `split`, when a thread first needs them. Empty chunks are skipped.
 /// Thread `t` starts with chunk `t`, so results are in input order with one chunk per thread.
 /// If a chunk fails, the other threads stop and the first error is returned.
-pub(super) fn run_chunks<P, State, Split, Parse, Reduce>(
+fn run_chunks<P, State, Split, Parse, Reduce>(
     num_chunks: usize,
     threads: usize,
     (first, last): (P, P),
@@ -242,17 +247,17 @@ where
         #[cfg(feature = "sirocco")]
         Some(CompressionFormat::Bgzf) if threads > 1 => {
             let mmap = unsafe { memmap2::Mmap::map(&File::open(path)?)? };
-            let blocks = super::frames::index_bgzf_blocks(&mmap);
-            return super::frames::run_frames::<super::frames::BgzfDecoder, CONFIG, _, _, _>(
+            let blocks = frames::index_bgzf_blocks(&mmap);
+            return frames::run_frames::<frames::BgzfDecoder, CONFIG, _, _, _>(
                 &mmap, &blocks, threads, process, reduce,
             );
         }
         #[cfg(feature = "zstd")]
         Some(CompressionFormat::Pzstd) if threads > 1 => {
             let mmap = unsafe { memmap2::Mmap::map(&File::open(path)?)? };
-            let zstd_frames = super::frames::index_zstd_frames(&mmap);
+            let zstd_frames = frames::index_zstd_frames(&mmap);
             if zstd_frames.len() > 1 {
-                return super::frames::run_frames::<super::frames::ZstdDecoder, CONFIG, _, _, _>(
+                return frames::run_frames::<frames::ZstdDecoder, CONFIG, _, _, _>(
                     &mmap,
                     &zstd_frames,
                     threads,

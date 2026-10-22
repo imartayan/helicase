@@ -2,7 +2,7 @@
 //!
 //! It is designed for speed and flexibility: zero-overhead compile-time configuration, robust handling of non-ACTG bases, and on-the-fly 2-bit bitpacking.
 //!
-//! It is typically 1.2-2.4× faster than `needletail` on a single thread, and 2.5-6× faster than `paraseq` across 4 threads.
+//! It is typically 1.1-4× faster than `needletail` on a single thread, and 3-6× faster than `paraseq` across 4 threads.
 //!
 //! The underlying algorithm is described in [Helicase: Vectorized parsing and bitpacking of genomic sequences](https://doi.org/10.64898/2026.03.19.712912), please cite it if you use this library.
 //!
@@ -85,15 +85,15 @@
 //!   and disables `Record` events by default to avoid processing each sequence twice.
 //! - [`skip_non_actg`](ParserOptions::skip_non_actg) skips non-ACTG bases and merges the remaining chunks,
 //!   yielding one [`Record`](parser::Event::Record) event per record.
-//! - [`keep_non_actg`](ParserOptions::keep_non_actg) keeps non-ACTG bases and encodes them lossily,
+//! - [`keep_non_actg`](ParserOptions::keep_non_actg) keeps the non-ACTG bases and encodes them lossily,
 //!   yielding one [`Record`](parser::Event::Record) event per record (default for string format).
 //!
 //! ## Events
 //!
 //! The parser is an iterator that yields [`Result<Event, parser::Error>`](parser::Result) values.
 //! An event signals a record boundary or a contiguous DNA chunk:
-//! - [`Event::Record(range)`](parser::Event::Record): emitted once per record boundary, carrying the byte offset `Range<usize>` of the entire record. Enabled by [`return_record`](ParserOptions::return_record) (on by default for string and lossy formats).
-//! - [`Event::DnaChunk(range)`](parser::Event::DnaChunk): emitted for each contiguous ACTG run when non-ACTG characters are split, carrying the byte offset `Range<usize>` of the chunk. Enabled by [`return_dna_chunk`](ParserOptions::return_dna_chunk) (on by default with [`split_non_actg`](ParserOptions::split_non_actg), [`dna_packed`](ParserOptions::dna_packed), and [`dna_columnar`](ParserOptions::dna_columnar)).
+//! - [`Event::Record(range)`](parser::Event::Record): emitted once per record boundary. The `range` gives the byte offsets `start..end` of the entire record. Enabled by [`return_record`](ParserOptions::return_record) (on by default for string and lossy formats).
+//! - [`Event::DnaChunk(range)`](parser::Event::DnaChunk): emitted for each contiguous run of ACTG bases when non-ACTG characters are split. The `range` gives the byte offsets `start..end` of the chunk. Enabled by [`return_dna_chunk`](ParserOptions::return_dna_chunk) (on by default with [`split_non_actg`](ParserOptions::split_non_actg), [`dna_packed`](ParserOptions::dna_packed), and [`dna_columnar`](ParserOptions::dna_columnar)).
 //!
 //! Sequence, header, and quality data are read directly from the parser methods ([`get_header`](HelicaseParser::get_header), [`get_dna_string`](HelicaseParser::get_dna_string), [`get_dna_packed`](HelicaseParser::get_dna_packed), [`get_quality`](HelicaseParser::get_quality), etc.).
 //!
@@ -134,7 +134,7 @@
 //!     while let Some(event) = parser.next() {
 //!         match event? {
 //!             Event::DnaChunk(range) => {
-//!                 // One contiguous ACTG run is ready
+//!                 // one contiguous ACTG run is ready
 //!                 let seq = parser.get_dna_packed();
 //!             }
 //!             Event::Record(range) => {

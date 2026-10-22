@@ -7,7 +7,7 @@ Helicase is a carefully optimized, SIMD-accelerated FASTA/FASTQ parser for DNA s
 
 It is designed for speed and flexibility: zero-overhead compile-time configuration, robust handling of non-ACTG bases, and on-the-fly 2-bit bitpacking.
 
-It is typically 1.2-2.4× faster than `needletail` on a single thread, and 2.5-6× faster than `paraseq` across 4 threads.
+It is typically 1.1-4× faster than `needletail` on a single thread, and 3-6× faster than `paraseq` across 4 threads.
 
 The underlying algorithm is described in [Helicase: Vectorized parsing and bitpacking of genomic sequences](https://doi.org/10.64898/2026.03.19.712912), please [cite it](#citation) if you use this library.
 

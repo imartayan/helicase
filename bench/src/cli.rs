@@ -46,7 +46,7 @@ pub struct Args {
     #[arg(short = 'R', long, hide = true)]
     pub ram: bool,
 
-    /// Add streaming FileInput benchmark (with 128 KiB buffer)
+    /// Add streaming FileInput benchmark (with 256 KiB buffer)
     #[arg(short = 'F', long)]
     pub file: bool,
 

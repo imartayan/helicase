@@ -29,7 +29,7 @@ Options:
   -w, --warmup <WARMUP>   Number of warmup iterations [default: 1]
   -p, --parallel [N]      Run multi-threaded benchmarks (e.g. -p 4 or -p 2,4,8) vs Paraseq
   -b, --bitpack           Detailed 2-bit bitpacking comparison vs Needletail + PackedSeqVec
-  -F, --file              Add streaming FileInput benchmark (with 128 KiB buffer)
+  -F, --file              Add streaming FileInput benchmark (with 256 KiB buffer)
   -M, --mmap              Add memory-mapped MmapInput benchmark
   -B, --no-baseline       Disable baseline parsers (Needletail & Paraseq)
   -f, --format <FORMAT>   Output format: text, markdown, csv, json [default: text]

@@ -3,7 +3,7 @@
 <!-- next-header -->
 ## [Unreleased]
 
-On file inputs, the single-threaded parser is now 1.2-2.4× faster than needletail, while the new multi-threaded parser is 2.5-6× faster than paraseq using 4 threads.
+On file inputs, the single-threaded parser is now 1.1-4× faster than needletail, while the new multi-threaded parser is 3-6× faster than paraseq using 4 threads.
 
 Breaking change: parsers now yield `Result<Event, parser::Error>` (instead of `Event`), enabling standard `?` error propagation.
 
@@ -14,6 +14,8 @@ Breaking change: parsers now yield `Result<Event, parser::Error>` (instead of `E
 - Accelerated 2-bit bitpacking (`PackedDNA` and `ColumnarDNA`) for contiguous reads and multiline sequences.
 - AVX-512 vector kernel for 512-bit scanning on supported x86 CPUs.
 - Zero-overhead CRLF (`\r\n`) line ending support for Windows.
+- Calling a `FastxParser` getter disabled by the config (e.g. `get_header` with `ignore_headers`) is now a compile-time error.
+- `FastxParser` is `Send`.
 - Needletail and paraseq migration helpers.
 
 ## 0.2.0

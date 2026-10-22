@@ -52,6 +52,7 @@ With native helicase, options are configured at compile-time via `ParserOptions`
 
 ```rust
 use helicase::config::*;
+use helicase::input::*;
 use helicase::*;
 
 const CONFIG: Config = ParserOptions::default().config();
@@ -86,7 +87,7 @@ Key points:
   while let Some(event) = parser.next() {
       event?;
       let packed = parser.get_dna_packed();
-      let words = packed.as_slice();
+      let (words, last_word) = packed.bits();
   }
   ```
 

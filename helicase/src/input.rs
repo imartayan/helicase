@@ -15,12 +15,11 @@ use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
 const BUFFER_LEN: usize = 1 << 18;
 // Buffers for longer records double until this size, then grow linearly.
 const BUFFER_DOUBLE_UNTIL: usize = 1 << 24;
-// The read-ahead reader (`FileInput`) keeps up to `BUFFERS_AHEAD` buffers ready, each read at its
-// end. The free room before is used to prepend the end of the previous buffer without copying
-// the new one, and grows to `BUFFER_MAX_HEADROOM` once a record does not fit.
+// The read-ahead reader (`FileInput`) keeps up to `BUFFERS_AHEAD` buffers ready, each read after
+// `BUFFER_ROOM` free bytes. The room is used to prepend the end of the previous buffer without
+// copying the new one; longer ends of records get the new buffer appended instead.
 const BUFFERS_AHEAD: usize = 2;
-const BUFFER_MIN_HEADROOM: usize = 1 << 16;
-const BUFFER_MAX_HEADROOM: usize = 1 << 20;
+const BUFFER_ROOM: usize = BUFFER_LEN / 2;
 
 /// Supported compression formats for FASTX files and streams.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -582,24 +581,20 @@ enum Source<R: Read> {
     ReadAhead(BufferReceiver),
 }
 
-// Buffers filled by the background thread, with their data at `buf[headroom(buf)..][..len]`,
-// the channel to give used buffers back, and a buffer for records longer than the headroom.
+// Buffers filled by the background thread, with their data at `buf[BUFFER_ROOM..][..len]`,
+// the channel to give used buffers back, and a buffer for records longer than the room.
 struct BufferReceiver {
     filled: Receiver<io::Result<(Vec<u8>, usize)>>,
     free: Sender<Vec<u8>>,
-    headroom: usize,
     long: Vec<u8>,
     in_long: bool,
 }
 
 impl BufferReceiver {
-    fn recycle(&self, mut buf: Vec<u8>) {
-        if buf.len() < BUFFER_LEN {
-            return;
+    fn recycle(&self, buf: Vec<u8>) {
+        if buf.len() == BUFFER_ROOM + BUFFER_LEN + 64 {
+            let _ = self.free.send(buf);
         }
-        // Growing the buffer at the end grows its headroom.
-        buf.resize(buf.len().max(self.headroom + BUFFER_LEN + 64), 0);
-        let _ = self.free.send(buf);
     }
 }
 
@@ -672,8 +667,8 @@ impl<'a, R: Read + Send + 'a> ReaderInput<'a, R> {
         };
         let kept = self.start + keep_start..self.start + self.len;
         let kept_len = kept.len();
-        let room = headroom(&buffer);
-        if kept_len <= room {
+        let room = BUFFER_ROOM;
+        if kept_len <= room.min(filled_len) {
             let mut buffer = buffer;
             self.start = room - kept_len;
             buffer[self.start..room].copy_from_slice(&self.data[kept]);
@@ -685,7 +680,6 @@ impl<'a, R: Read + Send + 'a> ReaderInput<'a, R> {
                 receiver.recycle(used);
             }
         } else {
-            receiver.headroom = BUFFER_MAX_HEADROOM;
             let needed = kept_len + filled_len + 64;
             if receiver.in_long {
                 if self.data.len() < needed {
@@ -825,7 +819,6 @@ impl<R: Read + Send + 'static> ReaderInput<'static, R> {
         let receiver = BufferReceiver {
             filled,
             free,
-            headroom: BUFFER_MIN_HEADROOM,
             long: Vec::new(),
             in_long: false,
         };
@@ -972,11 +965,6 @@ fn grown_len(len: usize, needed: usize) -> usize {
     grown.max(needed)
 }
 
-#[inline(always)]
-fn headroom(buffer: &[u8]) -> usize {
-    buffer.len() - BUFFER_LEN - 64
-}
-
 // Background thread of `ReaderInput::with_read_ahead`, stops at the end of input,
 // on error, or when the input is dropped.
 fn read_buffers<R: Read>(
@@ -987,8 +975,8 @@ fn read_buffers<R: Read>(
     loop {
         let mut buf = free
             .try_recv()
-            .unwrap_or_else(|_| vec![0; BUFFER_MIN_HEADROOM + BUFFER_LEN + 64]);
-        let room = headroom(&buf);
+            .unwrap_or_else(|_| vec![0; BUFFER_ROOM + BUFFER_LEN + 64]);
+        let room = BUFFER_ROOM;
         let mut len = 0;
         let mut error = None;
         while len < BUFFER_LEN {

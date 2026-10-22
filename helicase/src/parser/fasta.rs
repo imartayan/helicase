@@ -459,6 +459,19 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             .or_else(|| self.return_error_or_none())
     }
 
+    // At the end of input after a non-ACTG run or a blank line, previous chunks were already returned.
+    #[inline(always)]
+    fn finish_empty_chunk_eof(&mut self) -> Option<Result<Event>> {
+        if flag_is_not_set(CONFIG, RETURN_DNA_CHUNK) {
+            return self.finish_record_eof();
+        }
+        self.state = State::Header;
+        if flag_is_set(CONFIG, RETURN_RECORD) {
+            return Some(Ok(Event::Record(self.record_start..self.global_pos())));
+        }
+        self.return_error_or_none()
+    }
+
     #[inline(always)]
     fn advance_header(&mut self) -> Option<Option<Result<Event>>> {
         if self.finished {
@@ -559,7 +572,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
                 position = self.block.is_dna | self.block.newline;
             }
             if self.finished {
-                return Some(self.finish_record_eof());
+                return Some(self.finish_empty_chunk_eof());
             }
             self.pos_in_block = position.trailing_zeros() as usize;
             let at_newline = ((1 << self.pos_in_block) & self.block.newline) != 0;
@@ -570,7 +583,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             if flag_is_not_set(CONFIG, MERGE_DNA_CHUNKS) {
                 self.clear_chunk();
             }
-            self.dna_range.start = self.global_pos();
+            self.dna_range = self.global_pos()..self.global_pos();
             if at_newline {
                 return Some(None);
             }
@@ -764,7 +777,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
                     self.skip_blank_lines(self.global_pos());
 
                     if self.finished {
-                        return self.finish_record_eof();
+                        return self.finish_empty_chunk_eof();
                     }
 
                     if self.current_byte() == b'>' {

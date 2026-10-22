@@ -19,13 +19,14 @@ pub fn extract_bitmask<const CONFIG: Config, const _MODE: u8>(buf: &[u8]) -> Bit
         let bit = 1 << i;
         line_feeds |= if x == b'\n' { bit } else { 0 };
 
+        let code = (x >> 1) & 0b11;
         if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
-            high_bit |= ((x & 0b100) as u64) << i.wrapping_sub(2);
-            low_bit |= ((x & 0b10) as u64) << i.wrapping_sub(1);
+            high_bit |= ((code >> 1) as u64) << i;
+            low_bit |= ((code & 1) as u64) << i;
         }
 
         if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
-            two_bits |= ((x & 0b110) as u128) << (2 * i).wrapping_sub(1);
+            two_bits |= (code as u128) << (2 * i);
         }
 
         if flag_is_set(

@@ -141,34 +141,46 @@ fn test_split_chunks() {
                             _ => b"ACGT"[(i * 7 + i / 3) % 4],
                         })
                         .collect();
-                    let expected: Vec<String> = seq
+                    let chunks: Vec<String> = seq
                         .split(|&c| c == b'N' || c == b'\r')
                         .filter(|chunk| !chunk.is_empty())
                         .map(|chunk| String::from_utf8_lossy(chunk).to_string())
-                        .chain(["ACGT".to_string()])
                         .collect();
+                    let with_next = [chunks.clone(), vec!["ACGT".to_string()]].concat();
                     let lines = |lines: &[&[u8]]| -> Vec<u8> {
                         lines.iter().flat_map(|l| [*l, line_end].concat()).collect()
                     };
-                    let unwrapped = lines(&[b">a", &seq, b">b", b"ACGT"]);
+                    let unwrapped = lines(&[b">a", &seq]);
                     let mut wrapped = lines(&[b">a"]);
                     for line in seq.chunks(width) {
                         wrapped.extend(lines(&[line]));
                     }
-                    wrapped.extend(lines(&[b">b", b"ACGT"]));
                     let qual = vec![b'I'; len];
-                    let fastq = lines(&[b"@a", &seq, b"+", &qual, b"@b", b"ACGT", b"+", b"IIII"]);
-                    for (name, data) in [
-                        ("unwrapped", unwrapped),
-                        ("wrapped", wrapped),
-                        ("fastq", fastq),
+                    let fastq = lines(&[b"@a", &seq, b"+", &qual]);
+                    let next_fasta = lines(&[b">b", b"ACGT"]);
+                    let next_fastq = lines(&[b"@b", b"ACGT", b"+", b"IIII"]);
+                    for (name, record, next) in [
+                        ("unwrapped", unwrapped, &next_fasta),
+                        ("wrapped", wrapped, &next_fasta),
+                        ("fastq", fastq, &next_fastq),
                     ] {
-                        let data = data.leak();
-                        let id = format!(
-                            "{name} crlf {crlf} width {width} len {len} N at {first} and {second}"
-                        );
-                        check_split::<STRING_SPLIT>(data, &expected, &id);
-                        check_split::<SPLIT_PACKED_ONLY>(data, &expected, &id);
+                        let no_final_lf = record[..record.len() - line_end.len()].to_vec();
+                        for (end, data, expected) in [
+                            (
+                                "next record",
+                                [record.clone(), next.clone()].concat(),
+                                &with_next,
+                            ),
+                            ("last record", record, &chunks),
+                            ("no final lf", no_final_lf, &chunks),
+                        ] {
+                            let data = data.leak();
+                            let id = format!(
+                                "{name} {end} crlf {crlf} width {width} len {len} N at {first} and {second}"
+                            );
+                            check_split::<STRING_SPLIT>(data, expected, &id);
+                            check_split::<SPLIT_PACKED_ONLY>(data, expected, &id);
+                        }
                     }
                 }
             }

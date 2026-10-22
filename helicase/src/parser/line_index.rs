@@ -15,6 +15,9 @@ pub(crate) struct LineIndex {
     pub active: bool,
     pub next_start: usize,
     short_records: usize,
+    // Entries that gave no record double the streak needed for the next one.
+    backoff: u32,
+    consumed: bool,
     scan_pos: usize,
     line_feeds: Vec<usize>,
     head: usize,
@@ -36,6 +39,7 @@ impl LineIndex {
     pub fn consume<const N: usize>(&mut self, next_start: usize) {
         self.head += N;
         self.next_start = next_start;
+        self.consumed = true;
     }
 
     fn refill<const N: usize>(&mut self, data: &[u8]) -> bool {
@@ -57,18 +61,27 @@ impl LineIndex {
     }
 
     // Called after the block parser emitted a record from `record_start` to `next_start`.
-    #[inline(never)]
+    #[inline(always)]
     pub fn record_parsed(&mut self, data: &[u8], record_start: usize, next_start: usize) {
-        if next_start - record_start <= MAX_RECORD_LEN {
-            self.short_records += 1;
-        } else {
+        if next_start - record_start > MAX_RECORD_LEN {
             self.short_records = 0;
+        } else {
+            self.short_records += 1;
+            if self.short_records >= MIN_SHORT_RECORDS << self.backoff {
+                self.activate(data, next_start);
+            }
         }
+    }
+
+    // Out of line to keep the block parser small.
+    #[inline(never)]
+    fn activate(&mut self, data: &[u8], next_start: usize) {
         let block_start = next_start & !63;
-        if self.short_records < MIN_SHORT_RECORDS || block_start >= scan_end(data) {
+        if block_start >= scan_end(data) {
             return;
         }
         self.active = true;
+        self.consumed = false;
         self.next_start = next_start;
         self.line_feeds.resize(64 * WINDOW_BLOCKS + 64 + 3, 0);
         let line_feeds = scan_block(data, block_start) & (!0 << (next_start % 64));
@@ -82,6 +95,11 @@ impl LineIndex {
     pub fn deactivate(&mut self) -> usize {
         self.active = false;
         self.short_records = 0;
+        self.backoff = if self.consumed {
+            0
+        } else {
+            (self.backoff + 1).min(16)
+        };
         self.next_start
     }
 }

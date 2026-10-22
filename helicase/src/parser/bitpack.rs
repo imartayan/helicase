@@ -6,21 +6,6 @@ use crate::simd::all_actg;
 use crate::simd::extract_dna_bitmask;
 use core::mem::swap;
 
-#[cfg(not(target_feature = "neon"))]
-#[inline(always)]
-fn all_actg(buf: &[u8]) -> bool {
-    (0..4).all(|k| extract_dna_bitmask::<SPLIT_NON_ACTG>(&buf[64 * k..64 * (k + 1)]).is_dna == !0)
-}
-
-#[inline(always)]
-fn actg_prefix_blocks(data: &[u8], q: usize) -> usize {
-    let mut n = 0;
-    while n + 4 <= q && all_actg(&data[64 * n..]) {
-        n += 4;
-    }
-    n
-}
-
 /// Unified container managing on-the-fly 2-bit bitpacking representations
 /// across FASTA and FASTQ parsers.
 #[derive(Default)]
@@ -284,4 +269,19 @@ impl DnaBitpackers {
 
         curr_pos
     }
+}
+
+#[cfg(not(target_feature = "neon"))]
+#[inline(always)]
+fn all_actg(buf: &[u8]) -> bool {
+    (0..4).all(|k| extract_dna_bitmask::<SPLIT_NON_ACTG>(&buf[64 * k..64 * (k + 1)]).is_dna == !0)
+}
+
+#[inline(always)]
+fn actg_prefix_blocks(data: &[u8], q: usize) -> usize {
+    let mut n = 0;
+    while n + 4 <= q && all_actg(&data[64 * n..]) {
+        n += 4;
+    }
+    n
 }

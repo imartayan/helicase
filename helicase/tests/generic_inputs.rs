@@ -89,11 +89,13 @@ fn test_across_all_inputs(generator: FastxGen, test_id: &str) {
     );
 
     // 6. FileInput (gzip compressed)
-    let from_gz_file = parse_all(FastxParser::<CONFIG>::from_file(&gz_file_path).unwrap());
-    assert_eq!(
-        from_slice, from_gz_file,
-        "FileInput (gzip) mismatch for {test_id}"
-    );
+    if cfg!(feature = "gz") {
+        let from_gz_file = parse_all(FastxParser::<CONFIG>::from_file(&gz_file_path).unwrap());
+        assert_eq!(
+            from_slice, from_gz_file,
+            "FileInput (gzip) mismatch for {test_id}"
+        );
+    }
 
     // Clean up
     let _ = std::fs::remove_dir_all(&tmp_dir);

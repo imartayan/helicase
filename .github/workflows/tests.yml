@@ -36,4 +36,10 @@ jobs:
         with:
           key: cpu-${{ steps.cpu.outputs.id }}
       - name: Run tests
-        run: cargo test -p helicase --lib --no-default-features
+        run: cargo test -p helicase --no-default-features
+      # Baseline x86-64 has no SSSE3: this runs the scalar fallback.
+      - name: Run tests without SIMD
+        if: runner.os == 'Linux'
+        env:
+          RUSTFLAGS: -C target-cpu=x86-64
+        run: cargo test -p helicase --no-default-features --release

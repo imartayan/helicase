@@ -49,11 +49,12 @@ impl Alphabet {
         }
     }
 
-    /// Non-ACTG degenerate or unknown characters in this alphabet (`alphabet[4..]`).
-    /// Returns empty slice for `Alphabet::Dna`, `Alphabet::Protein`, and `Alphabet::DnaMixed`.
+    /// Non-ACTG characters injected with `non_actg_prob`: `alphabet[4..]`, or `N` for
+    /// `Alphabet::Dna` and `Alphabet::DnaMixed`. Empty for protein and custom alphabets.
     pub fn non_actg_bytes(&self) -> &[u8] {
         match self {
             Self::DnaWithN | Self::DnaIupac => &self.as_bytes()[4..],
+            Self::Dna | Self::DnaMixed => b"N",
             _ => b"",
         }
     }
@@ -98,8 +99,7 @@ pub struct FastxGen {
     /// Wrap sequences across multiple lines (e.g. 60 or 80 cols). `None` for single-line.
     pub wrap_width: Option<usize>,
     pub alphabet: Alphabet,
-    /// Proportion of non-ACTG bases (`alphabet[4..]`) injected into generated sequences (`[0.0, 1.0]`).
-    /// Ignored for `Alphabet::Dna`.
+    /// Proportion of non-ACTG bases ([`Alphabet::non_actg_bytes`]) injected into generated sequences (`[0.0, 1.0]`).
     pub non_actg_prob: f64,
     /// Minimum Phred ASCII quality character (default `!` = 33).
     pub qual_min: u8,
@@ -202,8 +202,7 @@ impl FastxGen {
         self
     }
 
-    /// Fluent builder method to inject non-ACTG bases (`alphabet[4..]`) with a given probability.
-    /// Ignored for `Alphabet::Dna`.
+    /// Fluent builder method to inject non-ACTG bases ([`Alphabet::non_actg_bytes`]) with a given probability.
     pub const fn with_non_actg_prob(mut self, prob: f64) -> Self {
         self.non_actg_prob = prob;
         self
@@ -513,14 +512,14 @@ mod tests {
     }
 
     #[test]
-    fn test_dna_alphabet_ignores_non_actg_prob() {
-        // Even when non_actg_prob is high, Alphabet::Dna remains 100% pure ACGT
+    fn test_dna_alphabet_non_actg_prob_injects_n() {
         let generator = FastxGen::fasta(10, 1000)
             .with_non_actg_prob(0.5)
             .with_seed(123);
-        for rec in generator.records() {
-            assert!(rec.seq.iter().all(|b| b"ACGT".contains(b)));
-        }
+        let seq: Vec<u8> = generator.records().flat_map(|rec| rec.seq).collect();
+        assert!(seq.iter().all(|b| b"ACGTN".contains(b)));
+        let n_count = seq.iter().filter(|&&b| b == b'N').count();
+        assert!((0.45..0.55).contains(&(n_count as f64 / seq.len() as f64)));
     }
 
     #[test]

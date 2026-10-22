@@ -286,6 +286,14 @@ pub mod needletail_helpers;
 #[cfg(feature = "needletail")]
 pub use needletail_helpers::*;
 
+// The scalar fallback is a reference for the SIMD backends in tests.
+#[cfg(all(test, any(target_feature = "neon", target_feature = "ssse3")))]
+#[path = "simd/fallback.rs"]
+mod scalar;
+#[cfg(all(test, any(target_feature = "neon", target_feature = "ssse3")))]
+#[path = "simd/tests.rs"]
+mod simd_tests;
+
 #[cfg(all(target_feature = "avx512f", target_feature = "avx512bw"))]
 pub(crate) mod simd {
     mod avx512;

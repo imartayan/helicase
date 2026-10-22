@@ -1,6 +1,7 @@
 // Slice inputs parse short records from a line feed index, reader inputs never do:
 // both must give the same output, including on malformed inputs.
 use fastx_gen::{Alphabet, FastxGen};
+use helicase::config::advanced::*;
 use helicase::config::*;
 use helicase::input::*;
 use helicase::parser::{FastaParser, FastqParser};
@@ -22,7 +23,19 @@ const PACKED: Config = ParserOptions::default()
     .keep_non_actg()
     .compute_mask_non_actg()
     .config()
-    | advanced::COMPUTE_MASK_N;
+    | COMPUTE_MASK_N;
+const SPLIT: Config = ParserOptions::default()
+    .compute_dna_len()
+    .and_dna_packed()
+    .and_dna_columnar()
+    .config();
+const SKIP: Config = ParserOptions::default()
+    .compute_quality()
+    .compute_dna_len()
+    .and_dna_packed()
+    .and_dna_columnar()
+    .skip_non_actg()
+    .config();
 
 #[derive(Debug, PartialEq, Eq)]
 enum Parsed {
@@ -30,9 +43,11 @@ enum Parsed {
         event: parser::Event,
         header: Vec<u8>,
         dna: Vec<u8>,
-        qual: Option<Vec<u8>>,
+        qual: Option<Option<Vec<u8>>>,
         dna_len: usize,
-        packed: Option<(String, String, Vec<bool>, Vec<bool>)>,
+        packed: Option<String>,
+        columnar: Option<String>,
+        masks: Option<(Vec<bool>, Vec<bool>)>,
     },
     Error(String),
 }
@@ -41,6 +56,7 @@ fn parse_all<const CONFIG: Config, P>(mut parser: P) -> Vec<Parsed>
 where
     P: HelicaseParser + Iterator<Item = parser::Result<parser::Event>>,
 {
+    let set = |flag| CONFIG & flag != 0;
     let mut out = Vec::new();
     while let Some(event) = parser.next() {
         match event {
@@ -48,16 +64,12 @@ where
                 event,
                 header: parser.get_header_owned(),
                 dna: parser.get_dna_string_owned(),
-                qual: parser.get_quality_owned(),
+                qual: set(COMPUTE_QUALITY).then(|| parser.get_quality_owned()),
                 dna_len: parser.get_dna_len(),
-                packed: (CONFIG == PACKED).then(|| {
-                    (
-                        parser.get_dna_packed().to_string(),
-                        parser.get_dna_columnar().to_string(),
-                        bits(parser.get_mask_non_actg()),
-                        bits(parser.get_mask_n()),
-                    )
-                }),
+                packed: set(COMPUTE_DNA_PACKED).then(|| parser.get_dna_packed().to_string()),
+                columnar: set(COMPUTE_DNA_COLUMNAR).then(|| parser.get_dna_columnar().to_string()),
+                masks: set(COMPUTE_MASK_NON_ACTG)
+                    .then(|| (bits(parser.get_mask_non_actg()), bits(parser.get_mask_n()))),
             }),
             Err(e) => {
                 out.push(Parsed::Error(e.to_string()));
@@ -88,8 +100,10 @@ fn check_config<const CONFIG: Config>(data: &[u8], test_id: &str) {
 }
 
 fn check(data: &[u8], test_id: &str) {
-    check_config::<STRING>(data, test_id);
-    check_config::<PACKED>(data, test_id);
+    check_config::<STRING>(data, &format!("string {test_id}"));
+    check_config::<PACKED>(data, &format!("packed {test_id}"));
+    check_config::<SPLIT>(data, &format!("split {test_id}"));
+    check_config::<SKIP>(data, &format!("skip {test_id}"));
 }
 
 // Runs of short records separated by long or wrapped ones, to switch in and out of the index.
@@ -200,5 +214,32 @@ fn test_indexed_quality_jump() {
         let qual_end = next_header - 1;
         short.drain(qual_end - header_len - 1..qual_end);
         check(&short, &format!("short quality line in record {record}"));
+    }
+}
+
+#[test]
+fn test_indexed_fastq_line_pairs() {
+    for crlf in [false, true] {
+        let line_end: &[u8] = if crlf { b"\r\n" } else { b"\n" };
+        let data = FastxGen::fastq(80, 150)
+            .with_crlf(crlf)
+            .with_seed(4)
+            .generate_bytes();
+        let starts = line_starts(&data);
+        // Edit a sequence line and its quality line the same way, after the index is entered.
+        for record in (16..78).step_by(3) {
+            let id = format!("crlf {crlf} record {record}");
+            let line_ends = [4 * record + 2, 4 * record + 4].map(|k| starts[k] - line_end.len());
+            let mut empty = data.clone();
+            empty.drain(starts[4 * record + 3]..line_ends[1]);
+            empty.drain(starts[4 * record + 1]..line_ends[0]);
+            check(&empty, &format!("{id} empty record"));
+            if crlf {
+                let mut no_cr = data.clone();
+                no_cr.remove(line_ends[1]);
+                no_cr.remove(line_ends[0]);
+                check(&no_cr, &format!("{id} missing carriage returns"));
+            }
+        }
     }
 }

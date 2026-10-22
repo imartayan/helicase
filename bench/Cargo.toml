@@ -26,7 +26,7 @@ rayon = "1.12"
 sysinfo = "0.39"
 simd-minimizers = { version = "3.0", features = ["scalar"], optional = true }
 sirocco = "0.2"
-zstd = "0.13"
+zstd = "0.14"
 
 [package.metadata.cargo-machete]
 ignored = ["simd-minimizers"]

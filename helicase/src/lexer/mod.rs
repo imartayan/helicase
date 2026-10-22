@@ -131,12 +131,13 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Lexer<'a, CONFIG, I> {
         )
     }
 
-    // Block containing `pos` with the line feeds before it cleared, for random access inputs.
+    // Block containing `pos`, in the current buffer, with the line feeds before it cleared.
     #[inline(always)]
     pub(crate) fn seek_chunk(&mut self, pos: usize) -> Chunk {
         let block = pos / 64;
         self.input.seek_block(block);
-        let mut chunk = self.scan_current_block(64.min(self.input.buffer().len() - 64 * block));
+        let end = self.input.buffer_offset() + self.input.buffer().len();
+        let mut chunk = self.scan_current_block(64.min(end - 64 * block));
         chunk.newline &= !0 << (pos % 64);
         chunk
     }

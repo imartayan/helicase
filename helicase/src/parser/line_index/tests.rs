@@ -1,15 +1,13 @@
-// Slice inputs parse short records from a line feed index, reader inputs never do:
-// both must give the same output, including on malformed inputs.
+// Short records are parsed from a line feed index: the output must match the block parser,
+// including on malformed inputs.
+use super::without_index;
+use crate::config::advanced::*;
+use crate::config::*;
+use crate::input::*;
+use crate::parser::{FastaParser, FastqParser};
+use crate::*;
 use fastx_gen::{Alphabet, FastxGen};
-use helicase::config::advanced::*;
-use helicase::config::*;
-use helicase::input::*;
-use helicase::parser::{FastaParser, FastqParser};
-use helicase::*;
 use std::io::Cursor;
-
-mod common;
-use common::{assert_same, bits};
 
 const STRING: Config = ParserOptions::default()
     .compute_quality()
@@ -80,22 +78,38 @@ where
     out
 }
 
+// Compares slice and reader inputs, which both use the index, with the block parser alone.
 fn check_config<const CONFIG: Config>(data: &[u8], test_id: &str) {
-    let to_string = |e: parser::Error| e.to_string();
-    let (from_slice, from_reader) = if data.first() == Some(&b'>') {
-        (
-            FastaParser::<CONFIG, _>::from_slice(data).map(parse_all::<CONFIG, _>),
-            FastaParser::<CONFIG, _>::from_reader(Cursor::new(data)).map(parse_all::<CONFIG, _>),
-        )
-    } else {
-        (
-            FastqParser::<CONFIG, _>::from_slice(data).map(parse_all::<CONFIG, _>),
-            FastqParser::<CONFIG, _>::from_reader(Cursor::new(data)).map(parse_all::<CONFIG, _>),
-        )
+    let fasta = data.first() == Some(&b'>');
+    let parse = |input: &str| {
+        let parsed =
+            match (fasta, input) {
+                (true, "reference") => without_index(|| {
+                    FastaParser::<CONFIG, _>::from_slice(data).map(parse_all::<CONFIG, _>)
+                }),
+                (true, "slice") => {
+                    FastaParser::<CONFIG, _>::from_slice(data).map(parse_all::<CONFIG, _>)
+                }
+                (true, _) => FastaParser::<CONFIG, _>::from_reader(Cursor::new(data))
+                    .map(parse_all::<CONFIG, _>),
+                (false, "reference") => without_index(|| {
+                    FastqParser::<CONFIG, _>::from_slice(data).map(parse_all::<CONFIG, _>)
+                }),
+                (false, "slice") => {
+                    FastqParser::<CONFIG, _>::from_slice(data).map(parse_all::<CONFIG, _>)
+                }
+                (false, _) => FastqParser::<CONFIG, _>::from_reader(Cursor::new(data))
+                    .map(parse_all::<CONFIG, _>),
+            };
+        parsed.map_err(|e| e.to_string())
     };
-    match (from_slice, from_reader) {
-        (Ok(slice), Ok(reader)) => assert_same(&slice, &reader, test_id),
-        (slice, reader) => assert_eq!(slice.map_err(to_string), reader.map_err(to_string)),
+    let expected = parse("reference");
+    for input in ["slice", "reader"] {
+        let id = format!("{input} {test_id}");
+        match (&expected, parse(input)) {
+            (Ok(expected), Ok(got)) => assert_same(expected, &got, &id),
+            (expected, got) => assert_eq!(expected, &got, "{id}"),
+        }
     }
 }
 
@@ -241,5 +255,70 @@ fn test_indexed_fastq_line_pairs() {
                 check(&no_cr, &format!("{id} missing carriage returns"));
             }
         }
+    }
+}
+
+// Records cross many reader buffer boundaries, where the index hands over to the block parser.
+#[test]
+fn test_indexed_reader_buffers() {
+    let tmp_dir = std::env::temp_dir().join(format!("helicase_indexed_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+    for fasta in [false, true] {
+        for crlf in [false, true] {
+            let generator = if fasta {
+                FastxGen::fasta(15_000, 250)
+            } else {
+                FastxGen::fastq(10_000, 150)
+            };
+            let data = generator
+                .with_std_dev(0.8)
+                .with_alphabet(Alphabet::DnaIupac)
+                .with_non_actg_prob(0.001)
+                .with_crlf(crlf)
+                .with_seed(5)
+                .generate_bytes();
+            let id = format!("fasta {fasta} crlf {crlf}");
+            check(&data, &id);
+            let path = tmp_dir.join(format!("{fasta}_{crlf}"));
+            std::fs::write(&path, &data).unwrap();
+            check_file::<STRING>(&data, &path, &id);
+            check_file::<PACKED>(&data, &path, &id);
+        }
+    }
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}
+
+fn check_file<const CONFIG: Config>(data: &[u8], path: &std::path::Path, test_id: &str) {
+    let (expected, got) = if data.first() == Some(&b'>') {
+        (
+            without_index(|| {
+                parse_all::<CONFIG, _>(FastaParser::<CONFIG, _>::from_slice(data).unwrap())
+            }),
+            parse_all::<CONFIG, _>(FastaParser::<CONFIG, _>::from_file(path).unwrap()),
+        )
+    } else {
+        (
+            without_index(|| {
+                parse_all::<CONFIG, _>(FastqParser::<CONFIG, _>::from_slice(data).unwrap())
+            }),
+            parse_all::<CONFIG, _>(FastqParser::<CONFIG, _>::from_file(path).unwrap()),
+        )
+    };
+    assert_same(&expected, &got, &format!("file {test_id}"));
+}
+
+fn bits(mask: &dna_format::BitMask) -> Vec<bool> {
+    (0..mask.len()).map(|i| mask.get(i)).collect()
+}
+
+// Reports the index of the first differing event instead of the whole outputs.
+fn assert_same<T: PartialEq>(expected: &[T], got: &[T], id: &str) {
+    let len = expected.len().max(got.len());
+    if let Some(i) = (0..len).find(|&i| expected.get(i) != got.get(i)) {
+        panic!(
+            "{id}: event {i} differs ({} vs {} events)",
+            expected.len(),
+            got.len()
+        );
     }
 }

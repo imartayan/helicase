@@ -404,8 +404,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
 }
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
-    const INDEXED: bool = I::RANDOM_ACCESS
-        && flag_is_set(CONFIG, RETURN_RECORD)
+    const INDEXED: bool = flag_is_set(CONFIG, RETURN_RECORD)
         && flag_is_not_set(CONFIG, SPLIT_NON_ACTG | RETURN_DNA_CHUNK | MERGE_RECORDS);
 
     #[cold]
@@ -420,8 +419,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
     // Anything unusual (long or malformed record, end of input) goes back to `next_event`.
     #[inline(always)]
     fn next_indexed(&mut self) -> Option<Result<Event>> {
-        let data = self.lexer.input.data();
-        let [header_end, seq_end, plus_end, qual_end] = self.line_index.peek::<4>(data)?;
+        let (data, offset) = (self.lexer.input.buffer(), self.lexer.input.buffer_offset());
+        let [header_end, seq_end, plus_end, qual_end] = self.line_index.peek::<4>(data, offset)?;
         // The block parser jumps over quality lines using the sequence length.
         if qual_end - plus_end != seq_end - header_end {
             return None;
@@ -441,8 +440,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
         }
         let seq_len = (seq_end - header_end - 1).saturating_sub(crlf_len);
         self.dna_range = header_end + 1..seq_end.saturating_sub(crlf_len);
+        let data = self.lexer.input.buffer();
         self.bitpackers
-            .pack_contiguous::<CONFIG>(&data[header_end + 1..], seq_len);
+            .pack_contiguous::<CONFIG>(&data[header_end + 1 - offset..], seq_len);
         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
             self.dna_len = seq_len;
         }
@@ -699,9 +699,14 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
             }
             if flag_is_set(CONFIG, RETURN_RECORD) {
                 if Self::INDEXED && !self.finished {
-                    let data = self.lexer.input.data();
-                    self.line_index
-                        .record_parsed(data, self.record_start, self.global_pos());
+                    let (data, offset) =
+                        (self.lexer.input.buffer(), self.lexer.input.buffer_offset());
+                    self.line_index.record_parsed(
+                        data,
+                        offset,
+                        self.record_start,
+                        self.global_pos(),
+                    );
                 }
                 return Some(Ok(Event::Record(self.record_start..self.global_pos())));
             }

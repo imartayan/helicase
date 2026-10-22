@@ -5,6 +5,7 @@ mod error;
 mod fasta;
 mod fastq;
 mod fastx;
+mod line_index;
 mod parallel;
 #[cfg(feature = "paraseq")]
 mod paraseq_traits;
@@ -17,6 +18,7 @@ pub use error::{Error, ErrorKind};
 pub use fasta::*;
 pub use fastq::*;
 pub use fastx::*;
+use line_index::{LineIndex, scan_block};
 pub use parallel::ParallelFastxParser;
 #[cfg(feature = "zstd")]
 pub(crate) use parallel::index_zstd_frames;

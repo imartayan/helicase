@@ -131,6 +131,16 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Lexer<'a, CONFIG, I> {
         )
     }
 
+    // Block containing `pos` with the line feeds before it cleared, for random access inputs.
+    #[inline(always)]
+    pub(crate) fn seek_chunk(&mut self, pos: usize) -> Chunk {
+        let block = pos / 64;
+        self.input.seek_block(block);
+        let mut chunk = self.scan_current_block(64.min(self.input.buffer().len() - 64 * block));
+        chunk.newline &= !0 << (pos % 64);
+        chunk
+    }
+
     #[inline(always)]
     pub(crate) fn next_block<const MODE: u8>(&mut self) -> Option<io::Result<Chunk>> {
         self.input.next().map(|res| {
@@ -207,7 +217,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Lexer<'a, CONFIG, I> {
             while target_pos >= self.input.buffer_offset() + self.input.buffer().len() {
                 let buf_off = self.input.buffer_offset();
                 let data_len = self.input.buffer().len();
-                let skip_bytes = (data_len - (curr_pos - buf_off)).saturating_sub(64) & !63;
+                let skip_bytes = data_len.saturating_sub(curr_pos - buf_off + 64) & !63;
                 if skip_bytes > 0 {
                     curr_pos += skip_bytes;
                     *block_counter = curr_pos / 64 - 1;

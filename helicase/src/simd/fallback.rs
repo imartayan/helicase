@@ -60,6 +60,13 @@ pub fn extract_bitmask<const CONFIG: Config, const _MODE: u8>(buf: &[u8]) -> Bit
     }
 }
 
+// 2-bit code, whether it is not ACTG, whether it is N, encoded like `extract_bitmask`.
+#[inline(always)]
+fn bitpack_byte(x: u8) -> (u8, bool, bool) {
+    let is_actg = (x & UPPERCASE) == LUT_ACTG[(x & 0b110) as usize];
+    ((x & 0b110) >> 1, !is_actg, (x & UPPERCASE) == b'N')
+}
+
 #[inline(always)]
 pub fn extract_dna_bitmask<const CONFIG: Config>(buf: &[u8]) -> Bitmask {
     let mut is_dna = !0;

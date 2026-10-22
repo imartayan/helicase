@@ -54,6 +54,7 @@ pub struct FastqParser<'a, const CONFIG: Config, I: InputData<'a>> {
     crlf_len: usize,
     crlf_detected: bool,
     seq_start: usize,
+    line_index: LineIndex,
     #[cfg(feature = "paraseq")]
     record_index: u64,
     #[cfg(feature = "paraseq")]
@@ -94,6 +95,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
             crlf_len: 0,
             crlf_detected: false,
             seq_start: 0,
+            line_index: LineIndex::default(),
             #[cfg(feature = "paraseq")]
             record_index: 0,
             #[cfg(feature = "paraseq")]
@@ -402,8 +404,62 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
 }
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
+    const INDEXED: bool = I::RANDOM_ACCESS
+        && flag_is_set(CONFIG, RETURN_RECORD)
+        && flag_is_not_set(CONFIG, SPLIT_NON_ACTG | RETURN_DNA_CHUNK | MERGE_RECORDS);
+
+    #[cold]
+    fn leave_indexed(&mut self) {
+        let start = self.line_index.deactivate();
+        self.block_counter = start / 64;
+        self.pos_in_block = start % 64;
+        self.block = self.lexer.seek_chunk(start);
+    }
+
+    // Parses a record from 4 indexed line feeds, without touching the block state.
+    // Anything unusual (long or malformed record, end of input) goes back to `next_event`.
+    #[inline(always)]
+    fn next_indexed(&mut self) -> Option<Result<Event>> {
+        let data = self.lexer.input.data();
+        let [header_end, seq_end, plus_end, qual_end] = self.line_index.peek::<4>(data)?;
+        // The block parser jumps over quality lines using the sequence length.
+        if qual_end - plus_end != seq_end - header_end {
+            return None;
+        }
+        let start = self.line_index.next_start;
+        self.line_index.consume::<4>(qual_end + 1);
+        #[cfg(feature = "paraseq")]
+        {
+            self.record_index = self.record_counter;
+            self.record_counter += 1;
+        }
+        self.record_start = start;
+        self.clear_record();
+        let crlf_len = self.crlf_len;
+        if flag_is_set(CONFIG, COMPUTE_HEADER) {
+            self.header_range = start + 1..header_end.saturating_sub(crlf_len);
+        }
+        let seq_len = (seq_end - header_end - 1).saturating_sub(crlf_len);
+        self.dna_range = header_end + 1..seq_end.saturating_sub(crlf_len);
+        self.bitpackers
+            .pack_contiguous::<CONFIG>(&data[header_end + 1..], seq_len);
+        if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
+            self.dna_len = seq_len;
+        }
+        if flag_is_set(CONFIG, COMPUTE_QUALITY) {
+            self.quality_range = plus_end + 1..qual_end.saturating_sub(crlf_len);
+        }
+        Some(Ok(Event::Record(start..qual_end + 1)))
+    }
+
     #[inline(always)]
     fn next_event(&mut self) -> Option<Result<Event>> {
+        if Self::INDEXED && self.line_index.active {
+            if let Some(event) = self.next_indexed() {
+                return Some(event);
+            }
+            self.leave_indexed();
+        }
         loop {
             if !flag_is_set(CONFIG, RETURN_DNA_CHUNK) || self.line_count == 0 {
                 // HEADER
@@ -642,6 +698,11 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
                 self.line_count = 0;
             }
             if flag_is_set(CONFIG, RETURN_RECORD) {
+                if Self::INDEXED && !self.finished {
+                    let data = self.lexer.input.data();
+                    self.line_index
+                        .record_parsed(data, self.record_start, self.global_pos());
+                }
                 return Some(Ok(Event::Record(self.record_start..self.global_pos())));
             }
         }

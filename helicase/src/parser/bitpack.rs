@@ -159,19 +159,7 @@ impl DnaBitpackers {
         }
     }
 
-    /// Appends a wrapped line of length `line_width` bases.
-    /// Returns `false` if `SPLIT_NON_ACTG` is enabled and a non-ACTG character was found.
     #[inline(always)]
-    pub fn append_line_stride<const CONFIG: Config>(
-        &mut self,
-        line_data: &[u8],
-        line_width: usize,
-    ) -> bool {
-        self.pack_contiguous::<CONFIG>(line_data, line_width) == line_width
-    }
-
-    // Out of line to keep the per-line loop of wrapped FASTA tight.
-    #[inline(never)]
     fn pack_run<const CONFIG: Config>(&mut self, data: &[u8], q: usize) -> usize {
         let count = if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
             actg_prefix_blocks(data, q)
@@ -231,7 +219,7 @@ impl DnaBitpackers {
         let need_mask_n = flag_is_set(CONFIG, COMPUTE_MASK_N);
         let is_keep = flag_is_not_set(CONFIG, SPLIT_NON_ACTG);
 
-        if !need_packed && !need_columnar && !need_mask_non_actg && !need_mask_n {
+        if !need_packed && !need_columnar && !need_mask_non_actg && !need_mask_n && is_keep {
             return rem_len;
         }
 

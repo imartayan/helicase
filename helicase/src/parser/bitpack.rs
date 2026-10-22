@@ -1,8 +1,25 @@
 use crate::config::{advanced::*, *};
 use crate::dna_format::{BitMask, ColumnarDNA, PackedDNA};
 use crate::lexer::Chunk;
+#[cfg(target_feature = "neon")]
+use crate::simd::all_actg;
 use crate::simd::extract_dna_bitmask;
 use core::mem::swap;
+
+#[cfg(not(target_feature = "neon"))]
+#[inline(always)]
+fn all_actg(buf: &[u8]) -> bool {
+    (0..4).all(|k| extract_dna_bitmask::<SPLIT_NON_ACTG>(&buf[64 * k..64 * (k + 1)]).is_dna == !0)
+}
+
+#[inline(always)]
+fn actg_prefix_blocks(data: &[u8], q: usize) -> usize {
+    let mut n = 0;
+    while n + 4 <= q && all_actg(&data[64 * n..]) {
+        n += 4;
+    }
+    n
+}
 
 /// Unified container managing on-the-fly 2-bit bitpacking representations
 /// across FASTA and FASTQ parsers.
@@ -153,6 +170,54 @@ impl DnaBitpackers {
         self.pack_contiguous::<CONFIG>(line_data, line_width) == line_width
     }
 
+    // Out of line to keep the per-line loop of wrapped FASTA tight.
+    #[inline(never)]
+    fn pack_run<const CONFIG: Config>(&mut self, data: &[u8], q: usize) -> usize {
+        let count = if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
+            actg_prefix_blocks(data, q)
+        } else {
+            q
+        };
+        if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
+            self.packed.pack_blocks::<CONFIG>(data, count);
+        }
+        if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
+            for k in 0..count {
+                let m = extract_dna_bitmask::<CONFIG>(&data[64 * k..64 * (k + 1)]);
+                self.columnar.append_block(m.high_bit, m.low_bit);
+            }
+        }
+        self.pack_blocks_checked::<CONFIG>(data, count, q)
+    }
+
+    #[inline(always)]
+    fn pack_blocks_checked<const CONFIG: Config>(
+        &mut self,
+        data: &[u8],
+        start: usize,
+        q: usize,
+    ) -> usize {
+        for k in start..q {
+            let m = extract_dna_bitmask::<CONFIG>(&data[64 * k..64 * (k + 1)]);
+            if flag_is_set(CONFIG, SPLIT_NON_ACTG) && m.is_dna != !0 {
+                return k;
+            }
+            if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
+                self.packed.append_block(m.two_bits);
+            }
+            if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
+                self.columnar.append_block(m.high_bit, m.low_bit);
+            }
+            if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
+                self.mask_non_actg.append_block(m.mask_non_actg);
+            }
+            if flag_is_set(CONFIG, COMPUTE_MASK_N) {
+                self.mask_n.append_block(m.mask_n);
+            }
+        }
+        q
+    }
+
     /// Bulk packs a contiguous slice of pure DNA bases into the active bitpackers.
     ///
     /// Returns the number of bytes processed. If `SPLIT_NON_ACTG` is enabled and
@@ -180,32 +245,10 @@ impl DnaBitpackers {
             if need_packed && is_keep && !need_columnar && !need_mask_non_actg && !need_mask_n {
                 self.packed.pack_blocks::<CONFIG>(data, q);
                 q
+            } else if !need_mask_non_actg && !need_mask_n && q >= 4 {
+                self.pack_run::<CONFIG>(data, q)
             } else {
-                let mut count = 0;
-                for k in 0..q {
-                    let block_start = 64 * k;
-                    let block_data = &data[block_start..block_start + 64];
-                    let m = extract_dna_bitmask::<CONFIG>(block_data);
-
-                    if !is_keep && m.is_dna != !0 {
-                        break;
-                    }
-
-                    if need_packed {
-                        self.packed.append_block(m.two_bits);
-                    }
-                    if need_columnar {
-                        self.columnar.append_block(m.high_bit, m.low_bit);
-                    }
-                    if need_mask_non_actg {
-                        self.mask_non_actg.append_block(m.mask_non_actg);
-                    }
-                    if need_mask_n {
-                        self.mask_n.append_block(m.mask_n);
-                    }
-                    count += 1;
-                }
-                count
+                self.pack_blocks_checked::<CONFIG>(data, 0, q)
             };
 
         if processed_blocks < q {

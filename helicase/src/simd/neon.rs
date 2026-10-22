@@ -8,8 +8,16 @@ use core::mem::transmute;
 const LINE_FEED: uint8x16_t = unsafe { transmute([b'\n'; 16]) };
 const ASCII_N: uint8x16_t = unsafe { transmute([b'N'; 16]) };
 const UPPERCASE: uint8x16_t = unsafe { transmute([0b11011111u8; 16]) };
-const TWO_BITS: uint8x16_t = unsafe { transmute([0b110u8; 16]) };
-const LUT_ACTG: uint8x16_t = unsafe { transmute(*b"A_C_T_G_________") };
+
+// 0xFF at `c ^ 0x40` for c in ACGT, indices >= 32 return 0.
+const LUT_ACTG_XOR: uint8x16x2_t = {
+    let mut lut = [0u8; 32];
+    lut[(b'A' ^ 0x40) as usize] = 0xFF;
+    lut[(b'C' ^ 0x40) as usize] = 0xFF;
+    lut[(b'G' ^ 0x40) as usize] = 0xFF;
+    lut[(b'T' ^ 0x40) as usize] = 0xFF;
+    unsafe { transmute(lut) }
+};
 
 const NEEDS_DNA_MASKS: Config = COMPUTE_DNA_COLUMNAR
     | COMPUTE_DNA_PACKED
@@ -86,6 +94,7 @@ pub fn extract_bitmask<const CONFIG: Config, const MODE: u8>(buf: &[u8]) -> Bitm
     }
 }
 
+// Lower latency, line feed only
 #[inline(always)]
 unsafe fn extract_bitmask_contiguous(ptr: *const u8) -> u64 {
     unsafe {
@@ -157,9 +166,7 @@ fn bitpack_dna<const CONFIG: Config>(v: uint8x16x4_t) -> (u64, u128, u64, u64, u
             CONFIG,
             SPLIT_NON_ACTG | COMPUTE_MASK_NON_ACTG | COMPUTE_MASK_N,
         ) {
-            let lookup = map_8x16x4(v, |v| vqtbl1q_u8(LUT_ACTG, vandq_u8(v, TWO_BITS)));
-            let uppercase = map_8x16x4(v, |v| vandq_u8(v, UPPERCASE));
-            let eq = map_two_8x16x4(lookup, uppercase, |v1, v2| vceqq_u8(v1, v2));
+            let eq = map_8x16x4(v, |v| actg_mask(v));
             if flag_is_set(CONFIG, SPLIT_NON_ACTG)
                 && flag_is_not_set(CONFIG, COMPUTE_MASK_NON_ACTG | COMPUTE_MASK_N)
             {
@@ -178,7 +185,8 @@ fn bitpack_dna<const CONFIG: Config>(v: uint8x16x4_t) -> (u64, u128, u64, u64, u
                     mask_non_actg = !mask_actg;
                 }
                 if flag_is_set(CONFIG, COMPUTE_MASK_N) {
-                    mask_n = movemask_64(map_8x16x4(uppercase, |v| vceqq_u8(v, ASCII_N)));
+                    mask_n =
+                        movemask_64(map_8x16x4(v, |v| vceqq_u8(vandq_u8(v, UPPERCASE), ASCII_N)));
                 }
             }
         }
@@ -188,19 +196,37 @@ fn bitpack_dna<const CONFIG: Config>(v: uint8x16x4_t) -> (u64, u128, u64, u64, u
 }
 
 #[inline(always)]
+pub fn all_actg(buf: &[u8]) -> bool {
+    unsafe {
+        let ptr = buf[..256].as_ptr();
+        let is_actg = |i: usize| actg_mask(vld1q_u8(ptr.add(16 * i)));
+        let mut acc = [is_actg(0), is_actg(1), is_actg(2), is_actg(3)];
+        for i in (4..16).step_by(4) {
+            for (j, a) in acc.iter_mut().enumerate() {
+                *a = vandq_u8(*a, is_actg(i + j));
+            }
+        }
+        let all = vandq_u8(vandq_u8(acc[0], acc[1]), vandq_u8(acc[2], acc[3]));
+        vminvq_u8(all) == 0xFF
+    }
+}
+
+#[inline(always)]
+unsafe fn actg_mask(v: uint8x16_t) -> uint8x16_t {
+    unsafe {
+        vqtbl2q_u8(
+            LUT_ACTG_XOR,
+            veorq_u8(vandq_u8(v, UPPERCASE), vdupq_n_u8(0x40)),
+        )
+    }
+}
+
+#[inline(always)]
 fn map_8x16x4<F>(v: uint8x16x4_t, mut f: F) -> uint8x16x4_t
 where
     F: FnMut(uint8x16_t) -> uint8x16_t,
 {
     uint8x16x4_t(f(v.0), f(v.1), f(v.2), f(v.3))
-}
-
-#[inline(always)]
-fn map_two_8x16x4<F>(v1: uint8x16x4_t, v2: uint8x16x4_t, mut f: F) -> uint8x16x4_t
-where
-    F: FnMut(uint8x16_t, uint8x16_t) -> uint8x16_t,
-{
-    uint8x16x4_t(f(v1.0, v2.0), f(v1.1, v2.1), f(v1.2, v2.2), f(v1.3, v2.3))
 }
 
 // computing movemask is significantly more expensive than on x86

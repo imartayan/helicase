@@ -1,10 +1,17 @@
 [package]
 name = "helicase"
-version = "0.2.0"
+version = "1.0.0"
 edition = "2024"
 authors = ["Igor Martayan", "Charles Paperman"]
 description = "SIMD-accelerated library for FASTA/FASTQ parsing and bitpacking"
-keywords = ["bioinformatics", "fasta", "fastq", "bitpacking", "simd"]
+keywords = [
+    "bioinformatics",
+    "fasta",
+    "fastq",
+    "bitpacking",
+    "simd",
+    "parallel",
+]
 categories = ["science::bioinformatics"]
 repository = "https://github.com/imartayan/helicase"
 documentation = "https://docs.rs/helicase"

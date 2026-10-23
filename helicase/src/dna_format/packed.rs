@@ -245,6 +245,18 @@ impl PackedDNA {
         (words, self.cur)
     }
 
+    /// The length in characters, and the raw data.
+    ///
+    /// The final byte might be incomplete.
+    #[inline(always)]
+    pub fn into_packed_bytes(mut self) -> (usize, Vec<u8>) {
+        let len = self.len();
+        let word = self.num_words();
+        self.bits.resize((word + 1) * WORD_BYTES, 0);
+        unsafe { self.word_ptr(word).write_unaligned(self.cur) };
+        (len, self.bits)
+    }
+
     #[inline(always)]
     pub fn get(&self, i: usize) -> u8 {
         let block_idx = i / BP_PER_BLOCK;

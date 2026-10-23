@@ -307,7 +307,7 @@ impl BufferReceiver {
 
 /// Reader input.
 /// It supports transparent decompression.
-pub struct ReaderInput<'a, R: Read + Send + 'a> {
+pub struct ReaderInput<'a, R: Read + 'a> {
     data: Vec<u8>,
     start: usize,
     len: usize,
@@ -321,7 +321,7 @@ pub struct ReaderInput<'a, R: Read + Send + 'a> {
     _phantom: PhantomData<&'a ()>,
 }
 
-impl<'a, R: Read + Send + 'a> ReaderInput<'a, R> {
+impl<'a, R: Read + 'a> ReaderInput<'a, R> {
     // Keeps the buffer from `keep_start` and appends new data after it.
     // Returns whether new data was read.
     fn refill(&mut self, keep_start: usize) -> bool {
@@ -524,7 +524,7 @@ impl<R: Read + Send + 'static> ReaderInput<'static, R> {
     }
 }
 
-impl<'a, R: Read + Send + 'a> Iterator for ReaderInput<'a, R> {
+impl<'a, R: Read + 'a> Iterator for ReaderInput<'a, R> {
     type Item = Result<&'a [u8]>;
 
     #[inline(always)]
@@ -543,9 +543,9 @@ impl<'a, R: Read + Send + 'a> Iterator for ReaderInput<'a, R> {
     }
 }
 
-impl<'a, R: Read + Send + 'a> crate::sealed::Sealed for ReaderInput<'a, R> {}
+impl<'a, R: Read + 'a> crate::sealed::Sealed for ReaderInput<'a, R> {}
 
-impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
+impl<'a, R: Read + 'a> InputData<'a> for ReaderInput<'a, R> {
     const RANDOM_ACCESS: bool = false;
 
     #[inline(always)]
@@ -610,7 +610,7 @@ impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
     }
 }
 
-pub trait FromReader<'a, R: Read + Send + 'a>: FromInputData<'a, ReaderInput<'a, R>> {
+pub trait FromReader<'a, R: Read + 'a>: FromInputData<'a, ReaderInput<'a, R>> {
     /// Build the struct from a reader.
     /// It supports transparent decompression.
     #[inline(always)]
@@ -619,7 +619,7 @@ pub trait FromReader<'a, R: Read + Send + 'a>: FromInputData<'a, ReaderInput<'a,
     }
 }
 
-impl<'a, R: Read + Send + 'a, F: FromInputData<'a, ReaderInput<'a, R>>> FromReader<'a, R> for F {}
+impl<'a, R: Read + 'a, F: FromInputData<'a, ReaderInput<'a, R>>> FromReader<'a, R> for F {}
 
 /// File input alias.
 /// It supports transparent decompression.

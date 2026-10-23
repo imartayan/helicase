@@ -259,6 +259,22 @@ fn test_fastx_parser_is_send() {
     assert_eq!(count, 1);
 }
 
+// Readers backed by JS objects in wasm are not `Send`.
+#[test]
+fn test_non_send_reader() {
+    struct RcReader(std::rc::Rc<Cursor<Vec<u8>>>);
+    impl std::io::Read for RcReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            std::rc::Rc::get_mut(&mut self.0).unwrap().read(buf)
+        }
+    }
+    let reader = |data: &[u8]| RcReader(std::rc::Rc::new(Cursor::new(data.to_vec())));
+    let fasta = parser::FastaParser::<CONFIG, _>::from_reader(reader(b">a\nACGT\n>b\nTT\n"));
+    assert_eq!(fasta.unwrap().count(), 2);
+    let fastq = parser::FastqParser::<CONFIG, _>::from_reader(reader(b"@a\nACGT\n+\nIIII\n"));
+    assert_eq!(fastq.unwrap().count(), 1);
+}
+
 // `from_file` reads ahead in a background thread, `from_reader` reads on the parser thread.
 #[test]
 fn test_read_ahead_matches_direct_reader() {

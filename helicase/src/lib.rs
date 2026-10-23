@@ -289,6 +289,11 @@ pub use parser::{FastxParser, HelicaseParser};
 #[cfg(feature = "needletail")]
 pub use parser::needletail_helpers::{parse_fastx_file, parse_fastx_reader, parse_fastx_slice};
 
+// Traits only implemented in this crate, so that they can gain methods in minor versions.
+mod sealed {
+    pub trait Sealed {}
+}
+
 // The scalar fallback is a reference for the SIMD backends in tests.
 #[cfg(all(test, any(target_feature = "neon", target_feature = "ssse3")))]
 #[path = "simd/fallback.rs"]

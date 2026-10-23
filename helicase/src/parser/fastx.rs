@@ -61,6 +61,8 @@ macro_rules! require {
     };
 }
 
+impl<const CONFIG: Config> crate::sealed::Sealed for FastxParser<'_, CONFIG> {}
+
 impl<'a, const CONFIG: Config> HelicaseParser for FastxParser<'a, CONFIG> {
     #[inline(always)]
     fn format(&self) -> Format {

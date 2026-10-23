@@ -108,6 +108,11 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FromInputData<'a, I>
     }
 }
 
+impl<'a, const CONFIG: Config, I: InputData<'a>> crate::sealed::Sealed
+    for FastqParser<'a, CONFIG, I>
+{
+}
+
 impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<'a, CONFIG, I> {
     #[inline(always)]
     fn format(&self) -> Format {

@@ -4,7 +4,7 @@ use crate::dna_format::*;
 #[cfg(feature = "packed-seq")]
 use packed_seq::{PackedSeq, PackedSeqVec};
 
-pub trait HelicaseParser {
+pub trait HelicaseParser: crate::sealed::Sealed {
     /// Get the [`Format`] associated to this parser (FASTA or FASTQ).
     fn format(&self) -> Format;
 

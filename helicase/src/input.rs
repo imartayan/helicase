@@ -145,7 +145,7 @@ impl core::fmt::Display for CompressionFormat {
     }
 }
 
-pub trait InputData<'a>: Iterator<Item = io::Result<&'a [u8]>> {
+pub trait InputData<'a>: Iterator<Item = io::Result<&'a [u8]>> + crate::sealed::Sealed {
     const RANDOM_ACCESS: bool;
 
     /// Returns the first byte of the (uncompressed when possible) input.
@@ -255,6 +255,8 @@ impl<'a> Iterator for SliceInput<'a> {
     }
 }
 
+impl crate::sealed::Sealed for SliceInput<'_> {}
+
 impl<'a> InputData<'a> for SliceInput<'a> {
     const RANDOM_ACCESS: bool = true;
 
@@ -334,6 +336,8 @@ impl<'a> Iterator for MmapInput<'a> {
         self.slice.next()
     }
 }
+
+impl crate::sealed::Sealed for MmapInput<'_> {}
 
 impl<'a> InputData<'a> for MmapInput<'a> {
     const RANDOM_ACCESS: bool = true;
@@ -780,6 +784,8 @@ impl<'a, R: Read + Send + 'a> Iterator for ReaderInput<'a, R> {
         self.next_slow()
     }
 }
+
+impl<'a, R: Read + Send + 'a> crate::sealed::Sealed for ReaderInput<'a, R> {}
 
 impl<'a, R: Read + Send + 'a> InputData<'a> for ReaderInput<'a, R> {
     const RANDOM_ACCESS: bool = false;

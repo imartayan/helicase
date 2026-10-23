@@ -3,6 +3,8 @@
 <!-- next-header -->
 ## [Unreleased]
 
+- Show feature requirements on gated items in the documentation
+
 ## 1.0.0
 
 On file inputs, the single-threaded parser is now 1.1-4× faster than needletail, while the new multi-threaded parser is 3-6× faster than paraseq using 4 threads.

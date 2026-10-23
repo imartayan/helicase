@@ -276,6 +276,8 @@
 //!
 //! See the [migration guide](https://github.com/imartayan/helicase/blob/main/MIGRATION.md) for details.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 extern crate alloc;
 
 #[cfg(not(feature = "std"))]

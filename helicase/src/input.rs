@@ -178,7 +178,8 @@ pub trait InputData<'a>: Iterator<Item = io::Result<&'a [u8]>> {
     #[inline(always)]
     fn slice(&self, range: Range<usize>) -> &[u8] {
         let off = self.buffer_offset();
-        &self.buffer()[range.start - off..range.end - off]
+        // A line feed without `\r` in a CRLF input gives an inverted range: return it empty.
+        &self.buffer()[range.start - off..range.end.max(range.start) - off]
     }
 
     /// Returns `true` if we are reaching the end of the buffer.

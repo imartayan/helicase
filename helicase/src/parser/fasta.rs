@@ -248,10 +248,11 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
         }
     }
 
+    // Length of the `\r` before the line feed at the current position, none at the end of input.
     #[inline(always)]
-    fn current_byte(&self) -> u8 {
+    const fn crlf_before(&self) -> usize {
         if self.pos_in_block < self.block.len {
-            self.lexer.input.current_block()[self.pos_in_block & 63]
+            self.crlf_len
         } else {
             0
         }
@@ -443,6 +444,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             if at_newline {
                 self.make_room_record_end(self.global_pos());
                 self.consume_newline();
+                self.skip_blank_lines(self.global_pos());
             }
             if flag_is_not_set(CONFIG, MERGE_DNA_CHUNKS) {
                 self.clear_chunk();
@@ -565,7 +567,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
         self.block_counter = global_curr / 64;
         self.pos_in_block = global_curr % 64;
         self.lexer.input.seek_block(self.block_counter);
-        if I::RANDOM_ACCESS && curr_pos >= data_len {
+        if curr_pos >= data_len {
             self.finished = true;
             return Some(self.finish_record_eof());
         }
@@ -693,7 +695,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
                             let first_pos = self.pos_in_block;
                             self.pos_in_block = position.trailing_zeros() as usize;
                             let len = if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
-                                (self.pos_in_block - first_pos).saturating_sub(self.crlf_len)
+                                (self.pos_in_block - first_pos).saturating_sub(self.crlf_before())
                             } else {
                                 self.pos_in_block - first_pos
                             };
@@ -743,7 +745,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
                                 self.pos_in_block = position.trailing_zeros() as usize;
                                 if self.pos_in_block > 0 {
                                     let len = if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
-                                        self.pos_in_block.saturating_sub(self.crlf_len)
+                                        self.pos_in_block.saturating_sub(self.crlf_before())
                                     } else {
                                         self.pos_in_block
                                     };
@@ -761,7 +763,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
                         if !self.finished {
                             self.dna_range.end = self.global_pos().saturating_sub(
                                 if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
-                                    self.crlf_len
+                                    self.crlf_before()
                                 } else {
                                     0
                                 },

@@ -122,6 +122,15 @@ macro_rules! shared_block_helpers {
         }
 
         #[inline(always)]
+        fn current_byte(&self) -> u8 {
+            if self.pos_in_block < self.block.len {
+                self.lexer.input.current_block()[self.pos_in_block & 63]
+            } else {
+                0
+            }
+        }
+
+        #[inline(always)]
         fn increment_pos(&mut self) {
             if self.pos_in_block + 1 < self.block.len {
                 self.pos_in_block += 1;

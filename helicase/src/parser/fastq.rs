@@ -193,8 +193,31 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
 impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
     shared_block_helpers!();
 
+    // Skips blank lines before a record, which must then start with `@`.
+    // Other invalid record starts are not checked.
+    #[cold]
+    #[inline(never)]
+    fn skip_blank_lines(&mut self) -> Option<Option<Result<Event>>> {
+        loop {
+            match self.current_byte() {
+                b'@' => return None,
+                b'\n' => self.consume_newline(),
+                b'\r' => self.increment_pos(),
+                byte => {
+                    self.finished = true;
+                    return Some(Some(Err(Error::invalid_record_start("'@'", byte))));
+                }
+            }
+            if self.finished {
+                return Some(self.return_error_or_none());
+            }
+        }
+    }
+
+    // Going back to the header ends the iteration on the next call.
     #[cold]
     fn truncated_or_error(&mut self) -> Option<Result<Event>> {
+        self.line_count = 0;
         let error = self.pending_error.take();
         Some(Err(error.map_or_else(Error::truncated_record, Error::from)))
     }
@@ -264,8 +287,11 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
     fn next_indexed(&mut self) -> Option<Result<Event>> {
         let (data, offset) = (self.lexer.input.buffer(), self.lexer.input.buffer_offset());
         let [header_end, seq_end, plus_end, qual_end] = self.line_index.peek::<4>(data, offset)?;
-        // The block parser jumps over quality lines using the sequence length.
-        if qual_end - plus_end != seq_end - header_end {
+        // The block parser jumps over quality lines using the sequence length,
+        // and skips blank lines.
+        if qual_end - plus_end != seq_end - header_end
+            || header_end - self.line_index.next_start <= self.crlf_len
+        {
             return None;
         }
         let start = self.line_index.next_start;
@@ -313,6 +339,13 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
         loop {
             if !flag_is_set(CONFIG, RETURN_DNA_CHUNK) || self.line_count == 0 {
                 // HEADER
+                // A line feed at the record start, after the `\r` with CRLF, is a blank line.
+                if !self.finished
+                    && (self.block.newline >> self.pos_in_block) >> self.crlf_len & 1 != 0
+                    && let Some(event) = self.skip_blank_lines()
+                {
+                    return event;
+                }
                 self.increment_pos();
                 if self.finished {
                     return self.return_error_or_none();
@@ -370,7 +403,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
                     if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
                         let skip_start = self.global_pos();
                         let first_byte = if flag_is_set(CONFIG, REJECT_NON_ACTG) {
-                            self.lexer.input.current_block()[self.pos_in_block & 63]
+                            self.current_byte()
                         } else {
                             0
                         };
@@ -396,6 +429,10 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
                         }
                         if at_newline {
                             self.dna_range.end = self.global_pos().saturating_sub(self.crlf_len);
+                            // Without any ACTG run, the start is still in the previous record.
+                            if self.dna_range.start < self.seq_start {
+                                self.dna_range.start = self.dna_range.end;
+                            }
                             self.make_room_record_end();
                             self.consume_newline();
                             break 'seq_line;
@@ -547,14 +584,18 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
                 self.pos_in_block = 0;
             }
             self.pos_in_block = self.block.newline.trailing_zeros() as usize;
-            if flag_is_set(CONFIG, COMPUTE_QUALITY) {
+            // Without a final line feed, the quality line ends with the input.
+            let crlf_len = if qual_hit_eof {
                 self.pos_in_block = self.pos_in_block.min(self.block.len);
-                self.quality_range.end = self.global_pos().saturating_sub(self.crlf_len);
+                0
+            } else {
+                self.crlf_len
+            };
+            if flag_is_set(CONFIG, COMPUTE_QUALITY) {
+                self.quality_range.end = self.global_pos().saturating_sub(crlf_len);
             }
-            if qual_hit_eof
-                && self.global_pos().saturating_sub(self.crlf_len) < qual_start + seq_len
-            {
-                return Some(Err(Error::truncated_record()));
+            if qual_hit_eof && self.global_pos() < qual_start + seq_len {
+                return self.truncated_or_error();
             }
             self.make_room_record_end();
             self.make_room_quality_end();

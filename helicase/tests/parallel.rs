@@ -538,3 +538,33 @@ fn test_parallel_records_fewer_than_threads() {
         let _ = std::fs::remove_file(test_file);
     }
 }
+
+#[test]
+fn test_find_record_start() {
+    use helicase::parallel::find_record_start;
+    use helicase::parser::Format;
+
+    let fastq: [&[u8]; 3] = [
+        b"@read1\nACGTACGT\n+\n@@@@++++\n",
+        b"@read2\nTTTTAAAA\n+\n+@+@+@+@\n",
+        b"@read3\nCCCCCCCC\n+\n@@@@@@@@\n",
+    ];
+    let fasta: [&[u8]; 3] = [b">a\nACGT\nAC\n", b">b\nTT\n", b">c\nGGGG\n"];
+    for (records, format) in [(fastq, Format::Fastq), (fasta, Format::Fasta)] {
+        let data = records.concat();
+        let starts: Vec<usize> = records
+            .iter()
+            .scan(0, |end, rec| {
+                *end += rec.len();
+                Some(*end - rec.len())
+            })
+            .collect();
+        for pos in 1..data.len() {
+            let expected = starts.iter().copied().find(|&s| s >= pos);
+            let found = find_record_start(&data[pos - 1..], format);
+            assert_eq!(found.map(|i| pos - 1 + i), expected, "{format:?} at {pos}");
+        }
+    }
+    assert_eq!(find_record_start(b"", Format::Fasta), None);
+    assert_eq!(find_record_start(b"\n", Format::Fasta), None);
+}

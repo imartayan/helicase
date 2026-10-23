@@ -1,6 +1,6 @@
 //! Parallel decompression of independent compressed frames (BGZF blocks, zstd frames).
 
-use super::{find_record_start, run_chunks};
+use super::{align_to_record, run_chunks};
 use crate::config::*;
 use crate::input::*;
 use crate::parser::*;
@@ -213,7 +213,7 @@ fn find_record_start_in_frames<D: FrameDecoder>(
                 .decode(frame.bytes(compressed), frame.uncomp_len, &mut data)
                 .is_ok()
             {
-                let cand = find_record_start(&data, 1, format);
+                let cand = align_to_record(&data, 1, format);
                 if cand < data.len() {
                     return (frame_idx, cand);
                 }

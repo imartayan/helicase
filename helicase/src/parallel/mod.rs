@@ -77,7 +77,7 @@ fn is_valid_record_start(data: &[u8], cand: usize, format: Format) -> bool {
 }
 
 /// Finds the exact byte index of the first record starting at or after `approx_pos`.
-fn find_record_start(data: &[u8], approx_pos: usize, format: Format) -> usize {
+fn align_to_record(data: &[u8], approx_pos: usize, format: Format) -> usize {
     if approx_pos == 0 || approx_pos >= data.len() {
         return approx_pos.min(data.len());
     }
@@ -93,6 +93,13 @@ fn find_record_start(data: &[u8], approx_pos: usize, format: Format) -> usize {
         pos = cand;
     }
     data.len()
+}
+
+/// Returns the offset of the first record start in `data` (right after a newline), or `None`.
+/// To search from `pos`, pass `data` starting at `pos - 1`.
+pub fn find_record_start(data: &[u8], format: Format) -> Option<usize> {
+    let start = align_to_record(data, 1, format);
+    (start < data.len()).then_some(start)
 }
 
 /// Processes `num_chunks` chunks across `threads` with work stealing, and reduces the results.
@@ -189,7 +196,7 @@ where
         num_chunks,
         threads,
         (0, data.len()),
-        |i| find_record_start(data, i * chunk_len, format),
+        |i| align_to_record(data, i * chunk_len, format),
         |start, end| process(FastxParser::from_slice(&data[start..end])?),
         reduce,
     )
@@ -219,7 +226,7 @@ fn probe_file_record_start(
         } else {
             1
         };
-        let cand = find_record_start(&buf[..to_read], approx_in_slice, format);
+        let cand = align_to_record(&buf[..to_read], approx_in_slice, format);
         if cand < to_read {
             return Ok(probe_pos + cand as u64);
         }

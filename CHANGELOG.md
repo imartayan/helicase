@@ -3,6 +3,8 @@
 <!-- next-header -->
 ## [Unreleased]
 
+## 1.0.0
+
 On file inputs, the single-threaded parser is now 1.1-4× faster than needletail, while the new multi-threaded parser is 3-6× faster than paraseq using 4 threads.
 
 Breaking change: parsers now yield `Result<Event, parser::Error>` (instead of `Event`), enabling standard `?` error propagation.

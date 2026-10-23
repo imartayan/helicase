@@ -3,6 +3,8 @@
 <!-- next-header -->
 ## [Unreleased]
 
+- Add support for `no_std`
+- Add support for simd128 (WASM)
 - Show feature requirements on gated items in the documentation
 
 ## 1.0.0

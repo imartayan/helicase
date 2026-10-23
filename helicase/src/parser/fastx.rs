@@ -163,6 +163,9 @@ impl<'a, const CONFIG: Config> HelicaseParser for FastxParser<'a, CONFIG> {
         self.0.get_mask_n_owned()
     }
 
+    /// Get the length of the current DNA buffer.
+    ///
+    /// Equals the total length so far in case `MERGE_RECORDS` is set.
     #[inline(always)]
     fn get_dna_len(&self) -> usize {
         const DNA: Config =

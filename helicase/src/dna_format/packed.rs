@@ -17,7 +17,10 @@ const MARGIN: usize = if cfg!(feature = "packed-seq") {
 
 #[derive(Default)]
 pub struct PackedDNA {
+    /// The main storage.
+    /// Never shrinks.
     bits: Vec<u8>,
+    /// Trailing characters that have not yet been written to `bits`.
     cur: T,
     num_bits: usize,
     init_bytes: usize,
@@ -232,6 +235,9 @@ impl PackedDNA {
         }
     }
 
+    /// The slice of characters, and separately the incomplete last word.
+    ///
+    /// Use in combination with `.len()`.
     #[inline(always)]
     pub fn bits(&self) -> (&[T], T) {
         let (prefix, words, _) = unsafe { self.bits.align_to::<T>() };
@@ -258,7 +264,9 @@ impl PackedDNA {
         LUT[self.get(i) as usize]
     }
 
-    /// Required before [`as_packed_seq`](Self::as_packed_seq), parsers call it after each event.
+    /// Write `cur` to the end of `bits`, and add padding bytes for `packed-seq` if the feature is enabled.
+    ///
+    /// Required before [`as_packed_seq`](Self::as_packed_seq). Parsers call it after each event.
     #[cfg(feature = "packed-seq")]
     #[inline(always)]
     pub fn pad(&mut self) {
@@ -289,17 +297,14 @@ impl PackedDNA {
         }
         let len = self.bits.len();
         let padded_len = len + MARGIN * WORD_BYTES;
-        assert!(
+        debug_assert!(
             self.init_bytes >= padded_len,
             "PackedDNA::pad must be called first"
         );
         // Safety: `init_bytes` is reset on reallocation, so these bytes are initialized.
         let padded = unsafe { core::slice::from_raw_parts(self.bits.as_ptr(), padded_len) };
         let stored_cur = T::from_ne_bytes(padded[len..len + WORD_BYTES].try_into().unwrap());
-        assert!(
-            stored_cur == self.cur,
-            "PackedDNA::pad must be called first"
-        );
+        debug_assert_eq!(stored_cur, self.cur, "PackedDNA::pad must be called first");
         padded
     }
 

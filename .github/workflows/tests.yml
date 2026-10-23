@@ -19,7 +19,7 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Setup Rust (stable)
         uses: dtolnay/rust-toolchain@stable
       - name: Get CPU identifier

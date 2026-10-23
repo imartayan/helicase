@@ -62,6 +62,15 @@ pub struct FastqParser<'a, const CONFIG: Config, I: InputData<'a>> {
 }
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
+    // Copy the string instead of slicing the input when chunks or records are merged.
+    const MERGE_DNA_STRING: bool = flag_is_set(CONFIG, COMPUTE_DNA_STRING)
+        && (flag_is_set(CONFIG, SPLIT_NON_ACTG) && flag_is_set(CONFIG, MERGE_DNA_CHUNKS)
+            || flag_is_set(CONFIG, MERGE_RECORDS));
+
+    const INDEXED: bool = flag_is_set(CONFIG, RETURN_RECORD)
+        && flag_is_not_set(CONFIG, RETURN_DNA_CHUNK | MERGE_RECORDS)
+        && (flag_is_not_set(CONFIG, SPLIT_NON_ACTG) || flag_is_set(CONFIG, REJECT_NON_ACTG));
+
     fn from_lexer(mut lexer: Lexer<'a, CONFIG, I>) -> Self {
         let first_block = lexer.next_block::<SCAN_MODE_DNA>().transpose();
         let finished = !matches!(first_block, Ok(Some(_)));
@@ -153,7 +162,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
         if flag_is_not_set(CONFIG, COMPUTE_DNA_STRING) {
             panic!("Parser config error: dna_string is not enabled")
         }
-        if flag_is_set(CONFIG, SPLIT_NON_ACTG) && flag_is_set(CONFIG, MERGE_DNA_CHUNKS) {
+        if Self::MERGE_DNA_STRING {
             &self.cur_dna_string
         } else {
             self.lexer.input.slice(self.dna_range.clone())
@@ -165,7 +174,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
         if flag_is_not_set(CONFIG, COMPUTE_DNA_STRING) {
             panic!("Parser config error: dna_string is not enabled")
         }
-        if flag_is_set(CONFIG, SPLIT_NON_ACTG) && flag_is_set(CONFIG, MERGE_DNA_CHUNKS) {
+        if Self::MERGE_DNA_STRING {
             let capacity = self.cur_dna_string.capacity();
             replace(&mut self.cur_dna_string, Vec::with_capacity(capacity))
         } else {
@@ -178,7 +187,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastqParser<
         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
             self.dna_len
         } else if flag_is_set(CONFIG, COMPUTE_DNA_STRING) {
-            if flag_is_set(CONFIG, SPLIT_NON_ACTG) && flag_is_set(CONFIG, MERGE_DNA_CHUNKS) {
+            if Self::MERGE_DNA_STRING {
                 self.cur_dna_string.len()
             } else {
                 self.dna_range.len()
@@ -282,10 +291,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
 }
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
-    const INDEXED: bool = flag_is_set(CONFIG, RETURN_RECORD)
-        && flag_is_not_set(CONFIG, RETURN_DNA_CHUNK | MERGE_RECORDS)
-        && (flag_is_not_set(CONFIG, SPLIT_NON_ACTG) || flag_is_set(CONFIG, REJECT_NON_ACTG));
-
     // Parses a record from 4 indexed line feeds, without touching the block state.
     // Anything unusual (long or malformed record, end of input) goes back to `next_event`.
     #[inline(always)]
@@ -452,9 +457,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
                         self.clear_chunk();
                     }
                     self.dna_range.start = self.global_pos();
-                    let merge_chunks = flag_is_set(CONFIG, COMPUTE_DNA_STRING)
-                        && flag_is_set(CONFIG, SPLIT_NON_ACTG)
-                        && flag_is_set(CONFIG, MERGE_DNA_CHUNKS);
                     if position != 0 {
                         let first_pos = self.pos_in_block;
                         self.pos_in_block = position.trailing_zeros() as usize;
@@ -480,7 +482,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
                             self.append_dna_block();
                             dna_blocks += 1;
 
-                            if dna_blocks == 16 && !merge_chunks {
+                            if dna_blocks == 16 && !Self::MERGE_DNA_STRING {
                                 let anchor = self.anchor();
                                 self.lexer.skip_long_dna(
                                     &mut self.bitpackers,
@@ -518,7 +520,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
                             0
                         },
                     );
-                    if merge_chunks {
+                    if Self::MERGE_DNA_STRING {
                         let dna_chunk = self.lexer.input.slice(self.dna_range.clone());
                         self.cur_dna_string.extend_from_slice(dna_chunk);
                     }

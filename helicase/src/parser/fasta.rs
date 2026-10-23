@@ -81,6 +81,15 @@ pub struct FastaParser<'a, const CONFIG: Config, I: InputData<'a>> {
 }
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
+    // Copy the string instead of slicing the input when chunks or records are merged.
+    const MERGE_DNA_STRING: bool = flag_is_set(CONFIG, COMPUTE_DNA_STRING)
+        && (flag_is_set(CONFIG, SPLIT_NON_ACTG) && flag_is_set(CONFIG, MERGE_DNA_CHUNKS)
+            || flag_is_set(CONFIG, MERGE_RECORDS));
+
+    const INDEXED: bool = flag_is_set(CONFIG, RETURN_RECORD)
+        && flag_is_not_set(CONFIG, RETURN_DNA_CHUNK | MERGE_RECORDS)
+        && (flag_is_not_set(CONFIG, SPLIT_NON_ACTG) || flag_is_set(CONFIG, REJECT_NON_ACTG));
+
     fn from_lexer(mut lexer: Lexer<'a, CONFIG, I>) -> Self {
         let first_block = lexer.next_block::<SCAN_MODE_DNA>().transpose();
         let finished = !matches!(first_block, Ok(Some(_)));
@@ -166,8 +175,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastaParser<
         if flag_is_not_set(CONFIG, COMPUTE_DNA_STRING) {
             panic!("Parser config error: dna_string is not enabled")
         }
-        let zero_copy = self.contiguous_dna
-            && !(flag_is_set(CONFIG, SPLIT_NON_ACTG) && flag_is_set(CONFIG, MERGE_DNA_CHUNKS));
+        let zero_copy = self.contiguous_dna && !Self::MERGE_DNA_STRING;
         if zero_copy {
             self.lexer.input.slice(self.dna_range.clone())
         } else {
@@ -180,8 +188,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastaParser<
         if flag_is_not_set(CONFIG, COMPUTE_DNA_STRING) {
             panic!("Parser config error: dna_string is not enabled")
         }
-        let zero_copy = self.contiguous_dna
-            && !(flag_is_set(CONFIG, SPLIT_NON_ACTG) && flag_is_set(CONFIG, MERGE_DNA_CHUNKS));
+        let zero_copy = self.contiguous_dna && !Self::MERGE_DNA_STRING;
         if zero_copy {
             self.lexer.input.slice(self.dna_range.clone()).to_vec()
         } else {
@@ -199,9 +206,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastaParser<
         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
             self.dna_len
         } else if flag_is_set(CONFIG, COMPUTE_DNA_STRING) {
-            if self.contiguous_dna
-                && !(flag_is_set(CONFIG, SPLIT_NON_ACTG) && flag_is_set(CONFIG, MERGE_DNA_CHUNKS))
-            {
+            if self.contiguous_dna && !Self::MERGE_DNA_STRING {
                 self.dna_range.len()
             } else {
                 self.cur_dna_string.len()
@@ -595,10 +600,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
 }
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
-    const INDEXED: bool = flag_is_set(CONFIG, RETURN_RECORD)
-        && flag_is_not_set(CONFIG, RETURN_DNA_CHUNK | MERGE_RECORDS)
-        && (flag_is_not_set(CONFIG, SPLIT_NON_ACTG) || flag_is_set(CONFIG, REJECT_NON_ACTG));
-
     // Parses an unwrapped record from 2 indexed line feeds, without touching the block state.
     // Blank lines, wrapped sequences and the end of input go back to `next_event`.
     #[inline(always)]
@@ -686,14 +687,10 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
                         continue 'parser_loop;
                     }
 
-                    let merge_chunks = flag_is_set(CONFIG, COMPUTE_DNA_STRING)
-                        && flag_is_set(CONFIG, SPLIT_NON_ACTG)
-                        && flag_is_set(CONFIG, MERGE_DNA_CHUNKS);
-
                     'dna_line: loop {
                         let line_start = self.global_pos();
                         let copy_str = flag_is_set(CONFIG, COMPUTE_DNA_STRING)
-                            && (!self.contiguous_dna || merge_chunks);
+                            && (!self.contiguous_dna || Self::MERGE_DNA_STRING);
                         let mask = !0 << self.pos_in_block;
                         let mut position = !self.block.is_dna & mask;
                         if position != 0 {
@@ -725,7 +722,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
                                 self.append_dna_block();
                                 dna_blocks += 1;
 
-                                if dna_blocks == 16 && !merge_chunks {
+                                if dna_blocks == 16 && !Self::MERGE_DNA_STRING {
                                     let anchor = self.anchor(line_start);
                                     self.lexer.skip_long_dna(
                                         &mut self.bitpackers,
@@ -841,7 +838,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
                                 | COMPUTE_DNA_LEN,
                         ) && (self.contiguous_dna
                             || self.retry_stride_after_non_actg)
-                            && !merge_chunks;
+                            && !Self::MERGE_DNA_STRING;
 
                         if should_stride {
                             if self.contiguous_dna && flag_is_set(CONFIG, COMPUTE_DNA_STRING) {

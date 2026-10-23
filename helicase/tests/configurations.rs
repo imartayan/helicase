@@ -483,6 +483,34 @@ fn test_config_dna_len_merge_records() {
 }
 
 #[test]
+fn test_config_merge_records_keep_non_actg() {
+    use helicase::config::advanced::*;
+    const CFG: Config = ParserOptions::default()
+        .dna_string()
+        .and_dna_packed()
+        .and_dna_columnar()
+        .keep_non_actg()
+        .compute_dna_len()
+        .config()
+        | MERGE_RECORDS;
+    check_merge_records::<CFG>();
+}
+
+#[test]
+fn test_config_merge_records_skip_non_actg() {
+    use helicase::config::advanced::*;
+    const CFG: Config = ParserOptions::default()
+        .dna_string()
+        .and_dna_packed()
+        .and_dna_columnar()
+        .skip_non_actg()
+        .compute_dna_len()
+        .config()
+        | MERGE_RECORDS;
+    check_merge_records::<CFG>();
+}
+
+#[test]
 fn test_config_ignore_headers() {
     let bytes = FastxGen::illumina(20).with_seed(101).generate_bytes();
     const CFG: Config = ParserOptions::default()
@@ -584,5 +612,48 @@ fn test_config_packed_seq_trait_integration() {
 
         let seq_vec = parser.get_packed_seq_vec();
         assert_eq!(seq_vec.len(), 150);
+    }
+}
+
+// Checks that each record is appended to the buffers of the previous ones.
+fn check_merge_records<const CFG: Config>() {
+    // Varied lengths so that records end in the middle of packed words
+    let inputs = [
+        FastxGen::fasta(20, 250).with_std_dev(0.5),
+        FastxGen::wrapped_fasta(10, 3000, 60).with_std_dev(0.5),
+        FastxGen::fastq(20, 150).with_std_dev(0.5),
+        FastxGen::fastq(5, 5000).with_std_dev(0.5),
+    ];
+    for (k, generator) in inputs.into_iter().enumerate() {
+        let generator = generator.with_seed(77 + k as u64);
+        let bytes = generator.generate_bytes();
+        let seqs: Vec<Vec<u8>> = generator.records().map(|r| r.seq).collect();
+
+        let slice_parser = FastxParser::<CFG>::from_slice(&bytes).unwrap();
+        let reader_parser = FastxParser::<CFG>::from_reader(std::io::Cursor::new(bytes.clone()));
+        for mut parser in [slice_parser, reader_parser.unwrap()] {
+            let mut expected = Vec::new();
+            let mut num_records = 0;
+            while let Some(event) = parser.next() {
+                event.unwrap();
+                expected.extend_from_slice(&seqs[num_records]);
+                num_records += 1;
+                let expected_str = std::str::from_utf8(&expected).unwrap();
+
+                assert_eq!(parser.get_dna_string(), expected, "input {k}");
+                assert_eq!(parser.get_dna_len(), expected.len(), "input {k}");
+                assert_eq!(parser.get_dna_packed().to_string(), expected_str);
+                assert_eq!(parser.get_dna_columnar().to_string(), expected_str);
+                #[cfg(feature = "packed-seq")]
+                {
+                    use packed_seq::Seq;
+                    let packed_seq = parser.get_packed_seq();
+                    let packed = parser.get_dna_packed();
+                    assert_eq!(packed_seq.len(), expected.len(), "input {k}");
+                    assert!((0..packed_seq.len()).all(|i| packed_seq.get(i) == packed.get(i)));
+                }
+            }
+            assert_eq!(num_records, seqs.len(), "input {k}");
+        }
     }
 }

@@ -452,7 +452,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
                     let mask = !0 << self.pos_in_block;
                     let mut position = !self.block.is_dna & mask;
                     if flag_is_set(CONFIG, SPLIT_NON_ACTG)
-                        && flag_is_not_set(CONFIG, MERGE_DNA_CHUNKS)
+                        && flag_is_not_set(CONFIG, MERGE_DNA_CHUNKS | MERGE_RECORDS)
                     {
                         self.clear_chunk();
                     }

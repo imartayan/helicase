@@ -1,3 +1,5 @@
+#![cfg(feature = "std")]
+
 use helicase::config::*;
 use helicase::dna_format::{ColumnarDNA, PackedDNA};
 use helicase::input::*;

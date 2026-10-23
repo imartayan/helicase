@@ -1,3 +1,5 @@
+#![cfg(feature = "std")]
+
 use fastx_gen::{Corrupt, FastxGen};
 #[cfg(feature = "gz")]
 use flate2::Compression;

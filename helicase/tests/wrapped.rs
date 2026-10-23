@@ -1,5 +1,7 @@
 // Wrapped sequences go through the per-line stride path, unwrapped ones never do:
 // both must give the same records, and split chunks must match the non-ACTG runs.
+#![cfg(feature = "std")]
+
 use fastx_gen::{Alphabet, FastxGen};
 use helicase::config::advanced::*;
 use helicase::config::*;

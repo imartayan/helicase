@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::fmt::{self, Write};
 
 #[cfg(feature = "packed-seq")]

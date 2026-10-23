@@ -1,6 +1,8 @@
 // Random inputs, compared against Needletail when valid, and checked for panics and endless
 // iteration when corrupted. `HELICASE_RANDOM_CASES` sets the number of cases (default 1000),
 // `HELICASE_RANDOM_SEED` offsets them for long runs, see `NOTES/RANDOM_TESTING.md`.
+#![cfg(feature = "std")]
+
 use helicase::config::*;
 use helicase::input::*;
 use helicase::parser::{Error, ErrorKind, Event};

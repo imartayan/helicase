@@ -14,6 +14,7 @@ pub(crate) mod needletail_helpers;
 mod paraseq_traits;
 mod traits;
 
+use alloc::vec::Vec;
 use core::ops::Range;
 
 pub(crate) use bitpack::*;

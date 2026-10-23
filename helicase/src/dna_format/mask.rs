@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 type T = u64;
 const BITS_PER_BP: usize = 1;
 const BITS_PER_BLOCK: usize = T::BITS as usize;

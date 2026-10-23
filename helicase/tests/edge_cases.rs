@@ -1,4 +1,6 @@
 // Regressions found by `tests/random_inputs.rs`.
+#![cfg(feature = "std")]
+
 use helicase::config::*;
 use helicase::input::*;
 use helicase::parser::{Error, Event};

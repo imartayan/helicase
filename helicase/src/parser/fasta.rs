@@ -5,7 +5,6 @@ use crate::input::*;
 use crate::lexer::*;
 use core::mem::replace;
 use core::ops::Range;
-use std::io;
 
 const PACKS_DNA: Config = COMPUTE_DNA_PACKED
     | COMPUTE_DNA_COLUMNAR
@@ -70,7 +69,7 @@ pub struct FastaParser<'a, const CONFIG: Config, I: InputData<'a>> {
     cur_dna_string: Vec<u8>,
     bitpackers: DnaBitpackers,
     dna_len: usize,
-    pending_error: Option<io::Error>,
+    pending_error: Option<Error>,
     crlf_len: usize,
     crlf_detected: bool,
     line_index: LineIndex,

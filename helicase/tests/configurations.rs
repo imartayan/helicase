@@ -1,3 +1,5 @@
+#![cfg(feature = "std")]
+
 use fastx_gen::{Alphabet, FastxGen};
 use helicase::config::*;
 use helicase::input::*;

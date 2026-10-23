@@ -5,7 +5,6 @@ use crate::input::*;
 use crate::parser::{DnaBitpackers, Result};
 use crate::simd::extract_bitmask;
 use core::marker::PhantomData;
-use std::io;
 
 /// Context-aware scanning modes for 64-byte SIMD kernels.
 ///
@@ -158,7 +157,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> Lexer<'a, CONFIG, I> {
     }
 
     #[inline(always)]
-    pub(crate) fn next_block<const MODE: u8>(&mut self) -> Option<io::Result<Chunk>> {
+    pub(crate) fn next_block<const MODE: u8>(&mut self) -> Option<Result<Chunk>> {
         self.input.next().map(|res| {
             res.map(|chunk| {
                 Chunk::from_mask::<CONFIG>(chunk.len(), extract_bitmask::<CONFIG, MODE>(chunk))

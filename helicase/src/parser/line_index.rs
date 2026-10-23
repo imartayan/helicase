@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::lexer::SCAN_MODE_HEADER;
 use crate::simd::extract_bitmask;
+use alloc::vec::Vec;
 
 // Short records are parsed from an index of line feeds instead of the block state machine,
 // once enough consecutive records are shorter than `MAX_RECORD_LEN`. Positions are global,
@@ -17,7 +18,7 @@ thread_local! {
     static DISABLED: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 fn without_index<T>(f: impl FnOnce() -> T) -> T {
     DISABLED.set(true);
     let res = f();
@@ -163,5 +164,5 @@ const fn push_line_feeds(
     len
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests;

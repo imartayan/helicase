@@ -5,7 +5,6 @@ use crate::input::*;
 use crate::lexer::*;
 use core::mem::replace;
 use core::ops::Range;
-use std::io;
 
 /// A parser for the [FASTQ format](https://en.wikipedia.org/wiki/FASTQ_format).
 /// Configured via [`ParserOptions`].
@@ -50,7 +49,7 @@ pub struct FastqParser<'a, const CONFIG: Config, I: InputData<'a>> {
     cur_dna_string: Vec<u8>,
     bitpackers: DnaBitpackers,
     dna_len: usize,
-    pending_error: Option<io::Error>,
+    pending_error: Option<Error>,
     crlf_len: usize,
     crlf_detected: bool,
     seq_start: usize,
@@ -233,7 +232,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
     fn truncated_or_error(&mut self) -> Option<Result<Event>> {
         self.line_count = 0;
         let error = self.pending_error.take();
-        Some(Err(error.map_or_else(Error::truncated_record, Error::from)))
+        Some(Err(error.unwrap_or_else(Error::truncated_record)))
     }
 
     #[inline(always)]

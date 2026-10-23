@@ -94,7 +94,7 @@ macro_rules! shared_block_helpers {
     () => {
         #[inline(always)]
         fn return_error_or_none(&mut self) -> Option<Result<Event>> {
-            self.pending_error.take().map(Error::from).map(Err)
+            self.pending_error.take().map(Err)
         }
 
         #[inline(always)]

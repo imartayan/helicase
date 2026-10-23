@@ -2,6 +2,7 @@ use super::*;
 use crate::config::{advanced::*, *};
 use crate::dna_format::*;
 use crate::input::*;
+use alloc::boxed::Box;
 
 /// A wrapper for [`FastaParser`] / [`FastqParser`] detecting the format at runtime.
 /// Configured via [`ParserOptions`].

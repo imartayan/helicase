@@ -32,6 +32,7 @@ pub enum ErrorKind {
     Decompression(String),
 
     /// An underlying I/O error occurred while reading from a file or stream.
+    #[cfg(feature = "std")]
     Io(std::io::Error),
 
     /// Generic or custom error message.
@@ -107,6 +108,7 @@ impl fmt::Display for ErrorKind {
                 *byte as char
             ),
             Self::Decompression(msg) => write!(f, "decompression error: {msg}"),
+            #[cfg(feature = "std")]
             Self::Io(err) => write!(f, "I/O error: {err}"),
             Self::Custom(msg) => write!(f, "{msg}"),
         }
@@ -120,15 +122,17 @@ impl fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for Error {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match &*self.repr {
+            #[cfg(feature = "std")]
             ErrorKind::Io(err) => Some(err),
             _ => None,
         }
     }
 }
 
+#[cfg(feature = "std")]
 impl From<std::io::Error> for Error {
     #[cold]
     fn from(err: std::io::Error) -> Self {
@@ -146,6 +150,7 @@ impl From<std::io::Error> for Error {
     }
 }
 
+#[cfg(feature = "std")]
 impl From<Error> for std::io::Error {
     #[cold]
     fn from(err: Error) -> Self {

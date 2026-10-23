@@ -17,9 +17,9 @@ autobenches = false
 bench = false
 
 [dependencies]
-deko = { version = "0.6", default-features = false }
-memchr = "2.8"
-memmap2 = "0.9"
+deko = { version = "0.6", default-features = false, optional = true }
+memchr = { version = "2.8", default-features = false }
+memmap2 = { version = "0.9", optional = true }
 packed-seq = { version = "5.0", default-features = false, optional = true }
 paraseq = { version = "0.6", default-features = false, optional = true }
 sirocco = { version = "0.2", optional = true }
@@ -33,17 +33,35 @@ zstd = "0.14"
 
 [features]
 default = ["std", "gz", "zstd"]
-std = []
-bz2 = ["deko/bzip2"]
-gz = ["sirocco"]
-xz = ["deko/xz"]
-zstd = ["deko/zstd", "dep:zstd"]
+std = ["dep:deko", "dep:memmap2", "memchr/std"]
+bz2 = ["std", "deko/bzip2"]
+gz = ["std", "sirocco"]
+xz = ["std", "deko/xz"]
+zstd = ["std", "deko/zstd", "dep:zstd"]
 no-pdep = []
-needletail = []
+needletail = ["std"]
+packed-seq = ["std", "dep:packed-seq"]
+paraseq = ["std", "dep:paraseq"]
 
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+
+[[example]]
+name = "fq_to_fa"
+required-features = ["std"]
+
+[[example]]
+name = "histogram"
+required-features = ["std"]
+
+[[example]]
+name = "minimal"
+required-features = ["std"]
+
+[[example]]
+name = "parallel_len"
+required-features = ["std"]
 
 [[example]]
 name = "packed"

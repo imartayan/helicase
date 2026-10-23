@@ -277,20 +277,20 @@
 //! See the [migration guide](https://github.com/imartayan/helicase/blob/main/MIGRATION.md) for details.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(not(any(feature = "std", test)), no_std)]
 
 extern crate alloc;
-
-#[cfg(not(feature = "std"))]
-compile_error!("the `std` feature is required for now, `no_std` support is planned");
 
 pub mod config;
 pub mod dna_format;
 pub mod input;
 pub(crate) mod lexer;
+#[cfg(feature = "std")]
 pub mod parallel;
 pub mod parser;
 
 pub use config::{Config, ParserOptions};
+#[cfg(feature = "std")]
 pub use parallel::ParallelFastxParser;
 pub use parser::{FastxParser, HelicaseParser};
 

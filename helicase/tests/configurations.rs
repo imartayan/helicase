@@ -594,6 +594,94 @@ fn test_config_split_non_actg_return_both_chunk_and_record() {
     assert_eq!(record_count, 1);
 }
 
+#[test]
+fn test_config_swap_buffers() {
+    use helicase::dna_format::{BitMask, ColumnarDNA, PackedDNA};
+
+    let bytes = FastxGen::fasta(20, 300)
+        .with_std_dev(0.5)
+        .with_alphabet(Alphabet::DnaIupac)
+        .with_seed(31)
+        .generate_bytes();
+    const CFG: Config = ParserOptions::default()
+        .dna_string()
+        .and_dna_packed()
+        .and_dna_columnar()
+        .keep_non_actg()
+        .compute_mask_non_actg()
+        .with_flag(advanced::COMPUTE_MASK_N)
+        .config();
+
+    let mask_bits = |m: &BitMask| (0..m.len()).map(|i| m.get(i)).collect::<Vec<_>>();
+    let mut packed = PackedDNA::new();
+    let mut columnar = ColumnarDNA::new();
+    let mut mask_non_actg = BitMask::new();
+    let mut mask_n = BitMask::new();
+    let mut parser = FastxParser::<CFG>::from_slice(&bytes).unwrap();
+    while let Some(event) = parser.next() {
+        event.unwrap();
+        let expected_packed = parser.get_dna_packed().to_string();
+        let expected_columnar = parser.get_dna_columnar().to_string();
+        let expected_non_actg = mask_bits(parser.get_mask_non_actg());
+        let expected_n = mask_bits(parser.get_mask_n());
+        let previous_packed = packed.to_string();
+
+        parser.swap_dna_packed(&mut packed);
+        parser.swap_dna_columnar(&mut columnar);
+        parser.swap_mask_non_actg(&mut mask_non_actg);
+        parser.swap_mask_n(&mut mask_n);
+        assert_eq!(packed.to_string(), expected_packed);
+        assert_eq!(columnar.to_string(), expected_columnar);
+        assert_eq!(mask_bits(&mask_non_actg), expected_non_actg);
+        assert_eq!(mask_bits(&mask_n), expected_n);
+        // The incoming buffer is not cleared
+        assert_eq!(parser.get_dna_packed().to_string(), previous_packed);
+        #[cfg(feature = "packed-seq")]
+        assert_eq!(
+            packed_seq::Seq::len(&parser.get_packed_seq()),
+            previous_packed.len()
+        );
+    }
+}
+
+#[cfg(feature = "packed-seq")]
+#[test]
+fn test_config_swap_packed_seq_vec_merge_records() {
+    use packed_seq::{PackedSeqVec, Seq, SeqVec};
+
+    const CFG: Config = ParserOptions::default()
+        .dna_packed()
+        .keep_non_actg()
+        .with_flag(advanced::MERGE_RECORDS)
+        .config();
+    let to_string = |s: &PackedSeqVec| {
+        let s = s.as_slice();
+        (0..s.len())
+            .map(|i| b"ACTG"[s.get(i) as usize] as char)
+            .collect::<String>()
+    };
+
+    // The parser appends to the buffers it is given
+    let prefix = "ACGTTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCAGGT";
+    let bytes = format!(">a\n{prefix}\n>b\nTTTACG\n>c\nGATTACA\n");
+    let mut parser = FastxParser::<CFG>::from_slice(bytes.as_bytes()).unwrap();
+    parser.next().unwrap().unwrap();
+    let mut seq = parser.get_packed_seq_vec();
+    assert_eq!(parser.get_packed_seq().len(), 0);
+    parser.next().unwrap().unwrap();
+    assert_eq!(parser.get_dna_packed().to_string(), "TTTACG");
+
+    parser.swap_packed_seq_vec(&mut seq);
+    assert_eq!(to_string(&seq), "TTTACG");
+    assert_eq!(parser.get_dna_packed().to_string(), prefix);
+    parser.next().unwrap().unwrap();
+    assert_eq!(
+        parser.get_dna_packed().to_string(),
+        format!("{prefix}GATTACA")
+    );
+    assert_eq!(parser.get_packed_seq_vec().len(), prefix.len() + 7);
+}
+
 #[cfg(feature = "packed-seq")]
 #[test]
 fn test_config_packed_seq_trait_integration() {

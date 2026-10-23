@@ -128,6 +128,12 @@ impl<'a, const CONFIG: Config> HelicaseParser for FastxParser<'a, CONFIG> {
     }
 
     #[inline(always)]
+    fn swap_dna_columnar(&mut self, other: &mut ColumnarDNA) {
+        require!(COMPUTE_DNA_COLUMNAR, "dna_columnar is not enabled");
+        self.0.swap_dna_columnar(other)
+    }
+
+    #[inline(always)]
     fn get_dna_packed(&self) -> &PackedDNA {
         require!(COMPUTE_DNA_PACKED, "dna_packed is not enabled");
         self.0.get_dna_packed()
@@ -137,6 +143,12 @@ impl<'a, const CONFIG: Config> HelicaseParser for FastxParser<'a, CONFIG> {
     fn get_dna_packed_owned(&mut self) -> PackedDNA {
         require!(COMPUTE_DNA_PACKED, "dna_packed is not enabled");
         self.0.get_dna_packed_owned()
+    }
+
+    #[inline(always)]
+    fn swap_dna_packed(&mut self, other: &mut PackedDNA) {
+        require!(COMPUTE_DNA_PACKED, "dna_packed is not enabled");
+        self.0.swap_dna_packed(other)
     }
 
     #[inline(always)]
@@ -152,6 +164,12 @@ impl<'a, const CONFIG: Config> HelicaseParser for FastxParser<'a, CONFIG> {
     }
 
     #[inline(always)]
+    fn swap_mask_non_actg(&mut self, other: &mut BitMask) {
+        require!(COMPUTE_MASK_NON_ACTG, "mask_non_actg is not enabled");
+        self.0.swap_mask_non_actg(other)
+    }
+
+    #[inline(always)]
     fn get_mask_n(&self) -> &BitMask {
         require!(COMPUTE_MASK_N, "mask_n is not enabled");
         self.0.get_mask_n()
@@ -161,6 +179,12 @@ impl<'a, const CONFIG: Config> HelicaseParser for FastxParser<'a, CONFIG> {
     fn get_mask_n_owned(&mut self) -> BitMask {
         require!(COMPUTE_MASK_N, "mask_n is not enabled");
         self.0.get_mask_n_owned()
+    }
+
+    #[inline(always)]
+    fn swap_mask_n(&mut self, other: &mut BitMask) {
+        require!(COMPUTE_MASK_N, "mask_n is not enabled");
+        self.0.swap_mask_n(other)
     }
 
     #[inline(always)]

@@ -25,11 +25,11 @@ macro_rules! shared_getters {
         }
 
         #[inline(always)]
-        fn get_dna_columnar_owned(&mut self) -> ColumnarDNA {
+        fn swap_dna_columnar(&mut self, other: &mut ColumnarDNA) {
             if flag_is_not_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
                 panic!("Parser config error: dna_columnar is not enabled")
             }
-            self.bitpackers.take_columnar()
+            core::mem::swap(&mut self.bitpackers.columnar, other);
         }
 
         #[inline(always)]
@@ -41,11 +41,12 @@ macro_rules! shared_getters {
         }
 
         #[inline(always)]
-        fn get_dna_packed_owned(&mut self) -> PackedDNA {
+        fn swap_dna_packed(&mut self, other: &mut PackedDNA) {
             if flag_is_not_set(CONFIG, COMPUTE_DNA_PACKED) {
                 panic!("Parser config error: dna_packed is not enabled")
             }
-            self.bitpackers.take_packed()
+            core::mem::swap(&mut self.bitpackers.packed, other);
+            self.bitpackers.pad::<CONFIG>();
         }
 
         #[inline(always)]
@@ -57,11 +58,11 @@ macro_rules! shared_getters {
         }
 
         #[inline(always)]
-        fn get_mask_non_actg_owned(&mut self) -> BitMask {
+        fn swap_mask_non_actg(&mut self, other: &mut BitMask) {
             if flag_is_not_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
                 panic!("Parser config error: mask_non_actg is not enabled")
             }
-            self.bitpackers.take_mask_non_actg()
+            core::mem::swap(&mut self.bitpackers.mask_non_actg, other);
         }
 
         #[inline(always)]
@@ -73,11 +74,11 @@ macro_rules! shared_getters {
         }
 
         #[inline(always)]
-        fn get_mask_n_owned(&mut self) -> BitMask {
+        fn swap_mask_n(&mut self, other: &mut BitMask) {
             if flag_is_not_set(CONFIG, COMPUTE_MASK_N) {
                 panic!("Parser config error: mask_n is not enabled")
             }
-            self.bitpackers.take_mask_n()
+            core::mem::swap(&mut self.bitpackers.mask_n, other);
         }
 
         #[cfg(feature = "paraseq")]

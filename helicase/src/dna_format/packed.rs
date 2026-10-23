@@ -1,7 +1,7 @@
 use core::fmt::{self, Write};
 
 #[cfg(feature = "packed-seq")]
-use packed_seq::{PackedSeq, PackedSeqVec};
+use packed_seq::{PackedSeq, PackedSeqVec, SeqVec};
 
 type T = u64;
 const BITS_PER_BP: usize = 2;
@@ -319,6 +319,24 @@ impl PackedDNA {
         // Safety: `pad` initialized `cur` and the padding, `from_raw_parts` then only truncates.
         unsafe { bits.set_len(padded_len) };
         PackedSeqVec::from_raw_parts(bits, len)
+    }
+
+    /// Reuses the buffer of a [`PackedSeqVec`], keeping its content.
+    #[cfg(feature = "packed-seq")]
+    pub fn from_packed_seq_vec(seq: PackedSeqVec) -> Self {
+        let len = seq.len();
+        let mut bits = seq.into_raw();
+        let full_bytes = len / BP_PER_BLOCK * WORD_BYTES;
+        let mut last = [0; WORD_BYTES];
+        last[..bits.len() - full_bytes].copy_from_slice(&bits[full_bytes..]);
+        bits.truncate(full_bytes);
+        let rem = 2 * len % BITS_PER_BLOCK;
+        Self {
+            init_bytes: bits.len(),
+            bits,
+            cur: T::from_ne_bytes(last) & ((1 << rem) - 1),
+            num_bits: 2 * len,
+        }
     }
 }
 

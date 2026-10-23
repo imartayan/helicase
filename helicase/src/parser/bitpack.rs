@@ -4,7 +4,6 @@ use crate::lexer::Chunk;
 #[cfg(target_feature = "neon")]
 use crate::simd::all_actg;
 use crate::simd::extract_dna_bitmask;
-use core::mem::replace;
 
 /// Unified container managing on-the-fly 2-bit bitpacking representations
 /// across FASTA and FASTQ parsers.
@@ -76,30 +75,6 @@ impl DnaBitpackers {
         if flag_is_set(CONFIG, COMPUTE_MASK_N) {
             self.mask_n.reserve(additional);
         }
-    }
-
-    #[inline(always)]
-    pub fn take_packed(&mut self) -> PackedDNA {
-        let capacity = self.packed.capacity();
-        replace(&mut self.packed, PackedDNA::with_capacity(capacity))
-    }
-
-    #[inline(always)]
-    pub fn take_columnar(&mut self) -> ColumnarDNA {
-        let capacity = self.columnar.capacity();
-        replace(&mut self.columnar, ColumnarDNA::with_capacity(capacity))
-    }
-
-    #[inline(always)]
-    pub fn take_mask_non_actg(&mut self) -> BitMask {
-        let capacity = self.mask_non_actg.capacity();
-        replace(&mut self.mask_non_actg, BitMask::with_capacity(capacity))
-    }
-
-    #[inline(always)]
-    pub fn take_mask_n(&mut self) -> BitMask {
-        let capacity = self.mask_n.capacity();
-        replace(&mut self.mask_n, BitMask::with_capacity(capacity))
     }
 
     #[inline(always)]

@@ -17,8 +17,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Setup Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust (nightly)
+        uses: dtolnay/rust-toolchain@nightly
       - name: Configure cache
         uses: Swatinem/rust-cache@v2
       - name: Setup pages
@@ -28,6 +28,8 @@ jobs:
         run: cargo clean --doc
       - name: Build docs
         run: cargo doc --lib --all-features --no-deps
+        env:
+          RUSTDOCFLAGS: --cfg docsrs
       - name: Add redirect
         run: echo '<meta http-equiv="refresh" content="0;url=https://docs.rs/helicase/latest/helicase/">' > target/doc/index.html
       - name: Remove lock file

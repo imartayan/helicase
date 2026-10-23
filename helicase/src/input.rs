@@ -23,6 +23,7 @@ const BUFFER_ROOM: usize = BUFFER_LEN / 2;
 
 /// Supported compression formats for FASTX files and streams.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum CompressionFormat {
     /// Standard single-member Gzip stream (.gz)
     Gzip,

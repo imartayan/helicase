@@ -17,6 +17,7 @@ repository = "https://github.com/imartayan/helicase"
 documentation = "https://docs.rs/helicase"
 readme = "../README.md"
 license = "MIT"
+rust-version = "1.89"
 autobenches = false
 
 [lib]
@@ -38,7 +39,8 @@ needletail = { version = "0.7", default-features = false }
 zstd = "0.14"
 
 [features]
-default = ["gz", "zstd"]
+default = ["std", "gz", "zstd"]
+std = []
 bz2 = ["deko/bzip2"]
 gz = ["sirocco"]
 xz = ["deko/xz"]

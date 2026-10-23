@@ -272,6 +272,9 @@
 
 extern crate alloc;
 
+#[cfg(not(feature = "std"))]
+compile_error!("the `std` feature is required for now, `no_std` support is planned");
+
 pub mod config;
 pub mod dna_format;
 pub mod input;

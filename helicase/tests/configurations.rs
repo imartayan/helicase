@@ -342,8 +342,8 @@ fn test_config_keep_non_actg_with_mask_n() {
         .dna_string()
         .keep_non_actg()
         .compute_mask_non_actg()
-        .config()
-        | advanced::COMPUTE_MASK_N;
+        .with_flag(advanced::COMPUTE_MASK_N)
+        .config();
 
     let mut parser = FastxParser::<CFG>::from_slice(&bytes).unwrap();
     while let Some(_event) = parser.next() {
@@ -389,8 +389,8 @@ fn test_config_keep_non_actg_with_mask_n_owned() {
         .dna_string()
         .keep_non_actg()
         .compute_mask_non_actg()
-        .config()
-        | advanced::COMPUTE_MASK_N;
+        .with_flag(advanced::COMPUTE_MASK_N)
+        .config();
 
     let mut parser = FastxParser::<CFG>::from_slice(&bytes).unwrap();
     while let Some(_event) = parser.next() {
@@ -491,8 +491,8 @@ fn test_config_merge_records_keep_non_actg() {
         .and_dna_columnar()
         .keep_non_actg()
         .compute_dna_len()
-        .config()
-        | MERGE_RECORDS;
+        .with_flag(MERGE_RECORDS)
+        .config();
     check_merge_records::<CFG>();
 }
 
@@ -505,8 +505,8 @@ fn test_config_merge_records_skip_non_actg() {
         .and_dna_columnar()
         .skip_non_actg()
         .compute_dna_len()
-        .config()
-        | MERGE_RECORDS;
+        .with_flag(MERGE_RECORDS)
+        .config();
     check_merge_records::<CFG>();
 }
 

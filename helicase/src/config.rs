@@ -114,53 +114,65 @@ impl ParserOptions {
         self.0
     }
 
+    /// Enable a flag, typically one of [`advanced`] such as [`MERGE_RECORDS`].
+    /// Call it after the other options, some of them reset flags.
+    #[inline(always)]
+    pub const fn with_flag(self, flag: Config) -> Self {
+        Self(self.0 | flag)
+    }
+
+    /// Disable a flag, call it after the other options like [`with_flag`](Self::with_flag).
+    #[inline(always)]
+    pub const fn without_flag(self, flag: Config) -> Self {
+        Self(self.0 & !flag)
+    }
+
     /// Enable the computation of headers (default).
     #[inline(always)]
     pub const fn compute_headers(self) -> Self {
-        Self(self.0 | COMPUTE_HEADER)
+        self.with_flag(COMPUTE_HEADER)
     }
 
     /// Disable the computation of headers.
     #[inline(always)]
     pub const fn ignore_headers(self) -> Self {
-        Self(self.0 & !COMPUTE_HEADER)
+        self.without_flag(COMPUTE_HEADER)
     }
 
     /// Enable the computation of quality.
     #[inline(always)]
     pub const fn compute_quality(self) -> Self {
-        Self(self.0 | COMPUTE_QUALITY)
+        self.with_flag(COMPUTE_QUALITY)
     }
 
     /// Disable the computation of quality (default).
     #[inline(always)]
     pub const fn ignore_quality(self) -> Self {
-        Self(self.0 & !COMPUTE_QUALITY)
+        self.without_flag(COMPUTE_QUALITY)
     }
 
     /// Enable the computation DNA length.
     #[inline(always)]
     pub const fn compute_dna_len(self) -> Self {
-        Self(self.0 | COMPUTE_DNA_LEN)
+        self.with_flag(COMPUTE_DNA_LEN)
     }
 
     /// Disable the computation DNA length (default).
     #[inline(always)]
     pub const fn ignore_dna_len(self) -> Self {
-        Self(self.0 & !COMPUTE_DNA_LEN)
+        self.without_flag(COMPUTE_DNA_LEN)
     }
 
     /// Disable the computation of DNA.
     #[inline(always)]
     pub const fn ignore_dna(self) -> Self {
-        Self(
-            self.0
-                & !(COMPUTE_DNA_STRING
-                    | COMPUTE_DNA_COLUMNAR
-                    | COMPUTE_DNA_PACKED
-                    | SPLIT_NON_ACTG
-                    | REJECT_NON_ACTG
-                    | RETURN_DNA_CHUNK),
+        self.without_flag(
+            COMPUTE_DNA_STRING
+                | COMPUTE_DNA_COLUMNAR
+                | COMPUTE_DNA_PACKED
+                | SPLIT_NON_ACTG
+                | REJECT_NON_ACTG
+                | RETURN_DNA_CHUNK,
         )
         .return_record(true)
     }
@@ -198,7 +210,7 @@ impl ParserOptions {
     /// Also compute DNA as bytes.
     #[inline(always)]
     pub const fn and_dna_string(self) -> Self {
-        Self(self.0 | COMPUTE_DNA_STRING)
+        self.with_flag(COMPUTE_DNA_STRING)
     }
 
     /// Also compute DNA as [`PackedDNA`](crate::dna_format::PackedDNA).
@@ -208,7 +220,7 @@ impl ParserOptions {
     /// even if [`dna_string`](ParserOptions::dna_string) or [`and_dna_string`](ParserOptions::and_dna_string) was used.
     #[inline(always)]
     pub const fn and_dna_packed(self) -> Self {
-        Self(self.0 | COMPUTE_DNA_PACKED).split_non_actg()
+        self.with_flag(COMPUTE_DNA_PACKED).split_non_actg()
     }
 
     /// Also compute DNA as [`ColumnarDNA`](crate::dna_format::ColumnarDNA).
@@ -218,14 +230,14 @@ impl ParserOptions {
     /// even if [`dna_string`](ParserOptions::dna_string) or [`and_dna_string`](ParserOptions::and_dna_string) was used.
     #[inline(always)]
     pub const fn and_dna_columnar(self) -> Self {
-        Self(self.0 | COMPUTE_DNA_COLUMNAR).split_non_actg()
+        self.with_flag(COMPUTE_DNA_COLUMNAR).split_non_actg()
     }
 
     /// Compute a [`BitMask`](crate::dna_format::BitMask) indicating non-ACTG bases.
     /// This is only relevant when using [`keep_non_actg`](ParserOptions::keep_non_actg).
     #[inline(always)]
     pub const fn compute_mask_non_actg(self) -> Self {
-        Self(self.0 | COMPUTE_MASK_NON_ACTG)
+        self.with_flag(COMPUTE_MASK_NON_ACTG)
     }
 
     /// Keep the non-ACTG bases in the sequence, even if their encoding is lossy.
@@ -247,7 +259,7 @@ impl ParserOptions {
     /// ```
     #[inline(always)]
     pub const fn keep_non_actg(self) -> Self {
-        Self(self.0 & !(SPLIT_NON_ACTG | RETURN_DNA_CHUNK | MERGE_DNA_CHUNKS | REJECT_NON_ACTG))
+        self.without_flag(SPLIT_NON_ACTG | RETURN_DNA_CHUNK | MERGE_DNA_CHUNKS | REJECT_NON_ACTG)
             .return_record(true)
     }
 
@@ -258,21 +270,24 @@ impl ParserOptions {
     /// Use [`return_record`](ParserOptions::return_record) to get `Record` events back.
     #[inline(always)]
     pub const fn split_non_actg(self) -> Self {
-        Self((self.0 & !(MERGE_DNA_CHUNKS | REJECT_NON_ACTG)) | SPLIT_NON_ACTG | RETURN_DNA_CHUNK)
+        self.without_flag(MERGE_DNA_CHUNKS | REJECT_NON_ACTG)
+            .with_flag(SPLIT_NON_ACTG | RETURN_DNA_CHUNK)
             .return_record(false)
     }
 
     /// Skip non-ACTG bases, merging the remaining ACTG runs into a single chunk per record.
     #[inline(always)]
     pub const fn skip_non_actg(self) -> Self {
-        Self((self.0 & !(RETURN_DNA_CHUNK | REJECT_NON_ACTG)) | SPLIT_NON_ACTG | MERGE_DNA_CHUNKS)
+        self.without_flag(RETURN_DNA_CHUNK | REJECT_NON_ACTG)
+            .with_flag(SPLIT_NON_ACTG | MERGE_DNA_CHUNKS)
             .return_record(true)
     }
 
     /// Return an [`ErrorKind::InvalidBase`](crate::parser::ErrorKind) at the first non-ACTG base.
     #[inline(always)]
     pub const fn reject_non_actg(self) -> Self {
-        Self((self.0 & !(RETURN_DNA_CHUNK | MERGE_DNA_CHUNKS)) | SPLIT_NON_ACTG | REJECT_NON_ACTG)
+        self.without_flag(RETURN_DNA_CHUNK | MERGE_DNA_CHUNKS)
+            .with_flag(SPLIT_NON_ACTG | REJECT_NON_ACTG)
             .return_record(true)
     }
 
@@ -284,9 +299,9 @@ impl ParserOptions {
     #[inline(always)]
     pub const fn return_record(self, enable: bool) -> Self {
         if enable {
-            Self(self.0 | RETURN_RECORD)
+            self.with_flag(RETURN_RECORD)
         } else {
-            Self(self.0 & !RETURN_RECORD)
+            self.without_flag(RETURN_RECORD)
         }
     }
 
@@ -297,9 +312,9 @@ impl ParserOptions {
     #[inline(always)]
     pub const fn return_dna_chunk(self, enable: bool) -> Self {
         if enable {
-            Self(self.0 | RETURN_DNA_CHUNK)
+            self.with_flag(RETURN_DNA_CHUNK)
         } else {
-            Self(self.0 & !RETURN_DNA_CHUNK)
+            self.without_flag(RETURN_DNA_CHUNK)
         }
     }
 }

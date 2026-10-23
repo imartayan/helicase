@@ -56,5 +56,9 @@ name = "packed"
 required-features = ["packed-seq"]
 
 [[example]]
-name = "parallel_len_paraseq"
+name = "paraseq_parallel_len"
 required-features = ["paraseq"]
+
+[[example]]
+name = "needletail_kmers"
+required-features = ["needletail"]

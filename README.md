@@ -79,10 +79,11 @@ The parser can output a bitpacked representation of the sequence in two formats:
 - `ColumnarDNA` separates the high bit and the low bit of each base into two bitmasks.
 
 Since 2-bit encoding only represents four bases, non-ACTG characters are handled explicitly.
-Three options are available via `ParserOptions`:
+Four options are available via `ParserOptions`:
 - `split_non_actg` splits the sequence at non-ACTG bases, yielding one `DnaChunk` event per contiguous ACTG run (default for bitpacked formats), and disables `Record` events by default to avoid processing each sequence twice.
 - `skip_non_actg` skips non-ACTG bases and merges the remaining chunks, yielding one `Record` event per record.
 - `keep_non_actg` keeps the non-ACTG bases and encodes them lossily, yielding one `Record` event per record (default for string format).
+- `reject_non_actg` returns an error at the first non-ACTG base, yielding one `Record` event per record.
 
 ### Events
 
@@ -218,6 +219,10 @@ let total_len: usize = ParallelFastxParser::<CONFIG>::from_file(&path)?
 ```
 
 ## Crate features
+
+### Standard library (`std`)
+
+Enabled by default and required for now. With `default-features = false`, enable it explicitly, e.g. `features = ["std", "zstd"]`.
 
 ### Packed-seq (`packed-seq`)
 

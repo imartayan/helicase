@@ -14,6 +14,7 @@ Breaking change: parsers now yield `Result<Event, parser::Error>` (instead of `E
 - Accelerated 2-bit bitpacking (`PackedDNA` and `ColumnarDNA`) for contiguous reads and multiline sequences.
 - AVX-512 vector kernel for 512-bit scanning on supported x86 CPUs.
 - Zero-overhead CRLF (`\r\n`) line ending support for Windows.
+- `reject_non_actg` option, returning an `ErrorKind::InvalidBase` error at the first non-ACTG base.
 - Calling a `FastxParser` getter disabled by the config (e.g. `get_header` with `ignore_headers`) is now a compile-time error.
 - `FastxParser` is `Send`.
 - Needletail and paraseq migration helpers.

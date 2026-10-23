@@ -418,6 +418,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
         if flag_is_set(CONFIG, SPLIT_NON_ACTG)
             && ((1 << self.pos_in_block) & self.block.is_dna) == 0
         {
+            if flag_is_set(CONFIG, REJECT_NON_ACTG) {
+                return Some(self.reject_base(self.current_byte(), self.global_pos()));
+            }
             let mask = !0 << self.pos_in_block;
             let mut position = (self.block.is_dna | self.block.newline) & mask;
             while position == 0 {
@@ -551,7 +554,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
         let data = self.lexer.input.buffer();
         let mut curr_pos = global_curr - buf_off;
         while (I::RANDOM_ACCESS && curr_pos < data.len() || curr_pos + 1 < data.len())
-            && (data[curr_pos] == b'\n' || data[curr_pos] == b'\r')
+            && (data[curr_pos] == b'\n'
+                || data[curr_pos] == b'\r' && data.get(curr_pos + 1) == Some(&b'\n'))
         {
             curr_pos += 1;
         }
@@ -585,7 +589,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
     const INDEXED: bool = flag_is_set(CONFIG, RETURN_RECORD)
-        && flag_is_not_set(CONFIG, SPLIT_NON_ACTG | RETURN_DNA_CHUNK | MERGE_RECORDS);
+        && flag_is_not_set(CONFIG, RETURN_DNA_CHUNK | MERGE_RECORDS)
+        && (flag_is_not_set(CONFIG, SPLIT_NON_ACTG) || flag_is_set(CONFIG, REJECT_NON_ACTG));
 
     // Parses an unwrapped record from 2 indexed line feeds, without touching the block state.
     // Blank lines, wrapped sequences and the end of input go back to `next_event`.
@@ -615,8 +620,12 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
         let seq_len = (seq_end - seq_start).saturating_sub(crlf_len);
         self.dna_range = seq_start..seq_start + seq_len;
         let data = self.lexer.input.buffer();
-        self.bitpackers
+        let packed = self
+            .bitpackers
             .pack_contiguous::<CONFIG>(&data[seq_start - offset..], seq_len);
+        if flag_is_set(CONFIG, REJECT_NON_ACTG) && packed < seq_len {
+            return self.reject_first_non_actg(self.dna_range.clone());
+        }
         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
             self.dna_len = seq_len;
         }
@@ -625,6 +634,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
 
     #[inline(always)]
     fn next_event(&mut self) -> Option<Result<Event>> {
+        if flag_is_set(CONFIG, REJECT_NON_ACTG) && self.finished {
+            return self.return_error_or_none();
+        }
         if Self::INDEXED && self.line_index.active {
             if let Some(event) = self.next_indexed() {
                 return Some(event);

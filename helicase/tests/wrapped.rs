@@ -210,3 +210,14 @@ fn test_wrapped_buffers_fit_records() {
         packed.capacity()
     );
 }
+
+#[test]
+fn test_wrapped_keeps_lone_carriage_return() {
+    // After a stride over full lines, a `\r` not followed by `\n` is a base, like in the block parser.
+    let line = "ACGT".repeat(15);
+    let last = format!("\r{}", &line[1..]);
+    let wrapped = format!(">r\n{}{last}\n", format!("{line}\n").repeat(8));
+    let mut parser = FastxParser::<STRING>::from_slice(wrapped.as_bytes()).unwrap();
+    parser.next().unwrap().unwrap();
+    assert_eq!(parser.get_dna_string(), (line.repeat(8) + &last).as_bytes());
+}

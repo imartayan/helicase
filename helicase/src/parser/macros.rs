@@ -153,6 +153,25 @@ macro_rules! shared_block_helpers {
             }
         }
 
+        // Ends the iteration: `next_event` returns `None` once finished with `REJECT_NON_ACTG`.
+        #[cold]
+        #[inline(never)]
+        fn reject_base(&mut self, byte: u8, pos: usize) -> Option<Result<Event>> {
+            self.finished = true;
+            Some(Err(Error::invalid_base(byte, pos)))
+        }
+
+        #[cold]
+        #[inline(never)]
+        fn reject_first_non_actg(&mut self, range: Range<usize>) -> Option<Result<Event>> {
+            let seq = self.lexer.input.slice(range.clone());
+            let offset = seq
+                .iter()
+                .position(|c| !matches!(c & 0xDF, b'A' | b'C' | b'G' | b'T'))
+                .unwrap_or(0);
+            self.reject_base(seq[offset], range.start + offset)
+        }
+
         #[cold]
         fn leave_indexed(&mut self) {
             let start = self.line_index.deactivate();

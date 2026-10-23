@@ -255,7 +255,8 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
 
 impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
     const INDEXED: bool = flag_is_set(CONFIG, RETURN_RECORD)
-        && flag_is_not_set(CONFIG, SPLIT_NON_ACTG | RETURN_DNA_CHUNK | MERGE_RECORDS);
+        && flag_is_not_set(CONFIG, RETURN_DNA_CHUNK | MERGE_RECORDS)
+        && (flag_is_not_set(CONFIG, SPLIT_NON_ACTG) || flag_is_set(CONFIG, REJECT_NON_ACTG));
 
     // Parses a record from 4 indexed line feeds, without touching the block state.
     // Anything unusual (long or malformed record, end of input) goes back to `next_event`.
@@ -283,8 +284,12 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
         let seq_len = (seq_end - header_end - 1).saturating_sub(crlf_len);
         self.dna_range = header_end + 1..seq_end.saturating_sub(crlf_len);
         let data = self.lexer.input.buffer();
-        self.bitpackers
+        let packed = self
+            .bitpackers
             .pack_contiguous::<CONFIG>(&data[header_end + 1 - offset..], seq_len);
+        if flag_is_set(CONFIG, REJECT_NON_ACTG) && packed < seq_len {
+            return self.reject_first_non_actg(self.dna_range.clone());
+        }
         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
             self.dna_len = seq_len;
         }
@@ -296,6 +301,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
 
     #[inline(always)]
     fn next_event(&mut self) -> Option<Result<Event>> {
+        if flag_is_set(CONFIG, REJECT_NON_ACTG) && self.finished {
+            return self.return_error_or_none();
+        }
         if Self::INDEXED && self.line_index.active {
             if let Some(event) = self.next_indexed() {
                 return Some(event);
@@ -360,6 +368,12 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
                 // SEQUENCE
                 'seq_line: loop {
                     if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
+                        let skip_start = self.global_pos();
+                        let first_byte = if flag_is_set(CONFIG, REJECT_NON_ACTG) {
+                            self.lexer.input.current_block()[self.pos_in_block & 63]
+                        } else {
+                            0
+                        };
                         let mask = !0 << self.pos_in_block;
                         let mut position = (self.block.is_dna | self.block.newline) & mask;
                         while position == 0 {
@@ -371,7 +385,16 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
                             position = self.block.is_dna | self.block.newline;
                         }
                         self.pos_in_block = position.trailing_zeros() as usize;
-                        if ((1 << self.pos_in_block) & self.block.newline) != 0 {
+                        let at_newline = ((1 << self.pos_in_block) & self.block.newline) != 0;
+                        if flag_is_set(CONFIG, REJECT_NON_ACTG) {
+                            // Only the `\r` of a CRLF line ending can be skipped.
+                            let skipped = self.global_pos() - skip_start;
+                            let crlf = if at_newline { self.crlf_len } else { 0 };
+                            if skipped > 0 && (first_byte != b'\r' || skipped > crlf) {
+                                return self.reject_base(first_byte, skip_start);
+                            }
+                        }
+                        if at_newline {
                             self.dna_range.end = self.global_pos().saturating_sub(self.crlf_len);
                             self.make_room_record_end();
                             self.consume_newline();

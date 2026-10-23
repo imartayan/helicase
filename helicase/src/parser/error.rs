@@ -15,6 +15,7 @@ pub struct Error {
 
 /// The specific category of parser error.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ErrorKind {
     /// The first record does not begin with an expected format marker
     /// (`>` for FASTA, `@` for FASTQ, or either for auto-detection).
@@ -22,6 +23,10 @@ pub enum ErrorKind {
 
     /// The input stream or buffer ended unexpectedly in the middle of a record.
     TruncatedRecord,
+
+    /// A non-ACTG base was found at byte offset `pos` with
+    /// [`reject_non_actg`](crate::ParserOptions::reject_non_actg).
+    InvalidBase { byte: u8, pos: usize },
 
     /// Decompression error occurred while reading a compressed stream (gzip/BGZF/zstd).
     Decompression(String),
@@ -63,6 +68,13 @@ impl Error {
         Self::new(ErrorKind::TruncatedRecord)
     }
 
+    /// Constructs an [`ErrorKind::InvalidBase`] error.
+    #[cold]
+    #[inline(never)]
+    pub fn invalid_base(byte: u8, pos: usize) -> Self {
+        Self::new(ErrorKind::InvalidBase { byte, pos })
+    }
+
     /// Constructs an [`ErrorKind::Decompression`] error.
     #[cold]
     #[inline(never)]
@@ -89,6 +101,11 @@ impl fmt::Display for ErrorKind {
                 )
             }
             Self::TruncatedRecord => write!(f, "unexpected end of file mid-record"),
+            Self::InvalidBase { byte, pos } => write!(
+                f,
+                "invalid base {byte:#04x} ('{}') at byte offset {pos}",
+                *byte as char
+            ),
             Self::Decompression(msg) => write!(f, "decompression error: {msg}"),
             Self::Io(err) => write!(f, "I/O error: {err}"),
             Self::Custom(msg) => write!(f, "{msg}"),

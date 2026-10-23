@@ -33,6 +33,7 @@ pub mod advanced {
     pub const MERGE_RECORDS: Config = 1 << 10;
     pub const COMPUTE_MASK_NON_ACTG: Config = 1 << 11;
     pub const COMPUTE_MASK_N: Config = 1 << 12;
+    pub const REJECT_NON_ACTG: Config = 1 << 13;
 
     #[cfg(all(target_feature = "bmi2", not(feature = "no-pdep")))]
     pub const PDEP_ENABLED: bool = true;
@@ -158,6 +159,7 @@ impl ParserOptions {
                     | COMPUTE_DNA_COLUMNAR
                     | COMPUTE_DNA_PACKED
                     | SPLIT_NON_ACTG
+                    | REJECT_NON_ACTG
                     | RETURN_DNA_CHUNK),
         )
         .return_record(true)
@@ -245,7 +247,8 @@ impl ParserOptions {
     /// ```
     #[inline(always)]
     pub const fn keep_non_actg(self) -> Self {
-        Self(self.0 & !(SPLIT_NON_ACTG | RETURN_DNA_CHUNK | MERGE_DNA_CHUNKS)).return_record(true)
+        Self(self.0 & !(SPLIT_NON_ACTG | RETURN_DNA_CHUNK | MERGE_DNA_CHUNKS | REJECT_NON_ACTG))
+            .return_record(true)
     }
 
     /// Split the sequence at non-ACTG bases, yielding one [`Event::DnaChunk`](crate::parser::Event) per contiguous ACTG run.
@@ -255,13 +258,22 @@ impl ParserOptions {
     /// Use [`return_record`](ParserOptions::return_record) to get `Record` events back.
     #[inline(always)]
     pub const fn split_non_actg(self) -> Self {
-        Self((self.0 & !MERGE_DNA_CHUNKS) | SPLIT_NON_ACTG | RETURN_DNA_CHUNK).return_record(false)
+        Self((self.0 & !(MERGE_DNA_CHUNKS | REJECT_NON_ACTG)) | SPLIT_NON_ACTG | RETURN_DNA_CHUNK)
+            .return_record(false)
     }
 
     /// Skip non-ACTG bases, merging the remaining ACTG runs into a single chunk per record.
     #[inline(always)]
     pub const fn skip_non_actg(self) -> Self {
-        Self((self.0 & !RETURN_DNA_CHUNK) | SPLIT_NON_ACTG | MERGE_DNA_CHUNKS).return_record(true)
+        Self((self.0 & !(RETURN_DNA_CHUNK | REJECT_NON_ACTG)) | SPLIT_NON_ACTG | MERGE_DNA_CHUNKS)
+            .return_record(true)
+    }
+
+    /// Return an [`ErrorKind::InvalidBase`](crate::parser::ErrorKind) at the first non-ACTG base.
+    #[inline(always)]
+    pub const fn reject_non_actg(self) -> Self {
+        Self((self.0 & !(RETURN_DNA_CHUNK | MERGE_DNA_CHUNKS)) | SPLIT_NON_ACTG | REJECT_NON_ACTG)
+            .return_record(true)
     }
 
     /// Stop the parser iterator after each record (`true` by default).

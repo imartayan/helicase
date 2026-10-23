@@ -139,7 +139,8 @@ pub trait HelicaseParser: crate::sealed::Sealed {
     }
 
     /// Manually clear the information of the current chunk.
-    /// This is only useful when [`MERGE_DNA_CHUNKS`](crate::config::advanced::MERGE_DNA_CHUNKS) is enabled.
+    /// This is only useful when [`MERGE_DNA_CHUNKS`](crate::config::advanced::MERGE_DNA_CHUNKS)
+    /// or [`MERGE_RECORDS`](crate::config::advanced::MERGE_RECORDS) is enabled.
     fn clear_chunk(&mut self);
 
     /// Manually clear the information of the current record.

@@ -511,6 +511,56 @@ fn test_config_merge_records_skip_non_actg() {
 }
 
 #[test]
+fn test_config_merge_records_split_non_actg() {
+    // MERGE_RECORDS implies MERGE_DNA_CHUNKS, each chunk is appended to the previous ones
+    const CFG: Config = ParserOptions::default()
+        .dna_string()
+        .and_dna_packed()
+        .and_dna_columnar()
+        .compute_dna_len()
+        .with_flag(advanced::MERGE_RECORDS)
+        .config();
+
+    let inputs = [
+        FastxGen::fasta(20, 250),
+        FastxGen::wrapped_fasta(10, 3000, 60),
+        FastxGen::fastq(20, 150),
+        FastxGen::fastq(5, 5000),
+    ];
+    for (k, generator) in inputs.into_iter().enumerate() {
+        let generator = generator
+            .with_std_dev(0.5)
+            .with_alphabet(Alphabet::DnaWithN)
+            .with_seed(91 + k as u64);
+        let bytes = generator.generate_bytes();
+        let expected: Vec<u8> = generator
+            .records()
+            .flat_map(|r| r.seq)
+            .filter(|b| b"ACGTacgt".contains(b))
+            .map(|b| b.to_ascii_uppercase())
+            .collect();
+        let expected = String::from_utf8(expected).unwrap();
+
+        let slice_parser = FastxParser::<CFG>::from_slice(&bytes).unwrap();
+        let reader_parser = FastxParser::<CFG>::from_reader(std::io::Cursor::new(bytes.clone()));
+        for mut parser in [slice_parser, reader_parser.unwrap()] {
+            let mut prev_len = 0;
+            while let Some(event) = parser.next() {
+                event.unwrap();
+                let packed = parser.get_dna_packed().to_string();
+                assert!(expected.starts_with(&packed), "input {k}");
+                assert!(packed.len() >= prev_len, "input {k}");
+                assert_eq!(parser.get_dna_string(), packed.as_bytes(), "input {k}");
+                assert_eq!(parser.get_dna_columnar().to_string(), packed, "input {k}");
+                assert_eq!(parser.get_dna_len(), packed.len(), "input {k}");
+                prev_len = packed.len();
+            }
+            assert_eq!(parser.get_dna_packed().to_string(), expected, "input {k}");
+        }
+    }
+}
+
+#[test]
 fn test_config_ignore_headers() {
     let bytes = FastxGen::illumina(20).with_seed(101).generate_bytes();
     const CFG: Config = ParserOptions::default()

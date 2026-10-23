@@ -456,7 +456,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
                 self.consume_newline();
                 self.skip_blank_lines(self.global_pos());
             }
-            if flag_is_not_set(CONFIG, MERGE_DNA_CHUNKS) {
+            if flag_is_not_set(CONFIG, MERGE_DNA_CHUNKS | MERGE_RECORDS) {
                 self.clear_chunk();
             }
             self.retry_stride_after_non_actg = true;

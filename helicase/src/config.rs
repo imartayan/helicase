@@ -30,6 +30,7 @@ pub mod advanced {
     pub const RETURN_RECORD: Config = 1 << 7;
     pub const RETURN_DNA_CHUNK: Config = 1 << 8;
     pub const MERGE_DNA_CHUNKS: Config = 1 << 9;
+    /// Implies [`MERGE_DNA_CHUNKS`].
     pub const MERGE_RECORDS: Config = 1 << 10;
     pub const COMPUTE_MASK_NON_ACTG: Config = 1 << 11;
     pub const COMPUTE_MASK_N: Config = 1 << 12;

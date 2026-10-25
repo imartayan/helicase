@@ -6,10 +6,14 @@ use crate::input::*;
 use crate::parser::*;
 use std::io::{self, Read};
 
+#[cfg(all(test, feature = "zstd"))]
+mod tests;
+
 #[derive(Clone, Copy)]
 pub struct Frame {
     comp_offset: usize,
     comp_len: usize,
+    // Exact for BGZF, upper bound for zstd frames without content size.
     uncomp_len: usize,
 }
 
@@ -99,14 +103,9 @@ impl FrameDecoder for ZstdDecoder {
     }
 
     fn decode(&mut self, frame: &[u8], uncomp_len: usize, out: &mut Vec<u8>) -> io::Result<()> {
-        if uncomp_len > 0 {
-            out.resize(uncomp_len, 0);
-            let len = self.0.decompress_to_buffer(frame, out)?;
-            out.truncate(len);
-        } else {
-            out.clear();
-            zstd::stream::read::Decoder::new(frame)?.read_to_end(out)?;
-        }
+        out.resize(uncomp_len, 0);
+        let len = self.0.decompress_to_buffer(frame, out)?;
+        out.truncate(len);
         Ok(())
     }
 
@@ -135,12 +134,8 @@ pub fn index_zstd_frames(compressed: &[u8]) -> Vec<Frame> {
             comp_offset += 8 + payload_len;
             continue;
         }
-        match zstd::zstd_safe::find_frame_compressed_size(slice) {
-            Ok(comp_len) if comp_len > 0 && comp_offset + comp_len <= compressed.len() => {
-                let uncomp_len = zstd::zstd_safe::get_frame_content_size(slice)
-                    .ok()
-                    .flatten()
-                    .unwrap_or(0) as usize;
+        match zstd_frame_sizes(slice) {
+            Some((comp_len, uncomp_len)) => {
                 frames.push(Frame {
                     comp_offset,
                     comp_len,
@@ -268,4 +263,49 @@ where
         },
         reduce,
     )
+}
+
+// Compressed size and decompressed size (or an upper bound if the header has none) of the zstd
+// frame starting `data`, by walking its block headers (RFC 8878).
+#[cfg(feature = "zstd")]
+fn zstd_frame_sizes(data: &[u8]) -> Option<(usize, usize)> {
+    const MAX_BLOCK_LEN: usize = 128 * 1024;
+    if data.get(..4)? != [0x28, 0xb5, 0x2f, 0xfd] {
+        return None;
+    }
+    let descriptor = *data.get(4)?;
+    let single_segment = descriptor & 0x20 != 0;
+    let fcs_len = match descriptor >> 6 {
+        0 => single_segment as usize,
+        1 => 2,
+        2 => 4,
+        _ => 8,
+    };
+    let dict_len = [0, 1, 2, 4][(descriptor & 3) as usize];
+    let fcs_start = 5 + !single_segment as usize + dict_len;
+    let fcs = data.get(fcs_start..fcs_start + fcs_len)?;
+    let content_len = fcs.iter().rev().fold(0, |acc, &b| (acc << 8) | b as usize)
+        + if fcs_len == 2 { 256 } else { 0 };
+    let mut pos = fcs_start + fcs_len;
+    let mut num_blocks = 0;
+    loop {
+        let header = data.get(pos..pos + 3)?;
+        let header = u32::from_le_bytes([header[0], header[1], header[2], 0]);
+        pos += 3 + match (header >> 1) & 3 {
+            1 => 1,
+            3 => return None,
+            _ => (header >> 3) as usize,
+        };
+        num_blocks += 1;
+        if header & 1 != 0 {
+            break;
+        }
+    }
+    pos += if descriptor & 4 != 0 { 4 } else { 0 };
+    let uncomp_len = if fcs_len > 0 {
+        content_len
+    } else {
+        num_blocks * MAX_BLOCK_LEN
+    };
+    (pos <= data.len()).then_some((pos, uncomp_len))
 }

@@ -80,16 +80,16 @@ impl DnaBitpackers {
     #[inline(always)]
     pub fn append_block_from<const CONFIG: Config>(&mut self, block: &Chunk) {
         if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
-            self.columnar.append_block(block.high_bit, block.low_bit);
+            self.columnar.append_full(block.high_bit, block.low_bit);
         }
         if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
-            self.packed.append_block(block.two_bits);
+            self.packed.append_full(block.two_bits);
         }
         if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
-            self.mask_non_actg.append_block(block.mask_non_actg);
+            self.mask_non_actg.append_full(block.mask_non_actg);
         }
         if flag_is_set(CONFIG, COMPUTE_MASK_N) {
-            self.mask_n.append_block(block.mask_n);
+            self.mask_n.append_full(block.mask_n);
         }
     }
 
@@ -105,7 +105,7 @@ impl DnaBitpackers {
                 .append(block.high_bit >> start, block.low_bit >> start, len);
         }
         if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
-            self.packed.append(block.two_bits >> (2 * start), 2 * len);
+            self.packed.append(block.two_bits >> (2 * start), len);
         }
         if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
             self.mask_non_actg.append(block.mask_non_actg >> start, len);
@@ -128,7 +128,7 @@ impl DnaBitpackers {
         if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
             for k in 0..count {
                 let m = extract_dna_bitmask::<CONFIG>(&data[64 * k..64 * (k + 1)]);
-                self.columnar.append_block(m.high_bit, m.low_bit);
+                self.columnar.append_full(m.high_bit, m.low_bit);
             }
         }
         self.pack_blocks_checked::<CONFIG>(data, count, q)
@@ -147,16 +147,16 @@ impl DnaBitpackers {
                 return k;
             }
             if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
-                self.packed.append_block(m.two_bits);
+                self.packed.append_full(m.two_bits);
             }
             if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
-                self.columnar.append_block(m.high_bit, m.low_bit);
+                self.columnar.append_full(m.high_bit, m.low_bit);
             }
             if flag_is_set(CONFIG, COMPUTE_MASK_NON_ACTG) {
-                self.mask_non_actg.append_block(m.mask_non_actg);
+                self.mask_non_actg.append_full(m.mask_non_actg);
             }
             if flag_is_set(CONFIG, COMPUTE_MASK_N) {
-                self.mask_n.append_block(m.mask_n);
+                self.mask_n.append_full(m.mask_n);
             }
         }
         q
@@ -213,13 +213,7 @@ impl DnaBitpackers {
             }
 
             if need_packed {
-                let r_bits = 2 * r;
-                let two_bits_mask = if r_bits == 128 {
-                    !0
-                } else {
-                    (1u128 << r_bits) - 1
-                };
-                self.packed.append(m.two_bits & two_bits_mask, r_bits);
+                self.packed.append(m.two_bits, r);
             }
             if need_columnar {
                 self.columnar

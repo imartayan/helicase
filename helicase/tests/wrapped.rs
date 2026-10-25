@@ -205,9 +205,8 @@ fn test_wrapped_buffers_fit_records() {
     parser.next().unwrap().unwrap();
     let packed = parser.get_dna_packed_owned();
     assert_eq!(packed.len(), LEN);
-    // In 64-bit words of 32 bases.
     assert!(
-        32 * packed.capacity() < 4 * LEN,
+        packed.capacity() < 4 * LEN,
         "capacity {}",
         packed.capacity()
     );

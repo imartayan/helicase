@@ -24,11 +24,11 @@ impl BitMask {
         }
     }
 
-    /// Creates an empty mask with room for `capacity` words of 64 bases.
+    /// Creates an empty mask with room for at least `capacity` bases.
     #[inline(always)]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            bits: Vec::with_capacity(capacity),
+            bits: Vec::with_capacity(capacity.div_ceil(BP_PER_BLOCK)),
             cur: 0,
             len: 0,
         }
@@ -46,10 +46,10 @@ impl BitMask {
         self.len == 0
     }
 
-    /// Returns the number of words of 64 bases that fit without reallocating.
+    /// Returns the number of bases that fit without reallocating.
     #[inline(always)]
     pub const fn capacity(&self) -> usize {
-        self.bits.capacity()
+        self.bits.capacity() * BP_PER_BLOCK
     }
 
     /// Reserves room for at least `additional_bases` more bases.
@@ -84,7 +84,7 @@ impl BitMask {
 
     /// Appends the 64 bits of `x`.
     #[inline(always)]
-    pub fn append_block(&mut self, x: T) {
+    pub fn append_full(&mut self, x: T) {
         let rem = self.len % BITS_PER_BLOCK;
         self.len += BITS_PER_BLOCK;
         let len = self.bits.len();
@@ -107,6 +107,7 @@ impl BitMask {
     /// Appends the low `size` bits of `x`, other bits are ignored. `size` must be at most 64.
     #[inline(always)]
     pub fn append(&mut self, x: T, size: usize) {
+        debug_assert!(size <= BP_PER_BLOCK);
         if size == 0 {
             return;
         }
@@ -190,10 +191,10 @@ mod tests {
     }
 
     #[test]
-    fn append_block_aligned_and_unaligned() {
+    fn append_full_aligned_and_unaligned() {
         let mut aligned = BitMask::new();
-        aligned.append_block(!0u64);
-        aligned.append_block(0u64);
+        aligned.append_full(!0u64);
+        aligned.append_full(0u64);
         let got = aligned.get_all();
         assert_eq!(got.len(), 128);
         assert!(got[..64].iter().all(|&b| b));
@@ -201,8 +202,8 @@ mod tests {
 
         let mut unaligned = BitMask::new();
         unaligned.append(!0u64, 10);
-        unaligned.append_block(0u64);
-        unaligned.append_block(!0u64);
+        unaligned.append_full(0u64);
+        unaligned.append_full(!0u64);
         let got = unaligned.get_all();
         assert_eq!(got.len(), 138);
         assert!(got[..10].iter().all(|&b| b));
@@ -213,14 +214,14 @@ mod tests {
     #[test]
     fn test_pop_base() {
         let mut m = BitMask::new();
-        m.append_block(!0u64);
+        m.append_full(!0u64);
         assert_eq!(m.len(), 64);
         m.pop_base();
         assert_eq!(m.len(), 63);
         assert!(m.get_all().iter().all(|&b| b));
 
         // Pop across block boundary
-        m.append_block(0u64);
+        m.append_full(0u64);
         assert_eq!(m.len(), 63 + 64);
         m.pop_base();
         assert_eq!(m.len(), 63 + 63);

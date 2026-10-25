@@ -30,12 +30,12 @@ impl ColumnarDNA {
         }
     }
 
-    /// Creates an empty sequence with room for `capacity` words of 64 bases.
+    /// Creates an empty sequence with room for at least `capacity` bases.
     #[inline(always)]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            high_bits: Vec::with_capacity(capacity),
-            low_bits: Vec::with_capacity(capacity),
+            high_bits: Vec::with_capacity(capacity.div_ceil(BP_PER_BLOCK)),
+            low_bits: Vec::with_capacity(capacity.div_ceil(BP_PER_BLOCK)),
             cur_hi: 0,
             cur_lo: 0,
             len: 0,
@@ -54,10 +54,10 @@ impl ColumnarDNA {
         self.len == 0
     }
 
-    /// Returns the number of words of 64 bases that fit without reallocating.
+    /// Returns the number of bases that fit without reallocating.
     #[inline(always)]
     pub const fn capacity(&self) -> usize {
-        self.high_bits.capacity()
+        self.high_bits.capacity() * BP_PER_BLOCK
     }
 
     /// Reserves room for at least `additional_bases` more bases.
@@ -98,7 +98,7 @@ impl ColumnarDNA {
 
     /// Appends 64 bases given by their high and low bits.
     #[inline(always)]
-    pub fn append_block(&mut self, high: T, low: T) {
+    pub fn append_full(&mut self, high: T, low: T) {
         let rem = self.len % BITS_PER_BLOCK;
         self.len += BITS_PER_BLOCK;
         let len = self.high_bits.len();
@@ -128,6 +128,7 @@ impl ColumnarDNA {
     /// `size` must be at most 64.
     #[inline(always)]
     pub fn append(&mut self, high: T, low: T, size: usize) {
+        debug_assert!(size <= BP_PER_BLOCK);
         if size == 0 {
             return;
         }
@@ -354,16 +355,16 @@ mod tests {
     }
 
     #[test]
-    fn append_block_aligned_and_unaligned() {
+    fn append_full_aligned_and_unaligned() {
         let mut aligned = ColumnarDNA::new();
-        aligned.append_block(!0u64, 0u64); // 64 T
-        aligned.append_block(0u64, !0u64); // 64 C
+        aligned.append_full(!0u64, 0u64); // 64 T
+        aligned.append_full(0u64, !0u64); // 64 C
         assert_eq!(aligned.to_string(), "T".repeat(64) + &"C".repeat(64));
 
         let mut unaligned = ColumnarDNA::new();
         unaligned.append(0b111, 0b111, 3); // 3 G
-        unaligned.append_block(!0u64, 0u64); // 64 T
-        unaligned.append_block(0u64, !0u64); // 64 C
+        unaligned.append_full(!0u64, 0u64); // 64 T
+        unaligned.append_full(0u64, !0u64); // 64 C
         assert_eq!(
             unaligned.to_string(),
             "GGG".to_string() + &"T".repeat(64) + &"C".repeat(64)
@@ -373,14 +374,14 @@ mod tests {
     #[test]
     fn test_pop_base() {
         let mut v = ColumnarDNA::new();
-        v.append_block(!0u64, 0u64); // 64 T
+        v.append_full(!0u64, 0u64); // 64 T
         assert_eq!(v.len(), 64);
         v.pop_base();
         assert_eq!(v.len(), 63);
         assert_eq!(v.to_string(), "T".repeat(63));
 
         // Pop across block boundary
-        v.append_block(0u64, !0u64); // 64 C
+        v.append_full(0u64, !0u64); // 64 C
         assert_eq!(v.len(), 63 + 64);
         v.pop_base();
         assert_eq!(v.len(), 63 + 63);

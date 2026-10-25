@@ -30,7 +30,7 @@ pub struct PackedDNA {
 
 impl Clone for PackedDNA {
     fn clone(&self) -> Self {
-        let mut res = Self::with_capacity(self.num_words());
+        let mut res = Self::with_capacity(self.len());
         res.bits.extend_from_slice(&self.bits);
         res.cur = self.cur;
         res.num_bits = self.num_bits;
@@ -51,11 +51,11 @@ impl PackedDNA {
         }
     }
 
-    /// Creates an empty sequence with room for `capacity` words of 32 bases.
+    /// Creates an empty sequence with room for at least `capacity` bases.
     #[inline(always)]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            bits: Vec::with_capacity((capacity + MARGIN) * WORD_BYTES),
+            bits: Vec::with_capacity((capacity.div_ceil(BP_PER_BLOCK) + MARGIN) * WORD_BYTES),
             cur: 0,
             num_bits: 0,
             init_bytes: 0,
@@ -74,10 +74,10 @@ impl PackedDNA {
         self.num_bits == 0
     }
 
-    /// Returns the number of words of 32 bases that fit without reallocating.
+    /// Returns the number of bases that fit without reallocating.
     #[inline(always)]
     pub const fn capacity(&self) -> usize {
-        (self.bits.capacity() / WORD_BYTES).saturating_sub(MARGIN)
+        (self.bits.capacity() / WORD_BYTES).saturating_sub(MARGIN) * BP_PER_BLOCK
     }
 
     #[inline(always)]
@@ -144,7 +144,7 @@ impl PackedDNA {
 
     /// Appends 64 bases packed on 2 bits each.
     #[inline(always)]
-    pub fn append_block(&mut self, packed: u128) {
+    pub fn append_full(&mut self, packed: u128) {
         self.ensure_spare(2);
         let lo = packed as u64;
         let hi = (packed >> 64) as u64;
@@ -203,10 +203,12 @@ impl PackedDNA {
         }
     }
 
-    /// Appends the `num_bits / 2` bases packed in the low `num_bits` bits of `packed`, other bits are ignored.
-    /// `num_bits` must be even and at most 128.
+    /// Appends the `num_bases` bases packed in the low bits of `packed`, other bits are ignored.
+    /// `num_bases` must be at most 64.
     #[inline(always)]
-    pub fn append(&mut self, packed: u128, num_bits: usize) {
+    pub fn append(&mut self, packed: u128, num_bases: usize) {
+        debug_assert!(num_bases <= 2 * BP_PER_BLOCK);
+        let num_bits = BITS_PER_BP * num_bases;
         if num_bits == 0 {
             return;
         }
@@ -398,13 +400,13 @@ mod tests {
             };
             packed |= code << (2 * i);
         }
-        (packed, s.len() * 2)
+        (packed, s.len())
     }
 
     fn roundtrip(s: &str) -> String {
         let mut dna = PackedDNA::new();
-        let (packed, num_bits) = encode(s);
-        dna.append(packed, num_bits);
+        let (packed, num_bases) = encode(s);
+        dna.append(packed, num_bases);
         format!("{dna}")
     }
 
@@ -414,8 +416,8 @@ mod tests {
         let (g_packed, _) = encode(&"G".repeat(BP_PER_BLOCK));
 
         let mut dna = PackedDNA::new();
-        dna.append(a_packed, BITS_PER_BLOCK);
-        dna.append(g_packed, BITS_PER_BLOCK);
+        dna.append(a_packed, BP_PER_BLOCK);
+        dna.append(g_packed, BP_PER_BLOCK);
 
         assert_eq!(dna.len(), 2 * BP_PER_BLOCK);
         for i in 0..BP_PER_BLOCK {
@@ -433,9 +435,9 @@ mod tests {
         let (t, _) = encode(&"T".repeat(BP_PER_BLOCK));
 
         let mut dna = PackedDNA::new();
-        dna.append(a, BITS_PER_BLOCK);
-        dna.append(c, BITS_PER_BLOCK);
-        dna.append(t, BITS_PER_BLOCK);
+        dna.append(a, BP_PER_BLOCK);
+        dna.append(c, BP_PER_BLOCK);
+        dna.append(t, BP_PER_BLOCK);
 
         assert_eq!(dna.len(), 3 * BP_PER_BLOCK);
         for i in 0..BP_PER_BLOCK {
@@ -452,12 +454,12 @@ mod tests {
     #[test]
     fn partial_then_full_block() {
         let partial = BP_PER_BLOCK - 6;
-        let (a_partial, a_bits) = encode(&"A".repeat(partial));
+        let (a_partial, a_len) = encode(&"A".repeat(partial));
         let (g_full, _) = encode(&"G".repeat(BP_PER_BLOCK));
 
         let mut dna = PackedDNA::new();
-        dna.append(a_partial, a_bits);
-        dna.append(g_full, BITS_PER_BLOCK);
+        dna.append(a_partial, a_len);
+        dna.append(g_full, BP_PER_BLOCK);
 
         assert_eq!(dna.len(), partial + BP_PER_BLOCK);
         for i in 0..partial {
@@ -493,20 +495,20 @@ mod tests {
     }
 
     #[test]
-    fn append_block_aligned_and_unaligned() {
+    fn append_full_aligned_and_unaligned() {
         let (a_full, _) = encode(&"A".repeat(64));
         let (g_full, _) = encode(&"G".repeat(64));
-        let (c_part, c_bits) = encode("CCC");
+        let (c_part, c_len) = encode("CCC");
 
         let mut aligned = PackedDNA::new();
-        aligned.append_block(a_full);
-        aligned.append_block(g_full);
+        aligned.append_full(a_full);
+        aligned.append_full(g_full);
         assert_eq!(format!("{aligned}"), "A".repeat(64) + &"G".repeat(64));
 
         let mut unaligned = PackedDNA::new();
-        unaligned.append(c_part, c_bits);
-        unaligned.append_block(a_full);
-        unaligned.append_block(g_full);
+        unaligned.append(c_part, c_len);
+        unaligned.append_full(a_full);
+        unaligned.append_full(g_full);
         assert_eq!(
             format!("{unaligned}"),
             "CCC".to_string() + &"A".repeat(64) + &"G".repeat(64)
@@ -517,7 +519,7 @@ mod tests {
     fn test_pop_base() {
         let (a_full, _) = encode(&"A".repeat(64));
         let mut dna = PackedDNA::new();
-        dna.append_block(a_full);
+        dna.append_full(a_full);
         assert_eq!(dna.len(), 64);
         dna.pop_base();
         assert_eq!(dna.len(), 63);
@@ -525,7 +527,7 @@ mod tests {
 
         // Pop across block boundary
         let (g_full, _) = encode(&"G".repeat(64));
-        dna.append_block(g_full);
+        dna.append_full(g_full);
         assert_eq!(dna.len(), 63 + 64);
         dna.pop_base();
         assert_eq!(dna.len(), 63 + 63);
@@ -538,10 +540,10 @@ mod tests {
         use packed_seq::SeqVec;
         let seq = "ACGT".repeat(20) + "TTG";
         let mut dna = PackedDNA::new();
-        let (packed, num_bits) = encode(&seq[..60]);
-        dna.append(packed, num_bits);
-        let (packed, num_bits) = encode(&seq[60..]);
-        dna.append(packed, num_bits);
+        let (packed, num_bases) = encode(&seq[..60]);
+        dna.append(packed, num_bases);
+        let (packed, num_bases) = encode(&seq[60..]);
+        dna.append(packed, num_bases);
         dna.pad();
         let to_string = |s: PackedSeq| String::from_utf8(s.unpack()).unwrap();
         assert_eq!(to_string(dna.as_packed_seq()), seq);
@@ -558,13 +560,20 @@ mod tests {
         assert_eq!(to_string(PackedDNA::new().as_packed_seq()), "");
     }
 
-    #[cfg(feature = "packed-seq")]
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic]
+    fn append_rejects_bit_count() {
+        PackedDNA::new().append(!0, 128);
+    }
+
+    #[cfg(all(feature = "packed-seq", debug_assertions))]
     #[test]
     #[should_panic]
     fn test_packed_seq_requires_padding() {
         let mut dna = PackedDNA::new();
         dna.pad();
-        dna.append(0b11, 2);
+        dna.append(0b11, 1);
         dna.as_packed_seq();
     }
 }

@@ -7,12 +7,16 @@ Helicase is now usable in WebAssembly and without `std`.
 
 Breaking changes:
 - internal input methods are now private
+- DNA formats now count in bases: `with_capacity` and `capacity` used 64-bit words, `PackedDNA::append` used a number of bits
+- `append_block` is renamed `append_full`
 
 ### What's New
 
 - Add support for `no_std`
 - Add support for simd128 (WASM)
+- `Format::find_record_start` to split inputs at record boundaries (e.g. for WASM workers)
 - Show feature requirements on gated items in the documentation
+- Document all public items
 
 ## 1.0.0
 

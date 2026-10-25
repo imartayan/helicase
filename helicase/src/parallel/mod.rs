@@ -18,83 +18,6 @@ mod frames;
 #[cfg(feature = "zstd")]
 pub(crate) use frames::index_zstd_frames;
 
-/// Validates whether `cand` starts a genuine 4-line FASTQ record.
-#[inline(always)]
-fn is_valid_fastq_record_start(data: &[u8], cand: usize) -> bool {
-    let rem = &data[cand..];
-    let Some(header_nl) = memchr::memchr(b'\n', rem) else {
-        return false;
-    };
-    let seq_start = cand + header_nl + 1;
-    if seq_start >= data.len() || data[seq_start] == b'@' || data[seq_start] == b'+' {
-        return false;
-    }
-    let Some(seq_nl) = memchr::memchr(b'\n', &data[seq_start..]) else {
-        return false;
-    };
-    let seq_end = seq_start + seq_nl;
-    let plus_start = seq_end + 1;
-    if plus_start >= data.len() || data[plus_start] != b'+' {
-        return false;
-    }
-    let Some(plus_nl) = memchr::memchr(b'\n', &data[plus_start..]) else {
-        return false;
-    };
-    let qual_start = plus_start + plus_nl + 1;
-    if qual_start >= data.len() {
-        return false;
-    }
-    let mut seq_len = seq_end - seq_start;
-    if seq_len > 0 && data[seq_start + seq_len - 1] == b'\r' {
-        seq_len -= 1;
-    }
-    let qual_target = qual_start + seq_len;
-    if qual_target >= data.len() {
-        return false;
-    }
-    let (is_match, next_rec) = if data[qual_target] == b'\n' {
-        (true, qual_target + 1)
-    } else if qual_target + 1 < data.len()
-        && data[qual_target] == b'\r'
-        && data[qual_target + 1] == b'\n'
-    {
-        (true, qual_target + 2)
-    } else {
-        (false, 0)
-    };
-    if !is_match {
-        return false;
-    }
-    next_rec >= data.len() || data[next_rec] == b'@'
-}
-
-#[inline(always)]
-fn is_valid_record_start(data: &[u8], cand: usize, format: Format) -> bool {
-    match format {
-        Format::Fasta => data[cand] == b'>',
-        Format::Fastq => data[cand] == b'@' && is_valid_fastq_record_start(data, cand),
-    }
-}
-
-/// Finds the exact byte index of the first record starting at or after `approx_pos`.
-fn find_record_start(data: &[u8], approx_pos: usize, format: Format) -> usize {
-    if approx_pos == 0 || approx_pos >= data.len() {
-        return approx_pos.min(data.len());
-    }
-    let mut pos = approx_pos.saturating_sub(1);
-    while let Some(newline) = memchr::memchr(b'\n', &data[pos..]) {
-        let cand = pos + newline + 1;
-        if cand >= data.len() {
-            return data.len();
-        }
-        if is_valid_record_start(data, cand, format) {
-            return cand;
-        }
-        pos = cand;
-    }
-    data.len()
-}
-
 /// Processes `num_chunks` chunks across `threads` with work stealing, and reduces the results.
 ///
 /// Chunk `i` goes from split `i` to split `i + 1`. The first and last splits are given, the others
@@ -189,7 +112,11 @@ where
         num_chunks,
         threads,
         (0, data.len()),
-        |i| find_record_start(data, i * chunk_len, format),
+        |i| {
+            format
+                .find_record_start(data, i * chunk_len)
+                .unwrap_or(data.len())
+        },
         |start, end| process(FastxParser::from_slice(&data[start..end])?),
         reduce,
     )
@@ -214,13 +141,8 @@ fn probe_file_record_start(
             return Ok(file_len);
         }
         file.read_exact(&mut buf[..to_read])?;
-        let approx_in_slice = if approx_pos > probe_pos {
-            (approx_pos - probe_pos) as usize
-        } else {
-            1
-        };
-        let cand = find_record_start(&buf[..to_read], approx_in_slice, format);
-        if cand < to_read {
+        let approx_in_slice = approx_pos.saturating_sub(probe_pos) as usize;
+        if let Some(cand) = format.find_record_start(&buf[..to_read], approx_in_slice) {
             return Ok(probe_pos + cand as u64);
         }
         if probe_pos + to_read as u64 >= file_len {

@@ -16,7 +16,6 @@ fastx-gen = { path = "../fastx-gen" }
 clap = { version = "4.5", features = ["derive"] }
 colored = "3.0"
 flate2 = "1.0"
-memchr = "2.8"
 needletail = { version = "0.7", default-features = false, features = [
     "flate2",
     "zstd",

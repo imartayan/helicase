@@ -52,10 +52,35 @@ impl Format {
     pub fn try_from_byte(byte: u8) -> Result<Self> {
         Self::from_byte(byte).ok_or_else(|| Error::invalid_record_start("'>' or '@'", byte))
     }
+
+    /// Returns the index of the first record starting at or after `pos` (always after a newline),
+    /// or `None` if there is none or a FASTQ header is cut by the end of `data`.
+    pub fn find_record_start(self, data: &[u8], pos: usize) -> Option<usize> {
+        let mut start = pos.saturating_sub(1);
+        while let Some(newline) = memchr::memchr(b'\n', data.get(start..)?) {
+            let cand = start + newline + 1;
+            let is_valid = match self {
+                Self::Fasta => data.get(cand) == Some(&b'>'),
+                Self::Fastq => data.get(cand) == Some(&b'@') && is_fastq_header(&data[cand..])?,
+            };
+            if is_valid {
+                return Some(cand);
+            }
+            start = cand;
+        }
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     Record(Range<usize>),
     DnaChunk(Range<usize>),
+}
+
+// A line starting with `@` is a header if the next line does not start with `@` (quality otherwise).
+// `None` if `line` ends before the first byte of the next line.
+fn is_fastq_header(line: &[u8]) -> Option<bool> {
+    let next = memchr::memchr(b'\n', line)? + 1;
+    line.get(next).map(|&b| b != b'@')
 }

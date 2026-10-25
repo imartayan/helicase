@@ -563,3 +563,82 @@ mod paraseq_tests {
         assert_eq!(trait_indices, vec![0, 1]);
     }
 }
+
+#[test]
+fn test_find_record_start() {
+    use helicase::parser::Format;
+
+    let mut fastq = Vec::new();
+    let mut fasta = Vec::new();
+    for eol in ["\n", "\r\n"] {
+        for seq in ["", "A", "AN"] {
+            for qual_start in ['@', '+', 'I'] {
+                for plus in ["+", "+@"] {
+                    let qual: String = seq
+                        .chars()
+                        .enumerate()
+                        .map(|(i, _)| if i == 0 { qual_start } else { '@' })
+                        .collect();
+                    fastq.push(format!("@r{eol}{seq}{eol}{plus}{eol}{qual}{eol}"));
+                }
+            }
+        }
+        for lines in ["", "A", "A\nN"] {
+            fasta.push(format!(
+                ">r{eol}{}",
+                lines
+                    .lines()
+                    .map(|l| format!("{l}{eol}"))
+                    .collect::<String>()
+            ));
+        }
+    }
+    fastq.sort();
+    fastq.dedup();
+
+    // Expected result on the window `data[w0..w1]` at local position `pos`.
+    let expected = |format, data: &[u8], starts: &[usize], w0: usize, w1: usize, pos: usize| {
+        let start = *starts.iter().find(|&&s| s > w0 && s >= w0 + pos)?;
+        let fits = match format {
+            Format::Fasta => start < w1,
+            Format::Fastq => start + data[start..].iter().position(|&b| b == b'\n')? + 1 < w1,
+        };
+        fits.then_some(start - w0)
+    };
+    for (records, format) in [(&fastq, Format::Fastq), (&fasta, Format::Fasta)] {
+        for num_records in [2, 3] {
+            let mut combination = vec![0; num_records];
+            loop {
+                let mut data = Vec::new();
+                let mut starts = Vec::new();
+                for &r in &combination {
+                    starts.push(data.len());
+                    data.extend_from_slice(records[r].as_bytes());
+                }
+                // All windows on 2 records, whole input on 3 records.
+                let windows: Vec<(usize, usize)> = if num_records == 2 {
+                    (0..=data.len())
+                        .flat_map(|w0| (w0..=data.len()).map(move |w1| (w0, w1)))
+                        .collect()
+                } else {
+                    vec![(0, data.len())]
+                };
+                for (w0, w1) in windows {
+                    for pos in 0..=w1 - w0 + 1 {
+                        assert_eq!(
+                            format.find_record_start(&data[w0..w1], pos),
+                            expected(format, &data, &starts, w0, w1, pos),
+                            "{format:?} {:?} window {w0}..{w1} at {pos}",
+                            String::from_utf8_lossy(&data)
+                        );
+                    }
+                }
+                let Some(i) = combination.iter().rposition(|&r| r + 1 < records.len()) else {
+                    break;
+                };
+                combination[i] += 1;
+                combination[i + 1..].fill(0);
+            }
+        }
+    }
+}

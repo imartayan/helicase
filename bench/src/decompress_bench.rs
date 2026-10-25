@@ -267,107 +267,6 @@ impl<'a> Read for BgzfBlockRangeReader<'a> {
 }
 
 #[cfg(feature = "sirocco")]
-#[inline(always)]
-fn is_valid_fastq_record_start(data: &[u8], cand: usize) -> bool {
-    let rem = &data[cand..];
-    let Some(header_nl) = memchr::memchr(b'\n', rem) else {
-        return false;
-    };
-    let seq_start = cand + header_nl + 1;
-    if seq_start >= data.len() || data[seq_start] == b'@' || data[seq_start] == b'+' {
-        return false;
-    }
-    let Some(seq_nl) = memchr::memchr(b'\n', &data[seq_start..]) else {
-        return false;
-    };
-    let seq_end = seq_start + seq_nl;
-    let plus_start = seq_end + 1;
-    if plus_start >= data.len() || data[plus_start] != b'+' {
-        return false;
-    }
-    let Some(plus_nl) = memchr::memchr(b'\n', &data[plus_start..]) else {
-        return false;
-    };
-    let qual_start = plus_start + plus_nl + 1;
-    if qual_start >= data.len() {
-        return false;
-    }
-    let mut seq_len = seq_end - seq_start;
-    if seq_len > 0 && data[seq_start + seq_len - 1] == b'\r' {
-        seq_len -= 1;
-    }
-    let qual_target = qual_start + seq_len;
-    if qual_target >= data.len() {
-        return false;
-    }
-    let (is_match, next_rec) = if data[qual_target] == b'\n' {
-        (true, qual_target + 1)
-    } else if qual_target + 1 < data.len()
-        && data[qual_target] == b'\r'
-        && data[qual_target + 1] == b'\n'
-    {
-        (true, qual_target + 2)
-    } else {
-        (false, 0)
-    };
-    if !is_match {
-        return false;
-    }
-    next_rec >= data.len() || data[next_rec] == b'@'
-}
-
-#[cfg(feature = "sirocco")]
-fn find_fasta_record_start(data: &[u8], approx_pos: usize) -> usize {
-    if approx_pos == 0 || approx_pos >= data.len() {
-        return approx_pos.min(data.len());
-    }
-    if data[approx_pos] == b'>' && data[approx_pos - 1] == b'\n' {
-        return approx_pos;
-    }
-    let mut pos = approx_pos - 1;
-    while let Some(newline) = memchr::memchr(b'\n', &data[pos..]) {
-        let cand = pos + newline + 1;
-        if cand >= data.len() {
-            return data.len();
-        }
-        if data[cand] == b'>' {
-            return cand;
-        }
-        pos = cand;
-    }
-    data.len()
-}
-
-#[cfg(feature = "sirocco")]
-fn find_fastq_record_start(data: &[u8], approx_pos: usize) -> usize {
-    if approx_pos == 0 || approx_pos >= data.len() {
-        return approx_pos.min(data.len());
-    }
-    let mut pos = approx_pos.saturating_sub(1);
-    while let Some(newline) = memchr::memchr(b'\n', &data[pos..]) {
-        let cand = pos + newline + 1;
-        if cand >= data.len() {
-            return data.len();
-        }
-        if data[cand] == b'@' && is_valid_fastq_record_start(data, cand) {
-            return cand;
-        }
-        pos = cand;
-    }
-    data.len()
-}
-
-#[cfg(feature = "sirocco")]
-#[inline(always)]
-fn find_record_start(data: &[u8], approx_pos: usize, is_fastq: bool) -> usize {
-    if is_fastq {
-        find_fastq_record_start(data, approx_pos)
-    } else {
-        find_fasta_record_start(data, approx_pos)
-    }
-}
-
-#[cfg(feature = "sirocco")]
 fn find_record_start_in_bgzf(
     compressed: &[u8],
     blocks: &[BgzfBlockIndex],
@@ -385,8 +284,12 @@ fn find_record_start_in_bgzf(
             .unwrap();
         decoder.reset();
 
-        let cand = find_record_start(&block_data, 1, is_fastq);
-        if cand < block_data.len() {
+        let format = if is_fastq {
+            helicase::parser::Format::Fastq
+        } else {
+            helicase::parser::Format::Fasta
+        };
+        if let Some(cand) = format.find_record_start(&block_data, 0) {
             return (block_idx, cand);
         }
         block_idx += 1;

@@ -486,28 +486,26 @@ fn test_config_dna_len_merge_records() {
 
 #[test]
 fn test_config_merge_records_keep_non_actg() {
-    use helicase::config::advanced::*;
     const CFG: Config = ParserOptions::default()
         .dna_string()
         .and_dna_packed()
         .and_dna_columnar()
         .keep_non_actg()
         .compute_dna_len()
-        .with_flag(MERGE_RECORDS)
+        .merge_records()
         .config();
     check_merge_records::<CFG>();
 }
 
 #[test]
 fn test_config_merge_records_skip_non_actg() {
-    use helicase::config::advanced::*;
     const CFG: Config = ParserOptions::default()
         .dna_string()
         .and_dna_packed()
         .and_dna_columnar()
         .skip_non_actg()
         .compute_dna_len()
-        .with_flag(MERGE_RECORDS)
+        .merge_records()
         .config();
     check_merge_records::<CFG>();
 }
@@ -520,7 +518,7 @@ fn test_config_merge_records_split_non_actg() {
         .and_dna_packed()
         .and_dna_columnar()
         .compute_dna_len()
-        .with_flag(advanced::MERGE_RECORDS)
+        .merge_records()
         .config();
 
     let inputs = [
@@ -704,7 +702,7 @@ fn test_config_swap_packed_seq_vec_merge_records() {
     const CFG: Config = ParserOptions::default()
         .dna_packed()
         .keep_non_actg()
-        .with_flag(advanced::MERGE_RECORDS)
+        .merge_records()
         .config();
     let to_string = |s: &PackedSeqVec| {
         let s = s.as_slice();

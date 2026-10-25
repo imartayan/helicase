@@ -37,7 +37,7 @@ pub trait HelicaseParser: crate::sealed::Sealed {
 
     /// Swap the current sequence as [`ColumnarDNA`] with `other`, without allocating.
     /// The parser keeps parsing into the buffer of `other`, which is cleared at the next record
-    /// (or appended to with [`MERGE_RECORDS`](crate::config::advanced::MERGE_RECORDS)).
+    /// (or appended to with [`merge_records`](crate::ParserOptions::merge_records)).
     fn swap_dna_columnar(&mut self, other: &mut ColumnarDNA);
 
     /// Get a reference to the current sequence as [`PackedDNA`].
@@ -54,7 +54,7 @@ pub trait HelicaseParser: crate::sealed::Sealed {
 
     /// Swap the current sequence as [`PackedDNA`] with `other`, without allocating.
     /// The parser keeps parsing into the buffer of `other`, which is cleared at the next record
-    /// (or appended to with [`MERGE_RECORDS`](crate::config::advanced::MERGE_RECORDS)).
+    /// (or appended to with [`merge_records`](crate::ParserOptions::merge_records)).
     fn swap_dna_packed(&mut self, other: &mut PackedDNA);
 
     /// Get a [`PackedSeq`] based on the underlying [`PackedDNA`].
@@ -121,7 +121,8 @@ pub trait HelicaseParser: crate::sealed::Sealed {
     /// Swap the bitmask marking N bases with `other`, like [`swap_dna_packed`](Self::swap_dna_packed).
     fn swap_mask_n(&mut self, other: &mut BitMask);
 
-    /// Get the length of the current sequence.
+    /// Get the length of the current sequence, or the total length so far with
+    /// [`merge_records`](crate::ParserOptions::merge_records).
     fn get_dna_len(&self) -> usize;
 
     /// Get a reference to the current quality line.
@@ -141,11 +142,11 @@ pub trait HelicaseParser: crate::sealed::Sealed {
 
     /// Manually clear the information of the current chunk.
     /// This is only useful when [`MERGE_DNA_CHUNKS`](crate::config::advanced::MERGE_DNA_CHUNKS)
-    /// or [`MERGE_RECORDS`](crate::config::advanced::MERGE_RECORDS) is enabled.
+    /// or [`merge_records`](crate::ParserOptions::merge_records) is enabled.
     fn clear_chunk(&mut self);
 
     /// Manually clear the information of the current record.
-    /// This is only useful when [`MERGE_RECORDS`](crate::config::advanced::MERGE_RECORDS) is enabled.
+    /// This is only useful with [`merge_records`](crate::ParserOptions::merge_records).
     fn clear_record(&mut self);
 
     /// Get the 0-based index of the current record.

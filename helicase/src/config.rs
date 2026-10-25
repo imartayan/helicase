@@ -44,8 +44,7 @@ pub mod advanced {
     /// Append the chunks of a record instead of replacing them, see
     /// [`clear_chunk`](crate::HelicaseParser::clear_chunk).
     pub const MERGE_DNA_CHUNKS: Config = 1 << 9;
-    /// Append records instead of replacing them, see
-    /// [`clear_record`](crate::HelicaseParser::clear_record). Implies [`MERGE_DNA_CHUNKS`].
+    /// See [`ParserOptions::merge_records`]. Implies [`MERGE_DNA_CHUNKS`].
     pub const MERGE_RECORDS: Config = 1 << 10;
     /// See [`ParserOptions::compute_mask_non_actg`].
     pub const COMPUTE_MASK_NON_ACTG: Config = 1 << 11;
@@ -132,7 +131,7 @@ impl ParserOptions {
         self.0
     }
 
-    /// Enable a flag, typically one of [`advanced`] such as [`MERGE_RECORDS`].
+    /// Enable a flag, typically one of [`advanced`] such as [`COMPUTE_MASK_N`].
     /// Call it after the other options, some of them reset flags.
     #[inline(always)]
     pub const fn with_flag(self, flag: Config) -> Self {
@@ -310,6 +309,16 @@ impl ParserOptions {
         self.without_flag(RETURN_DNA_CHUNK | MERGE_DNA_CHUNKS)
             .with_flag(SPLIT_NON_ACTG | REJECT_NON_ACTG)
             .return_record(true)
+    }
+
+    /// Append the DNA of each record (or chunk) to the previous ones instead of replacing it, mostly useful with bitpacked formats.
+    /// Header and quality stay per record.
+    ///
+    /// Memory grows with the input until [`clear_record`](crate::HelicaseParser::clear_record),
+    /// `get_*_owned` or `swap_*` is called.
+    #[inline(always)]
+    pub const fn merge_records(self) -> Self {
+        self.with_flag(MERGE_RECORDS)
     }
 
     /// Stop the parser iterator after each record (`true` by default).

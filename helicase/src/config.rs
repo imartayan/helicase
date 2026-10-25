@@ -204,7 +204,8 @@ impl ParserOptions {
     /// Set the DNA format to [`PackedDNA`](crate::dna_format::PackedDNA).
     ///
     /// By default, this option splits the sequence at non-ACTG bases, yielding one [`Event::DnaChunk`](crate::parser::Event) per contiguous ACTG run.
-    /// Other behaviors can be set using [`keep_non_actg`](ParserOptions::keep_non_actg) or [`skip_non_actg`](ParserOptions::skip_non_actg).
+    /// Other behaviors can be set using [`keep_non_actg`](ParserOptions::keep_non_actg), [`skip_non_actg`](ParserOptions::skip_non_actg)
+    /// or [`reject_non_actg`](ParserOptions::reject_non_actg).
     ///
     /// Note that the default [`split_non_actg`](ParserOptions::split_non_actg) behavior disables [`Event::Record`](crate::parser::Event) to avoid duplicate processing.
     /// This can be turned back on using [`return_record`](ParserOptions::return_record).
@@ -216,7 +217,8 @@ impl ParserOptions {
     /// Set the DNA format to [`ColumnarDNA`](crate::dna_format::ColumnarDNA).
     ///
     /// By default, this option splits the sequence at non-ACTG bases, yielding one [`Event::DnaChunk`](crate::parser::Event) per contiguous ACTG run.
-    /// Other behaviors can be set using [`keep_non_actg`](ParserOptions::keep_non_actg) or [`skip_non_actg`](ParserOptions::skip_non_actg).
+    /// Other behaviors can be set using [`keep_non_actg`](ParserOptions::keep_non_actg), [`skip_non_actg`](ParserOptions::skip_non_actg)
+    /// or [`reject_non_actg`](ParserOptions::reject_non_actg).
     ///
     /// Note that the default [`split_non_actg`](ParserOptions::split_non_actg) behavior disables [`Event::Record`](crate::parser::Event) to avoid duplicate processing.
     /// This can be turned back on using [`return_record`](ParserOptions::return_record).
@@ -301,7 +303,8 @@ impl ParserOptions {
             .return_record(true)
     }
 
-    /// Return an [`ErrorKind::InvalidBase`](crate::parser::ErrorKind) at the first non-ACTG base.
+    /// Return an [`ErrorKind::InvalidBase`](crate::parser::ErrorKind::InvalidBase) at the first non-ACTG base,
+    /// yielding one [`Event::Record`](crate::parser::Event) per valid record.
     #[inline(always)]
     pub const fn reject_non_actg(self) -> Self {
         self.without_flag(RETURN_DNA_CHUNK | MERGE_DNA_CHUNKS)

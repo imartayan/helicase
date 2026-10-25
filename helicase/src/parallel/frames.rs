@@ -29,10 +29,10 @@ pub(super) trait FrameDecoder: Sized + Send {
     fn first_byte(frame: &[u8]) -> io::Result<u8>;
 }
 
-#[cfg(feature = "sirocco")]
+#[cfg(feature = "gz")]
 pub(super) struct BgzfDecoder(sirocco::inflate::Decoder);
 
-#[cfg(feature = "sirocco")]
+#[cfg(feature = "gz")]
 impl FrameDecoder for BgzfDecoder {
     fn new() -> io::Result<Self> {
         Ok(Self(sirocco::inflate::Decoder::new(sirocco::Format::Gzip)))
@@ -59,7 +59,7 @@ impl FrameDecoder for BgzfDecoder {
     }
 }
 
-#[cfg(feature = "sirocco")]
+#[cfg(feature = "gz")]
 pub(super) fn index_bgzf_blocks(compressed: &[u8]) -> Vec<Frame> {
     let mut blocks = Vec::with_capacity(compressed.len() / 2048);
     let mut comp_offset = 0;

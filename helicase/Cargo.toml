@@ -22,7 +22,7 @@ memchr = { version = "2.8", default-features = false }
 memmap2 = { version = "0.9", optional = true }
 packed-seq = { version = "5.0", default-features = false, optional = true }
 paraseq = { version = "0.6", default-features = false, optional = true }
-sirocco = { version = "0.2", optional = true }
+sirocco = { version = "0.2", default-features = false, optional = true }
 zstd = { version = "0.14", default-features = false, optional = true }
 
 [dev-dependencies]
@@ -33,11 +33,11 @@ zstd = "0.14"
 
 [features]
 default = ["std", "gz", "zstd"]
-std = ["dep:deko", "dep:memmap2", "memchr/std"]
+std = ["dep:deko", "dep:memmap2", "memchr/std", "sirocco?/std"]
 bz2 = ["std", "deko/bzip2"]
-gz = ["std", "sirocco"]
+gz = ["std", "dep:sirocco"]
 xz = ["std", "deko/xz"]
-zstd = ["std", "deko/zstd", "dep:zstd"]
+zstd = ["std", "dep:zstd"]
 no-pdep = []
 needletail = ["std"]
 packed-seq = ["std", "dep:packed-seq"]

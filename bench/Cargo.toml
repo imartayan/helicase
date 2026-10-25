@@ -56,7 +56,7 @@ perf-event2 = "0.7"
 
 [features]
 simd-minimizers = ["helicase/packed-seq", "dep:simd-minimizers"]
-sirocco = ["helicase/sirocco"]
+sirocco = ["helicase/gz"]
 
 [[example]]
 name = "simd_mini"

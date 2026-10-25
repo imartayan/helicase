@@ -222,7 +222,7 @@ let total_len: usize = ParallelFastxParser::<CONFIG>::from_file(&path)?
 
 ### Standard library (`std`)
 
-Enabled by default and required for now. With `default-features = false`, enable it explicitly, e.g. `features = ["std", "zstd"]`.
+Enabled by default. Without it (`default-features = false`), only slices can be parsed (no files, readers, decompression or multi-threading), e.g. for WebAssembly.
 
 ### Packed-seq (`packed-seq`)
 
@@ -236,6 +236,8 @@ Helicase supports transparent decompression via `from_file`, automatically detec
 - `zstd` (default) for zstd, including multi-frame files
 - `bz2` for bzip2
 - `xz` for xz
+
+`zstd` and `xz` need a C compiler, use `default-features = false, features = ["std", "gz"]` (and optionally `bz2`) for a pure Rust build.
 
 ### No PDEP (`no-pdep`)
 

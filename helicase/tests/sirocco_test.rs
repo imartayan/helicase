@@ -1,4 +1,4 @@
-#[cfg(feature = "sirocco")]
+#[cfg(feature = "gz")]
 mod tests {
     use flate2::Compression;
     use flate2::write::GzEncoder;

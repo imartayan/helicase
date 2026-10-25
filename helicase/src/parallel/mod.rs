@@ -13,7 +13,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-#[cfg(any(feature = "sirocco", feature = "zstd"))]
+#[cfg(any(feature = "gz", feature = "zstd"))]
 mod frames;
 #[cfg(feature = "zstd")]
 pub(crate) use frames::index_zstd_frames;
@@ -166,7 +166,7 @@ where
 {
     match CompressionFormat::from_path(path)? {
         None => {}
-        #[cfg(feature = "sirocco")]
+        #[cfg(feature = "gz")]
         Some(CompressionFormat::Bgzf) if threads > 1 => {
             let mmap = unsafe { memmap2::Mmap::map(&File::open(path)?)? };
             let blocks = frames::index_bgzf_blocks(&mmap);

@@ -1,13 +1,11 @@
 use super::{CompressionFormat, FromInputData, InputBuffer, SliceInput};
 use crate::parser::Result;
 use core::marker::PhantomData;
-#[cfg(feature = "sirocco")]
-use core::ops::Range;
+use core::mem::{replace, take};
 use deko::read::AnyDecoder;
 use memmap2::Mmap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
-use std::mem::{replace, take};
 use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
 
@@ -144,22 +142,22 @@ pub trait FromMmap<'a>: FromInputData<'a, MmapInput<'a>> {
 
 impl<'a, F: FromInputData<'a, MmapInput<'a>>> FromMmap<'a> for F {}
 
-#[cfg(feature = "sirocco")]
+#[cfg(feature = "gz")]
 const SIROCCO_BUF_LEN: usize = 256 * 1024;
 
-#[cfg(feature = "sirocco")]
+#[cfg(feature = "gz")]
 struct SiroccoMultiGzReader<R: BufRead> {
     inner: R,
     decoder: sirocco::inflate::Decoder,
     buf: Vec<u8>,
-    pending: Range<usize>,
+    pending: core::ops::Range<usize>,
     prev_total_out: usize,
     full: bool,
     done: bool,
     pending_err: Option<io::Error>,
 }
 
-#[cfg(feature = "sirocco")]
+#[cfg(feature = "gz")]
 impl<R: BufRead> SiroccoMultiGzReader<R> {
     const fn new(inner: R) -> Self {
         Self {
@@ -238,7 +236,7 @@ impl<R: BufRead> SiroccoMultiGzReader<R> {
     }
 }
 
-#[cfg(feature = "sirocco")]
+#[cfg(feature = "gz")]
 impl<R: BufRead> Read for SiroccoMultiGzReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if buf.is_empty() {
@@ -263,7 +261,7 @@ impl<R: BufRead> Read for SiroccoMultiGzReader<R> {
 }
 
 enum ReaderDecoder<R: Read> {
-    #[cfg(feature = "sirocco")]
+    #[cfg(feature = "gz")]
     Sirocco(Box<SiroccoMultiGzReader<BufReader<R>>>),
     #[cfg(feature = "zstd")]
     Zstd(Box<zstd::stream::read::Decoder<'static, BufReader<R>>>),
@@ -274,7 +272,7 @@ impl<R: Read> Read for ReaderDecoder<R> {
     #[inline(always)]
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self {
-            #[cfg(feature = "sirocco")]
+            #[cfg(feature = "gz")]
             Self::Sirocco(r) => r.read(buf),
             #[cfg(feature = "zstd")]
             Self::Zstd(r) => r.read(buf),
@@ -429,7 +427,7 @@ impl<'a, R: Read + 'a> ReaderInput<'a, R> {
         };
 
         let decoder = match compression {
-            #[cfg(feature = "sirocco")]
+            #[cfg(feature = "gz")]
             Some(CompressionFormat::Gzip | CompressionFormat::Bgzf) => {
                 ReaderDecoder::Sirocco(Box::new(SiroccoMultiGzReader::new(buf_reader)))
             }

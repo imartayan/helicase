@@ -1,4 +1,4 @@
-use super::{CompressionFormat, FromInputData, InputData, SliceInput};
+use super::{CompressionFormat, FromInputData, InputBuffer, SliceInput};
 use crate::parser::Result;
 use core::marker::PhantomData;
 #[cfg(feature = "sirocco")]
@@ -72,6 +72,7 @@ pub struct MmapInput<'a> {
 }
 
 impl<'a> MmapInput<'a> {
+    /// Memory-maps the file at `path`.
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         // Unsafe: mmap are intrisically unsafe.
         // Here we add on the top of that a slice of [u8] that will live as long as file is not dropped.
@@ -95,9 +96,7 @@ impl<'a> Iterator for MmapInput<'a> {
     }
 }
 
-impl crate::sealed::Sealed for MmapInput<'_> {}
-
-impl<'a> InputData<'a> for MmapInput<'a> {
+impl<'a> InputBuffer<'a> for MmapInput<'a> {
     const RANDOM_ACCESS: bool = true;
 
     #[inline(always)]
@@ -131,6 +130,7 @@ impl<'a> InputData<'a> for MmapInput<'a> {
     }
 }
 
+/// Types that can be built from a memory-mapped file, such as parsers.
 pub trait FromMmap<'a>: FromInputData<'a, MmapInput<'a>> {
     /// Build the struct from a memory-mapped file.
     /// It does not support transparent decompression.
@@ -415,6 +415,7 @@ impl<'a, R: Read + 'a> ReaderInput<'a, R> {
         true
     }
 
+    /// Creates an input reading from `reader`, with transparent decompression.
     pub fn new(reader: R) -> io::Result<Self> {
         let (decoder, compression) = Self::decoder(reader)?;
         Self::with_source(Source::Direct(decoder), compression)
@@ -543,9 +544,7 @@ impl<'a, R: Read + 'a> Iterator for ReaderInput<'a, R> {
     }
 }
 
-impl<'a, R: Read + 'a> crate::sealed::Sealed for ReaderInput<'a, R> {}
-
-impl<'a, R: Read + 'a> InputData<'a> for ReaderInput<'a, R> {
+impl<'a, R: Read + 'a> InputBuffer<'a> for ReaderInput<'a, R> {
     const RANDOM_ACCESS: bool = false;
 
     #[inline(always)]
@@ -610,6 +609,7 @@ impl<'a, R: Read + 'a> InputData<'a> for ReaderInput<'a, R> {
     }
 }
 
+/// Types that can be built from a reader, such as parsers.
 pub trait FromReader<'a, R: Read + 'a>: FromInputData<'a, ReaderInput<'a, R>> {
     /// Build the struct from a reader.
     /// It supports transparent decompression.
@@ -638,6 +638,7 @@ impl ReaderInput<'static, File> {
     }
 }
 
+/// Types that can be built from a file, such as parsers.
 pub trait FromFile: FromInputData<'static, FileInput> {
     /// Build the struct from a file.
     /// It supports transparent decompression.

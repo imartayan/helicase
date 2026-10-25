@@ -30,9 +30,12 @@ pub use traits::*;
 /// A specialized [`Result`] type for Helicase parser operations.
 pub type Result<T> = core::result::Result<T, Error>;
 
+/// Sequence file format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
+    /// Records starting with `>`.
     Fasta,
+    /// Records starting with `@`.
     Fastq,
 }
 
@@ -72,9 +75,12 @@ impl Format {
     }
 }
 
+/// Item yielded by the parsers, see [`ParserOptions`](crate::ParserOptions) to choose which ones.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
+    /// End of a record, with its byte range in the input.
     Record(Range<usize>),
+    /// Run of ACTG bases, with its byte range in the input.
     DnaChunk(Range<usize>),
 }
 

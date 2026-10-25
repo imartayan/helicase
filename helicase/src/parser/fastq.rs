@@ -19,6 +19,7 @@ use core::ops::Range;
 /// // set the options of the parser (at compile-time)
 /// const CONFIG: Config = ParserOptions::default().config();
 ///
+/// # #[cfg(feature = "std")]
 /// fn main() -> std::io::Result<()> {
 ///     let path = "...";
 ///
@@ -34,6 +35,8 @@ use core::ops::Range;
 ///     }
 ///     Ok(())
 /// }
+/// # #[cfg(not(feature = "std"))]
+/// # fn main() {}
 /// ```
 pub struct FastqParser<'a, const CONFIG: Config, I: InputData<'a>> {
     lexer: Lexer<'a, CONFIG, I>,

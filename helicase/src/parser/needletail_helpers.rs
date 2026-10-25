@@ -32,11 +32,13 @@ impl<'a> NeedletailReader<'a> {
 }
 
 impl<'a> SequenceRecord<'a> {
+    /// Returns the header, without `>` or `@`.
     #[inline(always)]
     pub fn id(&self) -> &'a [u8] {
         self.0.get_header()
     }
 
+    /// Returns the sequence, always borrowed.
     #[inline(always)]
     pub fn seq(&self) -> Cow<'a, [u8]> {
         Cow::Borrowed(self.0.get_dna_string())
@@ -48,16 +50,19 @@ impl<'a> SequenceRecord<'a> {
         self.0.get_dna_string()
     }
 
+    /// Returns the quality line, `None` for FASTA.
     #[inline(always)]
     pub fn qual(&self) -> Option<&'a [u8]> {
         self.0.get_quality()
     }
 
+    /// Returns the number of bases.
     #[inline(always)]
     pub fn num_bases(&self) -> usize {
         self.0.get_dna_len()
     }
 
+    /// Returns the format of the record.
     #[inline(always)]
     pub fn format(&self) -> Format {
         self.0.format()

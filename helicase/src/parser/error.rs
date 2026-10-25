@@ -19,14 +19,24 @@ pub struct Error {
 pub enum ErrorKind {
     /// The first record does not begin with an expected format marker
     /// (`>` for FASTA, `@` for FASTQ, or either for auto-detection).
-    InvalidRecordStart { expected: &'static str, found: u8 },
+    InvalidRecordStart {
+        /// The expected marker(s).
+        expected: &'static str,
+        /// The byte found instead.
+        found: u8,
+    },
 
     /// The input stream or buffer ended unexpectedly in the middle of a record.
     TruncatedRecord,
 
     /// A non-ACTG base was found at byte offset `pos` with
     /// [`reject_non_actg`](crate::ParserOptions::reject_non_actg).
-    InvalidBase { byte: u8, pos: usize },
+    InvalidBase {
+        /// The non-ACTG byte.
+        byte: u8,
+        /// Its offset in the input.
+        pos: usize,
+    },
 
     /// Decompression error occurred while reading a compressed stream (gzip/BGZF/zstd).
     Decompression(String),

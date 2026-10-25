@@ -8,6 +8,8 @@ mod reader;
 #[cfg(feature = "std")]
 pub use reader::*;
 
+pub(crate) use buffer::InputBuffer;
+
 /// Supported compression formats for FASTX files and streams.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -91,62 +93,74 @@ impl core::fmt::Display for CompressionFormat {
     }
 }
 
-pub trait InputData<'a>: Iterator<Item = Result<&'a [u8]>> + crate::sealed::Sealed {
-    const RANDOM_ACCESS: bool;
+/// Input read by the parsers, such as [`SliceInput`].
+///
+/// It is only implemented in this crate.
+pub trait InputData<'a>: InputBuffer<'a> {}
 
-    /// Returns the first byte of the (uncompressed when possible) input.
-    fn first_byte(&self) -> u8;
+impl<'a, I: InputBuffer<'a>> InputData<'a> for I {}
 
-    /// Get a reference to the current block of up to 64 bytes.
-    ///
-    /// If the length is smaller than 64, the following bytes are guaranteed to be zeros.
-    fn current_block(&self) -> &[u8];
+mod buffer {
+    use super::*;
 
-    /// Returns the type of compression format detected, `None` if uncompressed.
-    #[inline(always)]
-    fn compression_format(&mut self) -> Result<Option<CompressionFormat>> {
-        Ok(None)
+    pub trait InputBuffer<'a>: Iterator<Item = Result<&'a [u8]>> {
+        const RANDOM_ACCESS: bool;
+
+        /// Returns the first byte of the (uncompressed when possible) input.
+        fn first_byte(&self) -> u8;
+
+        /// Get a reference to the current block of up to 64 bytes.
+        ///
+        /// If the length is smaller than 64, the following bytes are guaranteed to be zeros.
+        fn current_block(&self) -> &[u8];
+
+        /// Returns the type of compression format detected, `None` if uncompressed.
+        #[inline(always)]
+        fn compression_format(&mut self) -> Result<Option<CompressionFormat>> {
+            Ok(None)
+        }
+
+        /// Get a reference to the internal buffer.
+        ///
+        /// This is only relevant for reader-based implementations.
+        fn buffer(&self) -> &[u8];
+
+        /// Returns the offset of the buffer.
+        ///
+        /// This is only relevant for reader-based implementations.
+        #[inline(always)]
+        fn buffer_offset(&self) -> usize {
+            0
+        }
+
+        /// Returns a slice of the buffered data for the given global byte range.
+        #[inline(always)]
+        fn slice(&self, range: Range<usize>) -> &[u8] {
+            let off = self.buffer_offset();
+            // A line feed without `\r` in a CRLF input gives an inverted range: return it empty.
+            &self.buffer()[range.start - off..range.end.max(range.start) - off]
+        }
+
+        /// Returns `true` if we are reaching the end of the buffer.
+        ///
+        /// This is only relevant for reader-based implementations.
+        fn is_end_of_buffer(&self) -> bool;
+
+        /// Shift buffered data from `keep_from` to the start of the buffer, then refill from the reader.
+        ///
+        /// This is only relevant for reader-based implementations.
+        #[doc(hidden)]
+        #[inline(always)]
+        fn make_room(&mut self, _keep_from: usize) {}
+
+        /// Seek internal buffer position to the start of the block after `block_idx`.
+        #[doc(hidden)]
+        #[inline(always)]
+        fn seek_block(&mut self, _block_idx: usize) {}
     }
-
-    /// Get a reference to the internal buffer.
-    ///
-    /// This is only relevant for reader-based implementations.
-    fn buffer(&self) -> &[u8];
-
-    /// Returns the offset of the buffer.
-    ///
-    /// This is only relevant for reader-based implementations.
-    #[inline(always)]
-    fn buffer_offset(&self) -> usize {
-        0
-    }
-
-    /// Returns a slice of the buffered data for the given global byte range.
-    #[inline(always)]
-    fn slice(&self, range: Range<usize>) -> &[u8] {
-        let off = self.buffer_offset();
-        // A line feed without `\r` in a CRLF input gives an inverted range: return it empty.
-        &self.buffer()[range.start - off..range.end.max(range.start) - off]
-    }
-
-    /// Returns `true` if we are reaching the end of the buffer.
-    ///
-    /// This is only relevant for reader-based implementations.
-    fn is_end_of_buffer(&self) -> bool;
-
-    /// Shift buffered data from `keep_from` to the start of the buffer, then refill from the reader.
-    ///
-    /// This is only relevant for reader-based implementations.
-    #[doc(hidden)]
-    #[inline(always)]
-    fn make_room(&mut self, _keep_from: usize) {}
-
-    /// Seek internal buffer position to the start of the block after `block_idx`.
-    #[doc(hidden)]
-    #[inline(always)]
-    fn seek_block(&mut self, _block_idx: usize) {}
 }
 
+/// Types that can be built from an [`InputData`], such as parsers.
 pub trait FromInputData<'a, I: InputData<'a>>: Sized {
     /// Build the struct from a type implementing [`InputData`].
     fn from_input(input: I) -> Result<Self>;
@@ -162,6 +176,7 @@ pub struct SliceInput<'a> {
 }
 
 impl<'a> SliceInput<'a> {
+    /// Creates an input reading `data`.
     pub fn new(data: &'a [u8]) -> Self {
         let mut last_block = [0; 64];
         last_block[..data.len() % 64].copy_from_slice(&data[(data.len() / 64) * 64..]);
@@ -201,9 +216,7 @@ impl<'a> Iterator for SliceInput<'a> {
     }
 }
 
-impl crate::sealed::Sealed for SliceInput<'_> {}
-
-impl<'a> InputData<'a> for SliceInput<'a> {
+impl<'a> InputBuffer<'a> for SliceInput<'a> {
     const RANDOM_ACCESS: bool = true;
 
     #[inline(always)]
@@ -241,6 +254,7 @@ impl<'a> InputData<'a> for SliceInput<'a> {
     }
 }
 
+/// Types that can be built from a slice, such as parsers.
 pub trait FromSlice<'a>: FromInputData<'a, SliceInput<'a>> {
     /// Build the struct from a slice.
     /// It does not support transparent decompression.

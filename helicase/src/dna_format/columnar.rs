@@ -6,6 +6,8 @@ const BITS_PER_BP: usize = 1;
 const BITS_PER_BLOCK: usize = T::BITS as usize;
 const BP_PER_BLOCK: usize = BITS_PER_BLOCK / BITS_PER_BP;
 
+/// DNA sequence stored as two bit vectors, with (high, low) bits
+/// A = (0, 0), C = (0, 1), T = (1, 0), G = (1, 1).
 #[derive(Clone, Default)]
 pub struct ColumnarDNA {
     high_bits: Vec<T>,
@@ -16,6 +18,7 @@ pub struct ColumnarDNA {
 }
 
 impl ColumnarDNA {
+    /// Creates an empty sequence without allocating.
     #[inline(always)]
     pub const fn new() -> Self {
         Self {
@@ -27,6 +30,7 @@ impl ColumnarDNA {
         }
     }
 
+    /// Creates an empty sequence with room for `capacity` words of 64 bases.
     #[inline(always)]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
@@ -38,21 +42,25 @@ impl ColumnarDNA {
         }
     }
 
+    /// Returns the number of bases.
     #[inline(always)]
     pub const fn len(&self) -> usize {
         self.len
     }
 
+    /// Returns `true` if there are no bases.
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
         self.len == 0
     }
 
+    /// Returns the number of words of 64 bases that fit without reallocating.
     #[inline(always)]
     pub const fn capacity(&self) -> usize {
         self.high_bits.capacity()
     }
 
+    /// Reserves room for at least `additional_bases` more bases.
     #[inline(always)]
     pub fn reserve(&mut self, additional_bases: usize) {
         let additional_words = additional_bases / BP_PER_BLOCK + 2;
@@ -60,6 +68,7 @@ impl ColumnarDNA {
         self.low_bits.reserve(additional_words);
     }
 
+    /// Removes all bases, keeping the allocated memory.
     #[inline(always)]
     pub fn clear(&mut self) {
         self.high_bits.clear();
@@ -70,7 +79,7 @@ impl ColumnarDNA {
     }
 
     #[inline(always)]
-    pub fn pop_base(&mut self) {
+    pub(crate) fn pop_base(&mut self) {
         if self.len > 0 {
             let rem = self.len % BITS_PER_BLOCK;
             self.len -= 1;
@@ -87,6 +96,7 @@ impl ColumnarDNA {
         }
     }
 
+    /// Appends 64 bases given by their high and low bits.
     #[inline(always)]
     pub fn append_block(&mut self, high: T, low: T) {
         let rem = self.len % BITS_PER_BLOCK;
@@ -114,6 +124,8 @@ impl ColumnarDNA {
         }
     }
 
+    /// Appends the `size` bases given by the low bits of `high` and `low`, other bits are ignored.
+    /// `size` must be at most 64.
     #[inline(always)]
     pub fn append(&mut self, high: T, low: T, size: usize) {
         if size == 0 {
@@ -140,16 +152,19 @@ impl ColumnarDNA {
         }
     }
 
+    /// Returns the high bits as complete words of 64 bases, and the last partial word.
     #[inline(always)]
     pub fn high_bits(&self) -> (&[T], T) {
         (&self.high_bits, self.cur_hi)
     }
 
+    /// Returns the low bits as complete words of 64 bases, and the last partial word.
     #[inline(always)]
     pub fn low_bits(&self) -> (&[T], T) {
         (&self.low_bits, self.cur_lo)
     }
 
+    /// Returns the (high, low) bits of base `i`, which must be lower than [`len`](Self::len).
     #[inline(always)]
     pub fn get(&self, i: usize) -> (bool, bool) {
         if i < self.len & (!0 << BITS_PER_BLOCK.trailing_zeros()) {
@@ -165,6 +180,7 @@ impl ColumnarDNA {
         }
     }
 
+    /// Returns base `i` as `A`, `C`, `T` or `G`.
     #[inline(always)]
     pub fn get_char(&self, i: usize) -> char {
         match self.get(i) {

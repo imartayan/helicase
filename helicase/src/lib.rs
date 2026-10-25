@@ -32,6 +32,7 @@
 //! // set the options of the parser (at compile-time)
 //! const CONFIG: Config = ParserOptions::default().config();
 //!
+//! # #[cfg(feature = "std")]
 //! fn main() -> std::io::Result<()> {
 //!     let path = "...";
 //!
@@ -51,6 +52,8 @@
 //!     }
 //!     Ok(())
 //! }
+//! # #[cfg(not(feature = "std"))]
+//! # fn main() {}
 //! ```
 //! ## Input
 //!
@@ -108,6 +111,7 @@
 //!
 //! const CONFIG: Config = ParserOptions::default().config();
 //!
+//! # #[cfg(feature = "std")]
 //! fn main() -> std::io::Result<()> {
 //!     let mut parser = FastxParser::<CONFIG>::from_file("reads.fastq.gz")?;
 //!
@@ -118,6 +122,8 @@
 //!     }
 //!     Ok(())
 //! }
+//! # #[cfg(not(feature = "std"))]
+//! # fn main() {}
 //! ```
 //!
 //! When both records and chunks are active (e.g. `dna_packed().return_record(true)`), match on the event using `?` to distinguish them:
@@ -130,6 +136,7 @@
 //! // dna_packed enables DnaChunk events; explicitly turn Record events back on.
 //! const CONFIG: Config = ParserOptions::default().dna_packed().return_record(true).config();
 //!
+//! # #[cfg(feature = "std")]
 //! fn main() -> std::io::Result<()> {
 //!     let mut parser = FastxParser::<CONFIG>::from_file("reads.fastq.gz")?;
 //!
@@ -147,6 +154,8 @@
 //!     }
 //!     Ok(())
 //! }
+//! # #[cfg(not(feature = "std"))]
+//! # fn main() {}
 //! ```
 //!
 //! ## Iterating over chunks of packed DNA
@@ -162,6 +171,7 @@
 //!     .dna_packed()
 //!     .config();
 //!
+//! # #[cfg(feature = "std")]
 //! fn main() -> std::io::Result<()> {
 //!     let path = "...";
 //!     let mut parser = FastxParser::<CONFIG>::from_file(&path)?;
@@ -180,6 +190,8 @@
 //!     }
 //!     Ok(())
 //! }
+//! # #[cfg(not(feature = "std"))]
+//! # fn main() {}
 //! ```
 //!
 //! ## Parallel parsing
@@ -197,6 +209,7 @@
 //!
 //! const CONFIG: Config = ParserOptions::default().ignore_headers().config();
 //!
+//! # #[cfg(feature = "std")]
 //! fn main() -> std::io::Result<()> {
 //!     let path = "...";
 //!
@@ -214,6 +227,8 @@
 //!
 //!     Ok(())
 //! }
+//! # #[cfg(not(feature = "std"))]
+//! # fn main() {}
 //! ```
 //!
 //! Or aggregate results across threads with [`reduce`](ParallelFastxParser::reduce):
@@ -222,6 +237,7 @@
 //! # use helicase::config::*;
 //! # use helicase::*;
 //! # const CONFIG: Config = ParserOptions::default().ignore_headers().config();
+//! # #[cfg(feature = "std")]
 //! # fn main() -> std::io::Result<()> {
 //! # let path = "...";
 //! let total_len: usize = ParallelFastxParser::<CONFIG>::from_file(&path)?
@@ -239,6 +255,8 @@
 //!     )?;
 //! # Ok(())
 //! # }
+//! # #[cfg(not(feature = "std"))]
+//! # fn main() {}
 //! ```
 //!
 //! # Crate features
@@ -278,6 +296,7 @@
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(not(any(feature = "std", test)), no_std)]
+#![warn(missing_docs)]
 
 extern crate alloc;
 

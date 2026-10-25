@@ -16,6 +16,7 @@ use alloc::boxed::Box;
 /// // set the options of the parser (at compile-time)
 /// const CONFIG: Config = ParserOptions::default().config();
 ///
+/// # #[cfg(feature = "std")]
 /// fn main() -> std::io::Result<()> {
 ///     let path = "...";
 ///
@@ -31,6 +32,8 @@ use alloc::boxed::Box;
 ///     }
 ///     Ok(())
 /// }
+/// # #[cfg(not(feature = "std"))]
+/// # fn main() {}
 /// ```
 pub struct FastxParser<'a, const CONFIG: Config>(Box<dyn HelicaseParserIter + Send + 'a>);
 

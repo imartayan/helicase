@@ -16,6 +16,7 @@ const MARGIN: usize = if cfg!(feature = "packed-seq") {
     0
 };
 
+/// DNA sequence packed on 2 bits per base: A = 0, C = 1, T = 2, G = 3.
 #[derive(Default)]
 pub struct PackedDNA {
     /// The main storage.
@@ -39,6 +40,7 @@ impl Clone for PackedDNA {
 }
 
 impl PackedDNA {
+    /// Creates an empty sequence without allocating.
     #[inline(always)]
     pub const fn new() -> Self {
         Self {
@@ -49,6 +51,7 @@ impl PackedDNA {
         }
     }
 
+    /// Creates an empty sequence with room for `capacity` words of 32 bases.
     #[inline(always)]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
@@ -59,16 +62,19 @@ impl PackedDNA {
         }
     }
 
+    /// Returns the number of bases.
     #[inline(always)]
     pub const fn len(&self) -> usize {
         self.num_bits / BITS_PER_BP
     }
 
+    /// Returns `true` if there are no bases.
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
         self.num_bits == 0
     }
 
+    /// Returns the number of words of 32 bases that fit without reallocating.
     #[inline(always)]
     pub const fn capacity(&self) -> usize {
         (self.bits.capacity() / WORD_BYTES).saturating_sub(MARGIN)
@@ -104,11 +110,13 @@ impl PackedDNA {
         self.init_bytes = self.bits.len();
     }
 
+    /// Reserves room for at least `additional_bases` more bases.
     #[inline(always)]
     pub fn reserve(&mut self, additional_bases: usize) {
         self.ensure_spare(additional_bases / BP_PER_BLOCK + 2);
     }
 
+    /// Removes all bases, keeping the allocated memory.
     #[inline(always)]
     pub fn clear(&mut self) {
         self.bits.clear();
@@ -117,7 +125,7 @@ impl PackedDNA {
     }
 
     #[inline(always)]
-    pub fn pop_base(&mut self) {
+    pub(crate) fn pop_base(&mut self) {
         if self.num_bits >= BITS_PER_BP {
             let rem = self.num_bits % BITS_PER_BLOCK;
             self.num_bits -= BITS_PER_BP;
@@ -134,6 +142,7 @@ impl PackedDNA {
         }
     }
 
+    /// Appends 64 bases packed on 2 bits each.
     #[inline(always)]
     pub fn append_block(&mut self, packed: u128) {
         self.ensure_spare(2);
@@ -194,6 +203,8 @@ impl PackedDNA {
         }
     }
 
+    /// Appends the `num_bits / 2` bases packed in the low `num_bits` bits of `packed`, other bits are ignored.
+    /// `num_bits` must be even and at most 128.
     #[inline(always)]
     pub fn append(&mut self, packed: u128, num_bits: usize) {
         if num_bits == 0 {
@@ -258,6 +269,7 @@ impl PackedDNA {
         (len, self.bits)
     }
 
+    /// Returns the 2-bit code of base `i`, which must be lower than [`len`](Self::len).
     #[inline(always)]
     pub fn get(&self, i: usize) -> u8 {
         let block_idx = i / BP_PER_BLOCK;
@@ -271,6 +283,7 @@ impl PackedDNA {
         ((word >> bit_offset) & 0b11) as u8
     }
 
+    /// Returns base `i` as `A`, `C`, `T` or `G`.
     #[inline(always)]
     pub fn get_char(&self, i: usize) -> char {
         const LUT: [char; 4] = ['A', 'C', 'T', 'G'];
@@ -321,12 +334,14 @@ impl PackedDNA {
         padded
     }
 
+    /// Returns a [`PackedSeq`] view without copying, [`pad`](Self::pad) must be called after modifying it.
     #[cfg(feature = "packed-seq")]
     #[inline(always)]
     pub fn as_packed_seq(&self) -> PackedSeq<'_> {
         PackedSeq::from_raw_parts(self.padded_bytes(), 0, self.len())
     }
 
+    /// Converts into a [`PackedSeqVec`] without copying.
     #[cfg(feature = "packed-seq")]
     #[inline(always)]
     pub fn into_packed_seq_vec(mut self) -> PackedSeqVec {

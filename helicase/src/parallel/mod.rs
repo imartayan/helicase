@@ -236,9 +236,13 @@ fn with_thread_file<T>(path: &Path, f: impl FnOnce(&mut File) -> Result<T>) -> R
 /// Trait for return types of [`ParallelFastxParser::for_each`] closures.
 ///
 /// Implemented for `()` (infallible) and [`Result<()>`].
-pub trait ParallelResult {
+pub trait ParallelResult: crate::sealed::Sealed {
+    /// Converts the value returned by the closure into a [`Result`].
     fn into_result(self) -> Result<()>;
 }
+
+impl crate::sealed::Sealed for () {}
+impl crate::sealed::Sealed for Result<()> {}
 
 impl ParallelResult for () {
     #[inline(always)]

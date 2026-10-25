@@ -8,38 +8,55 @@ pub mod advanced {
 
     use super::*;
 
+    /// Returns `true` if any bit of `flag` is set in `config`.
     #[inline(always)]
     pub const fn flag_is_set(config: Config, flag: Config) -> bool {
         config & flag != 0
     }
 
+    /// Returns `true` if no bit of `flag` is set in `config`.
     #[inline(always)]
     pub const fn flag_is_not_set(config: Config, flag: Config) -> bool {
         config & flag == 0
     }
 
+    /// Configuration of [`ParserOptions::default`]: headers and DNA strings.
     pub const DEFAULT_CONFIG: Config = COMPUTE_HEADER | COMPUTE_DNA_STRING | RETURN_RECORD;
 
+    /// See [`ParserOptions::compute_headers`].
     pub const COMPUTE_HEADER: Config = 1 << 0;
+    /// See [`ParserOptions::and_dna_string`].
     pub const COMPUTE_DNA_STRING: Config = 1 << 1;
+    /// See [`ParserOptions::and_dna_columnar`].
     pub const COMPUTE_DNA_COLUMNAR: Config = 1 << 2;
+    /// See [`ParserOptions::and_dna_packed`].
     pub const COMPUTE_DNA_PACKED: Config = 1 << 3;
+    /// See [`ParserOptions::compute_dna_len`].
     pub const COMPUTE_DNA_LEN: Config = 1 << 4;
+    /// See [`ParserOptions::compute_quality`].
     pub const COMPUTE_QUALITY: Config = 1 << 5;
+    /// See [`ParserOptions::split_non_actg`].
     pub const SPLIT_NON_ACTG: Config = 1 << 6;
+    /// See [`ParserOptions::return_record`].
     pub const RETURN_RECORD: Config = 1 << 7;
+    /// See [`ParserOptions::return_dna_chunk`].
     pub const RETURN_DNA_CHUNK: Config = 1 << 8;
+    /// Append the chunks of a record instead of replacing them, see
+    /// [`clear_chunk`](crate::HelicaseParser::clear_chunk).
     pub const MERGE_DNA_CHUNKS: Config = 1 << 9;
-    /// Implies [`MERGE_DNA_CHUNKS`].
+    /// Append records instead of replacing them, see
+    /// [`clear_record`](crate::HelicaseParser::clear_record). Implies [`MERGE_DNA_CHUNKS`].
     pub const MERGE_RECORDS: Config = 1 << 10;
+    /// See [`ParserOptions::compute_mask_non_actg`].
     pub const COMPUTE_MASK_NON_ACTG: Config = 1 << 11;
+    /// Compute a [`BitMask`](crate::dna_format::BitMask) of N bases, see
+    /// [`get_mask_n`](crate::HelicaseParser::get_mask_n).
     pub const COMPUTE_MASK_N: Config = 1 << 12;
+    /// See [`ParserOptions::reject_non_actg`].
     pub const REJECT_NON_ACTG: Config = 1 << 13;
 
-    #[cfg(all(target_feature = "bmi2", not(feature = "no-pdep")))]
-    pub const PDEP_ENABLED: bool = true;
-    #[cfg(any(not(target_feature = "bmi2"), feature = "no-pdep"))]
-    pub const PDEP_ENABLED: bool = false;
+    /// `true` if bitpacking uses PDEP (BMI2 target without the `no-pdep` feature).
+    pub const PDEP_ENABLED: bool = cfg!(all(target_feature = "bmi2", not(feature = "no-pdep")));
 }
 
 use advanced::*;

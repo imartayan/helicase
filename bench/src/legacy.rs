@@ -52,14 +52,7 @@ pub fn run_legacy_bench<M: Measurement>(args: &LegacyArgs, path: &str) {
         }
     };
     let size = metadata.len();
-    let mut input_file = match FileInput::open(path) {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("Error opening file '{path}': {e}");
-            std::process::exit(1);
-        }
-    };
-    let compressed = input_file.compression_format().is_ok_and(|c| c.is_some());
+    let compressed = CompressionFormat::from_path(path).is_ok_and(|c| c.is_some());
     let data = match read(path) {
         Ok(d) => d,
         Err(e) => {

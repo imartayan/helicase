@@ -5,6 +5,7 @@ const BITS_PER_BP: usize = 1;
 const BITS_PER_BLOCK: usize = T::BITS as usize;
 const BP_PER_BLOCK: usize = BITS_PER_BLOCK / BITS_PER_BP;
 
+/// Bit vector with one bit per base.
 #[derive(Clone, Default)]
 pub struct BitMask {
     bits: Vec<T>,
@@ -13,6 +14,7 @@ pub struct BitMask {
 }
 
 impl BitMask {
+    /// Creates an empty mask without allocating.
     #[inline(always)]
     pub const fn new() -> Self {
         Self {
@@ -22,6 +24,7 @@ impl BitMask {
         }
     }
 
+    /// Creates an empty mask with room for `capacity` words of 64 bases.
     #[inline(always)]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
@@ -31,27 +34,32 @@ impl BitMask {
         }
     }
 
+    /// Returns the number of bases.
     #[inline(always)]
     pub const fn len(&self) -> usize {
         self.len
     }
 
+    /// Returns `true` if there are no bases.
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
         self.len == 0
     }
 
+    /// Returns the number of words of 64 bases that fit without reallocating.
     #[inline(always)]
     pub const fn capacity(&self) -> usize {
         self.bits.capacity()
     }
 
+    /// Reserves room for at least `additional_bases` more bases.
     #[inline(always)]
     pub fn reserve(&mut self, additional_bases: usize) {
         let additional_words = additional_bases / BP_PER_BLOCK + 2;
         self.bits.reserve(additional_words);
     }
 
+    /// Removes all bases, keeping the allocated memory.
     #[inline(always)]
     pub fn clear(&mut self) {
         self.bits.clear();
@@ -60,7 +68,7 @@ impl BitMask {
     }
 
     #[inline(always)]
-    pub fn pop_base(&mut self) {
+    pub(crate) fn pop_base(&mut self) {
         if self.len > 0 {
             let rem = self.len % BITS_PER_BLOCK;
             self.len -= 1;
@@ -74,6 +82,7 @@ impl BitMask {
         }
     }
 
+    /// Appends the 64 bits of `x`.
     #[inline(always)]
     pub fn append_block(&mut self, x: T) {
         let rem = self.len % BITS_PER_BLOCK;
@@ -95,6 +104,7 @@ impl BitMask {
         }
     }
 
+    /// Appends the low `size` bits of `x`, other bits are ignored. `size` must be at most 64.
     #[inline(always)]
     pub fn append(&mut self, x: T, size: usize) {
         if size == 0 {
@@ -116,11 +126,13 @@ impl BitMask {
         }
     }
 
+    /// Returns the bits as complete words of 64 bases, and the last partial word.
     #[inline(always)]
     pub fn bits(&self) -> (&[T], T) {
         (&self.bits, self.cur)
     }
 
+    /// Returns the bit of base `i`, which must be lower than [`len`](Self::len).
     #[inline(always)]
     pub fn get(&self, i: usize) -> bool {
         if i < self.len & (!0 << BITS_PER_BLOCK.trailing_zeros()) {
@@ -131,7 +143,7 @@ impl BitMask {
     }
 
     #[cfg(test)]
-    pub fn get_all(&self) -> Vec<bool> {
+    fn get_all(&self) -> Vec<bool> {
         (0..self.len).map(|i| self.get(i)).collect()
     }
 }

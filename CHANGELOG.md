@@ -3,6 +3,13 @@
 <!-- next-header -->
 ## [Unreleased]
 
+Helicase is now usable in WebAssembly and without `std`.
+
+Breaking changes:
+- internal input methods are now private
+
+### What's New
+
 - Add support for `no_std`
 - Add support for simd128 (WASM)
 - Show feature requirements on gated items in the documentation

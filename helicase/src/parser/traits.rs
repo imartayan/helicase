@@ -4,6 +4,7 @@ use crate::dna_format::*;
 #[cfg(feature = "packed-seq")]
 use packed_seq::{PackedSeq, PackedSeqVec};
 
+/// Getters for the current record, implemented by all parsers.
 pub trait HelicaseParser: crate::sealed::Sealed {
     /// Get the [`Format`] associated to this parser (FASTA or FASTQ).
     fn format(&self) -> Format;
@@ -152,6 +153,9 @@ pub trait HelicaseParser: crate::sealed::Sealed {
     fn record_index(&self) -> u64;
 }
 
-pub trait HelicaseParserIter: HelicaseParser + Iterator<Item = Result<Event>> {}
+pub(crate) trait HelicaseParserIter:
+    HelicaseParser + Iterator<Item = Result<Event>>
+{
+}
 
 impl<T: HelicaseParser + Iterator<Item = Result<Event>>> HelicaseParserIter for T {}

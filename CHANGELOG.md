@@ -3,6 +3,8 @@
 <!-- next-header -->
 ## [Unreleased]
 
+## 1.1.0
+
 Helicase is now usable in WebAssembly and without `std`.
 
 API changes:

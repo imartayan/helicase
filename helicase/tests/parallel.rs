@@ -580,3 +580,45 @@ fn test_process_parallel_batch_callbacks() {
         assert!(counter.batches.load(Ordering::Relaxed) > threads);
     }
 }
+
+#[cfg(feature = "paraseq")]
+#[test]
+fn test_process_parallel_thread_ids() {
+    use paraseq::Record;
+    use paraseq::parallel::ParallelProcessor;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct IdCollector {
+        id: usize,
+        ids: Arc<Mutex<Vec<usize>>>,
+    }
+
+    impl<R: Record> ParallelProcessor<R> for IdCollector {
+        fn process_record(&mut self, _: R) -> Result<(), paraseq::Error> {
+            Ok(())
+        }
+        fn on_thread_complete(&mut self) -> Result<(), paraseq::Error> {
+            self.ids.lock().unwrap().push(self.id);
+            Ok(())
+        }
+        fn set_thread_id(&mut self, thread_id: usize) {
+            self.id = thread_id;
+        }
+    }
+
+    let bytes = FastxGen::fastq(5000, 100).with_seed(42).generate_bytes();
+    for threads in [1, 4] {
+        let mut collector = IdCollector::default();
+        ParallelFastxParser::<CONFIG_STR>::from_slice(&bytes)
+            .threads(threads)
+            .process_parallel(&mut collector)
+            .unwrap();
+        let ids = collector.ids.lock().unwrap();
+        assert!(!ids.is_empty());
+        assert!(ids.iter().all(|&id| id < threads), "{ids:?}");
+        if threads > 1 {
+            assert!(ids.iter().any(|&id| id > 0), "{ids:?}");
+        }
+    }
+}

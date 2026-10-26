@@ -17,6 +17,10 @@ use std::sync::OnceLock;
 #[cfg(feature = "paraseq")]
 const PARASEQ_BATCH_RECORDS: usize = 1024;
 
+// Index of the current worker thread, 0 outside of `run_chunks` (single-threaded paths).
+#[cfg(feature = "paraseq")]
+thread_local!(static WORKER_ID: core::cell::Cell<usize> = const { core::cell::Cell::new(0) });
+
 #[cfg(any(feature = "gz", feature = "zstd"))]
 mod frames;
 #[cfg(feature = "zstd")]
@@ -57,6 +61,8 @@ where
         let handles: Vec<_> = (0..workers)
             .map(|first_chunk| {
                 scope.spawn(move || -> Result<Option<State>> {
+                    #[cfg(feature = "paraseq")]
+                    WORKER_ID.set(first_chunk);
                     let mut thread_state = None;
                     let mut idx = first_chunk;
                     while idx < num_chunks && !stop.load(Ordering::Relaxed) {
@@ -537,6 +543,7 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     /// record as a zero-copy [`paraseq::Record`] reference into [`process_record`](paraseq::parallel::ParallelProcessor::process_record).
     /// Each worker calls [`on_batch_complete`](paraseq::parallel::ParallelProcessor::on_batch_complete) every 1024 records,
     /// then once more followed by [`on_thread_complete`](paraseq::parallel::ParallelProcessor::on_thread_complete) when it runs out of records.
+    /// [`set_thread_id`](paraseq::parallel::ParallelProcessor::set_thread_id) receives the index of the worker thread (below `threads`).
     #[cfg(feature = "paraseq")]
     pub fn process_parallel<P>(self, processor: &mut P) -> Result<()>
     where
@@ -546,6 +553,7 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
         self.for_each(move |mut parser| -> Result<()> {
             let to_io_error = |e: paraseq::Error| std::io::Error::other(e.to_string());
             let mut local_proc = proc.clone();
+            local_proc.set_thread_id(WORKER_ID.get());
             let mut batch_records = 0;
             while let Some(event) = parser.next() {
                 event?;

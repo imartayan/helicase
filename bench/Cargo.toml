@@ -20,6 +20,7 @@ needletail = { version = "0.7", default-features = false, features = [
     "flate2",
     "zstd",
 ] }
+niffler = { version = "3.0", default-features = false, features = ["gz", "zstd"] }
 paraseq = { version = "0.6", default-features = false, features = ["niffler"] }
 rayon = "1.12"
 sysinfo = "0.39"

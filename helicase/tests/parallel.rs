@@ -568,16 +568,16 @@ fn test_process_parallel_batch_callbacks() {
         }
     }
 
-    // 5000 records is several batches of 1024
-    let bytes = FastxGen::fastq(5000, 100).with_seed(42).generate_bytes();
+    // Chunks are capped at 16 MiB, so ~34 MB of input is at least 3 batches, even on one thread
+    let bytes = FastxGen::fastq(40_000, 400).with_seed(42).generate_bytes();
     for threads in [1, 4] {
         let mut counter = Counter::default();
         ParallelFastxParser::<CONFIG_STR>::from_slice(&bytes)
             .threads(threads)
             .process_parallel(&mut counter)
             .unwrap();
-        assert_eq!(counter.records_flushed.load(Ordering::Relaxed), 5000);
-        assert!(counter.batches.load(Ordering::Relaxed) > threads);
+        assert_eq!(counter.records_flushed.load(Ordering::Relaxed), 40_000);
+        assert!(counter.batches.load(Ordering::Relaxed) >= 3);
     }
 }
 

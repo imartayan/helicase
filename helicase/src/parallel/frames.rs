@@ -221,6 +221,7 @@ pub(super) fn run_frames<D, const CONFIG: Config, State, Process, Reduce>(
     compressed: &[u8],
     frames: &[Frame],
     threads: usize,
+    max_chunk_len: usize,
     process: Process,
     reduce: Reduce,
 ) -> Result<State>
@@ -234,7 +235,10 @@ where
         return Ok(State::default());
     };
     let format = Format::try_from_byte(D::first_byte(first.bytes(compressed))?)?;
-    let num_chunks = threads.min(frames.len());
+    let uncomp_len: usize = frames.iter().map(|frame| frame.uncomp_len).sum();
+    let num_chunks = threads
+        .max(uncomp_len.div_ceil(max_chunk_len))
+        .min(frames.len());
     run_chunks(
         num_chunks,
         threads,

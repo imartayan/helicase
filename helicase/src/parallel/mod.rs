@@ -13,9 +13,9 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-/// Records per `on_batch_complete` call in [`ParallelFastxParser::process_parallel`] (paraseq's default)
+/// Maximum bytes per chunk in [`ParallelFastxParser::process_parallel`], where a chunk is a batch
 #[cfg(feature = "paraseq")]
-const PARASEQ_BATCH_RECORDS: usize = 1024;
+const PARASEQ_MAX_CHUNK_LEN: usize = 16 << 20;
 
 // Index of the current worker thread, 0 outside of `run_chunks` (single-threaded paths).
 #[cfg(feature = "paraseq")]
@@ -101,6 +101,7 @@ where
 fn run_slice<const CONFIG: Config, State, Process, Reduce>(
     data: &[u8],
     threads: usize,
+    max_chunk_len: usize,
     process: Process,
     reduce: Reduce,
 ) -> Result<State>
@@ -113,10 +114,12 @@ where
         return Ok(State::default());
     };
     let format = Format::try_from_byte(first_byte)?;
-    if threads == 1 || data.len() < 32 * 1024 {
+    if (threads == 1 && data.len() <= max_chunk_len) || data.len() < 32 * 1024 {
         return process(FastxParser::from_slice(data)?);
     }
-    let num_chunks = (threads * 4).min(data.len() / (16 * 1024));
+    let num_chunks = (threads * 4)
+        .max(data.len().div_ceil(max_chunk_len))
+        .min(data.len() / (16 * 1024));
     let chunk_len = data.len() / num_chunks;
     run_chunks(
         num_chunks,
@@ -166,6 +169,7 @@ fn run_file<const CONFIG: Config, State, Process, Reduce>(
     path: &Path,
     threads: usize,
     custom_chunks: Option<usize>,
+    max_chunk_len: usize,
     process: Process,
     reduce: Reduce,
 ) -> Result<State>
@@ -181,7 +185,12 @@ where
             let mmap = unsafe { memmap2::Mmap::map(&File::open(path)?)? };
             let blocks = frames::index_bgzf_blocks(&mmap);
             return frames::run_frames::<frames::BgzfDecoder, CONFIG, _, _, _>(
-                &mmap, &blocks, threads, process, reduce,
+                &mmap,
+                &blocks,
+                threads,
+                max_chunk_len,
+                process,
+                reduce,
             );
         }
         #[cfg(feature = "zstd")]
@@ -193,6 +202,7 @@ where
                     &mmap,
                     &zstd_frames,
                     threads,
+                    max_chunk_len,
                     process,
                     reduce,
                 );
@@ -210,10 +220,12 @@ where
     let mut first_byte = [0u8; 1];
     file.read_exact(&mut first_byte)?;
     let format = Format::try_from_byte(first_byte[0])?;
-    if threads == 1 || file_len < 32 * 1024 {
+    if (threads == 1 && file_len <= max_chunk_len as u64) || file_len < 32 * 1024 {
         return process(FastxParser::from_file(path)?);
     }
-    let num_chunks = custom_chunks.unwrap_or(threads * 4);
+    let num_chunks = custom_chunks
+        .unwrap_or(threads * 4)
+        .max(file_len.div_ceil(max_chunk_len as u64) as usize);
     let chunk_len = file_len / num_chunks as u64;
     run_chunks(
         num_chunks,
@@ -313,6 +325,7 @@ pub struct ParallelFastxParser<'a, const CONFIG: Config> {
     source: ParallelSource<'a>,
     threads: usize,
     chunks: Option<usize>,
+    max_chunk_len: usize,
 }
 
 impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
@@ -321,6 +334,7 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
             source,
             threads: std::thread::available_parallelism().map_or(1, |n| n.get()),
             chunks: None,
+            max_chunk_len: usize::MAX,
         }
     }
 
@@ -516,16 +530,31 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
         Reduce: Fn(State, State) -> State + Sync,
     {
         match self.source {
-            ParallelSource::Slice(slice) => {
-                run_slice::<CONFIG, State, _, _>(slice, self.threads, process, reduce)
-            }
+            ParallelSource::Slice(slice) => run_slice::<CONFIG, State, _, _>(
+                slice,
+                self.threads,
+                self.max_chunk_len,
+                process,
+                reduce,
+            ),
             ParallelSource::Mmap(path) => {
                 let mmap = unsafe { memmap2::Mmap::map(&File::open(&path)?)? };
-                run_slice::<CONFIG, State, _, _>(&mmap, self.threads, process, reduce)
+                run_slice::<CONFIG, State, _, _>(
+                    &mmap,
+                    self.threads,
+                    self.max_chunk_len,
+                    process,
+                    reduce,
+                )
             }
-            ParallelSource::File(path) => {
-                run_file::<CONFIG, State, _, _>(&path, self.threads, self.chunks, process, reduce)
-            }
+            ParallelSource::File(path) => run_file::<CONFIG, State, _, _>(
+                &path,
+                self.threads,
+                self.chunks,
+                self.max_chunk_len,
+                process,
+                reduce,
+            ),
             ParallelSource::Reader(reader) => {
                 if self.threads > 1 {
                     eprintln!(
@@ -541,28 +570,25 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     ///
     /// Drives worker threads via Helicase's lock-free work-stealing engine, passing each
     /// record as a zero-copy [`paraseq::Record`] reference into [`process_record`](paraseq::parallel::ParallelProcessor::process_record).
-    /// Each worker calls [`on_batch_complete`](paraseq::parallel::ParallelProcessor::on_batch_complete) every 1024 records,
-    /// then once more followed by [`on_thread_complete`](paraseq::parallel::ParallelProcessor::on_thread_complete) when it runs out of records.
+    /// A chunk (at most 16 MiB of input) is a batch: after its last record, a worker calls
+    /// [`on_batch_complete`](paraseq::parallel::ParallelProcessor::on_batch_complete), then
+    /// [`on_thread_complete`](paraseq::parallel::ParallelProcessor::on_thread_complete).
     /// [`set_thread_id`](paraseq::parallel::ParallelProcessor::set_thread_id) receives the index of the worker thread (below `threads`).
+    /// Batches are not ordered, and [`process_record_batch`](paraseq::parallel::ParallelProcessor::process_record_batch) is not used.
     #[cfg(feature = "paraseq")]
-    pub fn process_parallel<P>(self, processor: &mut P) -> Result<()>
+    pub fn process_parallel<P>(mut self, processor: &mut P) -> Result<()>
     where
         P: for<'b, 'c> paraseq::parallel::ParallelProcessor<&'b FastxParser<'c, CONFIG>> + Sync,
     {
+        self.max_chunk_len = PARASEQ_MAX_CHUNK_LEN;
         let proc = processor.clone();
         self.for_each(move |mut parser| -> Result<()> {
             let to_io_error = |e: paraseq::Error| std::io::Error::other(e.to_string());
             let mut local_proc = proc.clone();
             local_proc.set_thread_id(WORKER_ID.get());
-            let mut batch_records = 0;
             while let Some(event) = parser.next() {
                 event?;
                 local_proc.process_record(&parser).map_err(to_io_error)?;
-                batch_records += 1;
-                if batch_records == PARASEQ_BATCH_RECORDS {
-                    local_proc.on_batch_complete().map_err(to_io_error)?;
-                    batch_records = 0;
-                }
             }
             local_proc.on_batch_complete().map_err(to_io_error)?;
             local_proc.on_thread_complete().map_err(to_io_error)?;

@@ -538,3 +538,45 @@ fn test_parallel_records_fewer_than_threads() {
         let _ = std::fs::remove_file(test_file);
     }
 }
+
+#[cfg(feature = "paraseq")]
+#[test]
+fn test_process_parallel_batch_callbacks() {
+    use paraseq::Record;
+    use paraseq::parallel::ParallelProcessor;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Clone, Default)]
+    struct Counter {
+        records: usize,
+        records_flushed: Arc<AtomicUsize>,
+        batches: Arc<AtomicUsize>,
+    }
+
+    impl<R: Record> ParallelProcessor<R> for Counter {
+        fn process_record(&mut self, _: R) -> Result<(), paraseq::Error> {
+            self.records += 1;
+            Ok(())
+        }
+        fn on_batch_complete(&mut self) -> Result<(), paraseq::Error> {
+            self.records_flushed
+                .fetch_add(self.records, Ordering::Relaxed);
+            self.batches.fetch_add(1, Ordering::Relaxed);
+            self.records = 0;
+            Ok(())
+        }
+    }
+
+    // 5000 records is several batches of 1024
+    let bytes = FastxGen::fastq(5000, 100).with_seed(42).generate_bytes();
+    for threads in [1, 4] {
+        let mut counter = Counter::default();
+        ParallelFastxParser::<CONFIG_STR>::from_slice(&bytes)
+            .threads(threads)
+            .process_parallel(&mut counter)
+            .unwrap();
+        assert_eq!(counter.records_flushed.load(Ordering::Relaxed), 5000);
+        assert!(counter.batches.load(Ordering::Relaxed) > threads);
+    }
+}

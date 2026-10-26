@@ -13,6 +13,10 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+/// Records per `on_batch_complete` call in [`ParallelFastxParser::process_parallel`] (paraseq's default)
+#[cfg(feature = "paraseq")]
+const PARASEQ_BATCH_RECORDS: usize = 1024;
+
 #[cfg(any(feature = "gz", feature = "zstd"))]
 mod frames;
 #[cfg(feature = "zstd")]
@@ -531,6 +535,8 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     ///
     /// Drives worker threads via Helicase's lock-free work-stealing engine, passing each
     /// record as a zero-copy [`paraseq::Record`] reference into [`process_record`](paraseq::parallel::ParallelProcessor::process_record).
+    /// Each worker calls [`on_batch_complete`](paraseq::parallel::ParallelProcessor::on_batch_complete) every 1024 records,
+    /// then once more followed by [`on_thread_complete`](paraseq::parallel::ParallelProcessor::on_thread_complete) when it runs out of records.
     #[cfg(feature = "paraseq")]
     pub fn process_parallel<P>(self, processor: &mut P) -> Result<()>
     where
@@ -538,16 +544,20 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     {
         let proc = processor.clone();
         self.for_each(move |mut parser| -> Result<()> {
+            let to_io_error = |e: paraseq::Error| std::io::Error::other(e.to_string());
             let mut local_proc = proc.clone();
+            let mut batch_records = 0;
             while let Some(event) = parser.next() {
                 event?;
-                local_proc
-                    .process_record(&parser)
-                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                local_proc.process_record(&parser).map_err(to_io_error)?;
+                batch_records += 1;
+                if batch_records == PARASEQ_BATCH_RECORDS {
+                    local_proc.on_batch_complete().map_err(to_io_error)?;
+                    batch_records = 0;
+                }
             }
-            local_proc
-                .on_thread_complete()
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
+            local_proc.on_batch_complete().map_err(to_io_error)?;
+            local_proc.on_thread_complete().map_err(to_io_error)?;
             Ok(())
         })
     }

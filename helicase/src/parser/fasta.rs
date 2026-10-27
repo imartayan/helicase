@@ -174,9 +174,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastaParser<
 
     #[inline(always)]
     fn get_dna_string(&self) -> &[u8] {
-        if flag_is_not_set(CONFIG, COMPUTE_DNA_STRING) {
-            panic!("Parser config error: dna_string is not enabled")
-        }
+        check!(COMPUTE_DNA_STRING, "dna_string is not enabled");
         let zero_copy = self.contiguous_dna && !Self::MERGE_DNA_STRING;
         if zero_copy {
             self.lexer.input.slice(self.dna_range.clone())
@@ -187,38 +185,13 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> HelicaseParser for FastaParser<
 
     #[inline(always)]
     fn get_dna_string_owned(&mut self) -> Vec<u8> {
-        if flag_is_not_set(CONFIG, COMPUTE_DNA_STRING) {
-            panic!("Parser config error: dna_string is not enabled")
-        }
+        check!(COMPUTE_DNA_STRING, "dna_string is not enabled");
         let zero_copy = self.contiguous_dna && !Self::MERGE_DNA_STRING;
         if zero_copy {
             self.lexer.input.slice(self.dna_range.clone()).to_vec()
         } else {
             let capacity = self.cur_dna_string.capacity();
             replace(&mut self.cur_dna_string, Vec::with_capacity(capacity))
-        }
-    }
-
-    #[inline(always)]
-    fn get_dna_len(&self) -> usize {
-        assert!(flag_is_set(
-            CONFIG,
-            COMPUTE_DNA_LEN | COMPUTE_DNA_STRING | COMPUTE_DNA_COLUMNAR | COMPUTE_DNA_PACKED
-        ));
-        if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
-            self.dna_len
-        } else if flag_is_set(CONFIG, COMPUTE_DNA_STRING) {
-            if self.contiguous_dna && !Self::MERGE_DNA_STRING {
-                self.dna_range.len()
-            } else {
-                self.cur_dna_string.len()
-            }
-        } else if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
-            self.bitpackers.columnar.len()
-        } else if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
-            self.bitpackers.packed.len()
-        } else {
-            unreachable!()
         }
     }
 
@@ -236,37 +209,6 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             self.dna_range.start
         } else {
             line_start
-        }
-    }
-
-    #[inline(always)]
-    fn make_room_record(&mut self, line_start: usize) {
-        if flag_is_set(CONFIG, COMPUTE_HEADER | COMPUTE_DNA_STRING)
-            && !I::RANDOM_ACCESS
-            && self.lexer.input.is_end_of_buffer()
-        {
-            self.lexer.input.make_room(self.anchor(line_start));
-        }
-    }
-
-    #[inline(always)]
-    fn make_room_record_end(&mut self, line_start: usize) {
-        if flag_is_set(CONFIG, COMPUTE_HEADER | COMPUTE_DNA_STRING)
-            && !I::RANDOM_ACCESS
-            && self.pos_in_block + 1 >= self.block.len
-            && self.lexer.input.is_end_of_buffer()
-        {
-            self.lexer.input.make_room(self.anchor(line_start));
-        }
-    }
-
-    // Length of the `\r` before the line feed at the current position, none at the end of input.
-    #[inline(always)]
-    const fn crlf_before(&self) -> usize {
-        if self.pos_in_block < self.block.len {
-            self.crlf_len
-        } else {
-            0
         }
     }
 
@@ -401,12 +343,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
         if !self.finished {
             self.pos_in_block = position.trailing_zeros() as usize;
             let nl_pos = self.global_pos();
-            if !self.crlf_detected {
-                if nl_pos > 0 && self.lexer.input.slice(nl_pos - 1..nl_pos) == b"\r" {
-                    self.crlf_len = 1;
-                }
-                self.crlf_detected = true;
-            }
+            self.detect_crlf(nl_pos);
             if flag_is_set(CONFIG, COMPUTE_HEADER) {
                 self.header_range.end = nl_pos.saturating_sub(self.crlf_len);
             }
@@ -693,76 +630,11 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
                         let line_start = self.global_pos();
                         let copy_str = flag_is_set(CONFIG, COMPUTE_DNA_STRING)
                             && (!self.contiguous_dna || Self::MERGE_DNA_STRING);
-                        let mask = !0 << self.pos_in_block;
-                        let mut position = !self.block.is_dna & mask;
-                        if position != 0 {
-                            let first_pos = self.pos_in_block;
-                            self.pos_in_block = position.trailing_zeros() as usize;
-                            let len = if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
-                                (self.pos_in_block - first_pos).saturating_sub(self.crlf_before())
-                            } else {
-                                self.pos_in_block - first_pos
-                            };
-                            self.append_dna_range(first_pos, len);
-                        } else {
-                            if self.pos_in_block > 0 {
-                                self.make_room_record(line_start);
-                                self.append_dna_range(self.pos_in_block, 64 - self.pos_in_block);
-                                if self.next_block::<SCAN_MODE_DNA>() {
-                                    self.pos_in_block = 0;
-                                    position = !self.block.is_dna;
-                                } else if self.pending_error.is_some() {
-                                    return self.return_error_or_none();
-                                } else {
-                                    self.pos_in_block = 64;
-                                    position = 1;
-                                }
+                        if !self.append_dna_run(line_start) {
+                            if self.pending_error.is_some() {
+                                return self.return_error_or_none();
                             }
-                            let mut dna_blocks: usize = 0;
-                            while position == 0 {
-                                self.make_room_record(line_start);
-                                self.append_dna_block();
-                                dna_blocks += 1;
-
-                                if dna_blocks == 16 && !Self::MERGE_DNA_STRING {
-                                    let anchor = self.anchor(line_start);
-                                    self.lexer.skip_long_dna(
-                                        &mut self.bitpackers,
-                                        &mut self.dna_len,
-                                        &mut self.block_counter,
-                                        anchor,
-                                        flag_is_set(CONFIG, COMPUTE_HEADER | COMPUTE_DNA_STRING),
-                                    );
-                                    dna_blocks = 15;
-                                }
-
-                                if !self.next_block::<SCAN_MODE_DNA>() {
-                                    if self.pending_error.is_some() {
-                                        return self.return_error_or_none();
-                                    }
-                                    self.pos_in_block = 64;
-                                    break;
-                                }
-                                position = !self.block.is_dna;
-                            }
-                            if !self.finished {
-                                self.pos_in_block = position.trailing_zeros() as usize;
-                                if self.pos_in_block > 0 {
-                                    let len = if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) {
-                                        self.pos_in_block.saturating_sub(self.crlf_before())
-                                    } else {
-                                        self.pos_in_block
-                                    };
-                                    self.append_dna_range(0, len);
-                                } else if self.crlf_len == 1
-                                    && flag_is_not_set(CONFIG, SPLIT_NON_ACTG)
-                                {
-                                    self.bitpackers.pop_base::<CONFIG>();
-                                    if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
-                                        self.dna_len -= 1;
-                                    }
-                                }
-                            }
+                            self.pos_in_block = 64;
                         }
                         if !self.finished {
                             self.dna_range.end = self.global_pos().saturating_sub(

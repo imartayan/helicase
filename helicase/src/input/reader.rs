@@ -151,10 +151,8 @@ struct SiroccoMultiGzReader<R: BufRead> {
     decoder: sirocco::inflate::Decoder,
     buf: Vec<u8>,
     pending: core::ops::Range<usize>,
-    prev_total_out: usize,
     full: bool,
     done: bool,
-    pending_err: Option<io::Error>,
 }
 
 #[cfg(feature = "gz")]
@@ -165,10 +163,8 @@ impl<R: BufRead> SiroccoMultiGzReader<R> {
             decoder: sirocco::inflate::Decoder::new(sirocco::Format::Gzip),
             buf: Vec::new(),
             pending: 0..0,
-            prev_total_out: 0,
             full: false,
             done: false,
-            pending_err: None,
         }
     }
 
@@ -177,21 +173,14 @@ impl<R: BufRead> SiroccoMultiGzReader<R> {
             self.buf = vec![0; SIROCCO_BUF_LEN];
         }
 
-        while self.pending.is_empty() && self.pending_err.is_none() {
+        while self.pending.is_empty() {
             if self.done {
                 let peek = self.inner.fill_buf()?;
                 if peek.is_empty() {
                     break;
                 }
-                let is_next_gz = if peek.len() >= 2 {
-                    peek[0] == 0x1F && peek[1] == 0x8B
-                } else {
-                    peek[0] == 0x1F
-                };
-                if is_next_gz {
+                if peek[0] == 0x1F && peek.get(1).is_none_or(|&b| b == 0x8B) {
                     self.decoder.reset();
-                    self.prev_total_out = 0;
-                    self.pending = 0..0;
                     self.full = false;
                     self.done = false;
                 } else {
@@ -201,36 +190,17 @@ impl<R: BufRead> SiroccoMultiGzReader<R> {
 
             if self.full {
                 self.decoder.make_room(&mut self.buf);
-                self.full = false;
             }
 
             let input = self.inner.fill_buf()?;
             let eof = input.is_empty();
             let buf_ptr = self.buf.as_ptr() as usize;
 
-            match self.decoder.decompress(input, &mut self.buf, eof) {
-                Ok(p) => {
-                    let out_start = p.output.as_ptr() as usize - buf_ptr;
-                    let out_end = out_start + p.output.len();
-                    (self.done, self.full) = (p.done, p.full);
-                    self.inner.consume(p.consumed);
-                    self.pending = out_start..out_end;
-                    self.prev_total_out = self.decoder.total_out() as usize;
-                }
-                Err(e) => {
-                    let new_total = self.decoder.total_out() as usize;
-                    let new_bytes = new_total.saturating_sub(self.prev_total_out);
-                    if new_bytes > 0 {
-                        let out_start = self.pending.end;
-                        self.pending = out_start..out_start + new_bytes;
-                        self.prev_total_out = new_total;
-                        self.done = true;
-                        self.pending_err = Some(io::Error::new(io::ErrorKind::InvalidData, e));
-                    } else {
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, e));
-                    }
-                }
-            }
+            let p = self.decoder.decompress(input, &mut self.buf, eof)?;
+            let out_start = p.output.as_ptr() as usize - buf_ptr;
+            self.pending = out_start..out_start + p.output.len();
+            (self.done, self.full) = (p.done, p.full);
+            self.inner.consume(p.consumed);
         }
         Ok(())
     }
@@ -244,13 +214,7 @@ impl<R: BufRead> Read for SiroccoMultiGzReader<R> {
         }
 
         if self.pending.is_empty() {
-            if let Some(err) = self.pending_err.take() {
-                return Err(err);
-            }
             self.fill()?;
-            if self.pending.is_empty() {
-                return self.pending_err.take().map_or(Ok(0), Err);
-            }
         }
 
         let n = self.pending.len().min(buf.len());

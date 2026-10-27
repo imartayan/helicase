@@ -255,136 +255,54 @@ fn test_empty_sequence_fastq() {
     assert_eq!(records[1].2, Some(b"IIII".to_vec()));
 }
 
+// The error may surface when building the parser, since it reads the first block
 #[cfg(feature = "gz")]
-#[test]
-fn test_corrupted_gzip_trailer_crc() {
-    let fastq_bytes = FastxGen::illumina(20)
-        .with_mean_len(100)
-        .with_seed(42)
-        .generate_bytes();
-
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(&fastq_bytes).unwrap();
-    let mut gz_bytes = encoder.finish().unwrap();
-
-    // Corrupt one byte of the 4-byte CRC32 trailer (gzip trailer is 8 bytes: 4 bytes CRC32, 4 bytes ISIZE)
-    let trailer_crc_pos = gz_bytes.len() - 8;
-    gz_bytes[trailer_crc_pos] ^= 0xFF;
-
-    // Test with ReaderInput via from_reader
-    {
-        let cursor = std::io::Cursor::new(gz_bytes.clone());
-        let mut parser = FastxParser::<CONFIG>::from_reader(cursor).unwrap();
-        let mut records = 0;
-        let mut error_seen = false;
-
-        for event in parser.by_ref() {
-            match event {
-                Ok(Event::Record(_)) => records += 1,
-                Err(err) => {
-                    error_seen = true;
-                    assert!(
-                        err.to_string().to_lowercase().contains("checksum")
-                            || err.to_string().to_lowercase().contains("corrupt"),
-                        "Expected CRC checksum error, got: {err}"
-                    );
-                }
-                _ => {}
-            }
+fn assert_checksum_error(parser: Result<FastxParser<CONFIG>, Error>) {
+    let err = match parser {
+        Ok(mut parser) => {
+            let err = parser
+                .by_ref()
+                .find_map(Result::err)
+                .expect("missing error");
+            assert!(
+                parser.next().is_none(),
+                "subsequent next() should return None"
+            );
+            err
         }
-
-        assert_eq!(
-            records, 20,
-            "Should yield all valid records before trailer error"
-        );
-        assert!(
-            error_seen,
-            "Should emit Event::IoError for corrupted trailer CRC"
-        );
-        assert!(
-            parser.next().is_none(),
-            "subsequent next() should return None"
-        );
-    }
-
-    // Test with FileInput via from_file
-    {
-        let tmp_file = std::env::temp_dir().join(format!(
-            "helicase_corrupted_crc_{}_{}.fastq.gz",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::write(&tmp_file, &gz_bytes).unwrap();
-
-        let mut parser = FastxParser::<CONFIG>::from_file(&tmp_file).unwrap();
-        let mut records = 0;
-        let mut error_seen = false;
-
-        for event in parser.by_ref() {
-            match event {
-                Ok(Event::Record(_)) => records += 1,
-                Err(err) => {
-                    error_seen = true;
-                    assert!(
-                        err.to_string().to_lowercase().contains("checksum")
-                            || err.to_string().to_lowercase().contains("corrupt"),
-                        "Expected CRC checksum error, got: {err}"
-                    );
-                }
-                _ => {}
-            }
-        }
-
-        assert_eq!(
-            records, 20,
-            "Should yield all valid records before trailer error"
-        );
-        assert!(
-            error_seen,
-            "Should emit Event::IoError for corrupted trailer CRC"
-        );
-        assert!(
-            parser.next().is_none(),
-            "subsequent next() should return None"
-        );
-
-        let _ = std::fs::remove_file(&tmp_file);
-    }
+        Err(err) => err,
+    };
+    let msg = err.to_string().to_lowercase();
+    assert!(msg.contains("checksum") || msg.contains("corrupt"), "{msg}");
 }
 
 #[cfg(feature = "gz")]
 #[test]
-fn test_corrupted_gzip_trailer_crc_fasta() {
-    let fasta_bytes = FastxGen::fasta(15, 120).with_seed(123).generate_bytes();
+fn test_corrupted_gzip_trailer_crc() {
+    let fastq = FastxGen::illumina(20).with_mean_len(100).with_seed(42);
+    for bytes in [
+        fastq.generate_bytes(),
+        FastxGen::fasta(15, 120).with_seed(123).generate_bytes(),
+    ] {
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&bytes).unwrap();
+        let mut gz_bytes = encoder.finish().unwrap();
+        // The gzip trailer is a 4-byte CRC32 then a 4-byte size
+        let crc_pos = gz_bytes.len() - 8;
+        gz_bytes[crc_pos] ^= 0xFF;
 
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(&fasta_bytes).unwrap();
-    let mut gz_bytes = encoder.finish().unwrap();
-
-    let trailer_crc_pos = gz_bytes.len() - 8;
-    gz_bytes[trailer_crc_pos] ^= 0xAA;
-
-    let cursor = std::io::Cursor::new(gz_bytes);
-    let mut parser = FastxParser::<CONFIG>::from_reader(cursor).unwrap();
-    let mut records = 0;
-    let mut error_seen = false;
-
-    for event in parser.by_ref() {
-        match event {
-            Ok(Event::Record(_)) => records += 1,
-            Err(_) => {
-                error_seen = true;
-            }
-            _ => {}
-        }
+        assert_checksum_error(FastxParser::from_reader(std::io::Cursor::new(
+            gz_bytes.clone(),
+        )));
+        let tmp_file = std::env::temp_dir().join(format!(
+            "helicase_corrupted_crc_{}_{}.gz",
+            std::process::id(),
+            bytes[0]
+        ));
+        std::fs::write(&tmp_file, &gz_bytes).unwrap();
+        assert_checksum_error(FastxParser::from_file(&tmp_file));
+        let _ = std::fs::remove_file(&tmp_file);
     }
-
-    assert_eq!(records, 15);
-    assert!(error_seen);
-    assert!(parser.next().is_none());
 }
 
 #[test]

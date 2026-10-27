@@ -3,6 +3,9 @@
 <!-- next-header -->
 ## [Unreleased]
 
+- `ParallelFastxParser` now uses all its threads on plain gzip, single-frame zstd and `from_reader` inputs: one thread decompresses while the workers parse the chunks.
+- `process_parallel` now calls paraseq's `set_thread_id`, and `on_batch_complete` after each chunk
+
 ## 1.1.0
 
 Helicase is now usable in WebAssembly and without `std`.

@@ -11,46 +11,20 @@ const LUT_ACTG: v128 = unsafe { transmute(*b"A_C_T_G_________") };
 const TWO_BITS: v128 = unsafe { transmute([0b110u8; 16]) };
 const UPPERCASE: v128 = unsafe { transmute([0b11011111u8; 16]) };
 
-const NEEDS_DNA_MASKS: Config = COMPUTE_DNA_COLUMNAR
-    | COMPUTE_DNA_PACKED
-    | SPLIT_NON_ACTG
-    | COMPUTE_MASK_NON_ACTG
-    | COMPUTE_MASK_N;
+type Vectors = (v128, v128, v128, v128);
 
 #[inline(always)]
-pub fn extract_bitmask<const CONFIG: Config, const MODE: u8>(buf: &[u8]) -> Bitmask {
-    let (v1, v2, v3, v4) = load(buf);
-    if MODE == SCAN_MODE_DNA || flag_is_not_set(CONFIG, NEEDS_DNA_MASKS) {
-        let mut mask = bitpack_dna::<CONFIG>(v1, v2, v3, v4);
-        if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) || mask.is_dna != !0 {
-            mask.line_feeds = u8_mask(v1, v2, v3, v4, LINE_FEED);
-        }
-        mask
-    } else {
-        let line_feeds = u8_mask(v1, v2, v3, v4, LINE_FEED);
-        let skip_dna = if MODE == SCAN_MODE_QUALITY {
-            (line_feeds & line_feeds.wrapping_sub(1)) == 0
-        } else {
-            line_feeds == 0
-        };
-        let mut mask = if skip_dna {
-            Bitmask::ALL_DNA
-        } else {
-            bitpack_dna::<CONFIG>(v1, v2, v3, v4)
-        };
-        mask.line_feeds = line_feeds;
-        mask
-    }
+pub fn line_feeds((v1, v2, v3, v4): Vectors) -> u64 {
+    u8_mask(v1, v2, v3, v4, LINE_FEED)
 }
 
 #[inline(always)]
-pub fn extract_dna_bitmask<const CONFIG: Config>(buf: &[u8]) -> Bitmask {
-    let (v1, v2, v3, v4) = load(buf);
-    bitpack_dna::<CONFIG>(v1, v2, v3, v4)
+pub fn scan_line_feeds(buf: &[u8]) -> u64 {
+    line_feeds(load(buf))
 }
 
 #[inline(always)]
-fn bitpack_dna<const CONFIG: Config>(v1: v128, v2: v128, v3: v128, v4: v128) -> Bitmask {
+pub fn bitpack_dna<const CONFIG: Config>((v1, v2, v3, v4): Vectors) -> Bitmask {
     let mut mask = Bitmask::ALL_DNA;
 
     if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR | COMPUTE_DNA_PACKED) {
@@ -118,7 +92,7 @@ fn bitpack_dna<const CONFIG: Config>(v1: v128, v2: v128, v3: v128, v4: v128) -> 
 }
 
 #[inline(always)]
-fn load(buf: &[u8]) -> (v128, v128, v128, v128) {
+pub fn load(buf: &[u8]) -> Vectors {
     // Blocks are 64 bytes long, shorter blocks are padded by the input.
     unsafe {
         let ptr = buf.as_ptr() as *const v128;

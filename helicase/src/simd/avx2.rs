@@ -9,55 +9,28 @@ const LINE_FEED: __m256i = unsafe { transmute([b'\n'; 32]) };
 const ASCII_N: __m256i = unsafe { transmute([b'N'; 32]) };
 const LUT_ACTG: __m256i = unsafe { transmute(*b"A_C_T_G_________A_C_T_G_________") };
 
-const NEEDS_DNA_MASKS: Config = COMPUTE_DNA_COLUMNAR
-    | COMPUTE_DNA_PACKED
-    | SPLIT_NON_ACTG
-    | COMPUTE_MASK_NON_ACTG
-    | COMPUTE_MASK_N;
+type Vectors = (__m256i, __m256i);
 
 #[inline(always)]
-pub fn extract_bitmask<const CONFIG: Config, const MODE: u8>(buf: &[u8]) -> Bitmask {
+pub fn load(buf: &[u8]) -> Vectors {
     unsafe {
         let ptr = buf.as_ptr() as *const __m256i;
-        let v1 = _mm256_loadu_si256(ptr);
-        let v2 = _mm256_loadu_si256(ptr.add(1));
-
-        if MODE == SCAN_MODE_DNA || flag_is_not_set(CONFIG, NEEDS_DNA_MASKS) {
-            let mut mask = bitpack_dna::<CONFIG>(v1, v2);
-            if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) || mask.is_dna != !0 {
-                mask.line_feeds = u8_mask(v1, v2, LINE_FEED);
-            }
-            mask
-        } else {
-            let line_feeds = u8_mask(v1, v2, LINE_FEED);
-            let skip_dna = if MODE == SCAN_MODE_QUALITY {
-                (line_feeds & line_feeds.wrapping_sub(1)) == 0
-            } else {
-                line_feeds == 0
-            };
-            let mut mask = if skip_dna {
-                Bitmask::ALL_DNA
-            } else {
-                bitpack_dna::<CONFIG>(v1, v2)
-            };
-            mask.line_feeds = line_feeds;
-            mask
-        }
+        (_mm256_loadu_si256(ptr), _mm256_loadu_si256(ptr.add(1)))
     }
 }
 
 #[inline(always)]
-pub fn extract_dna_bitmask<const CONFIG: Config>(buf: &[u8]) -> Bitmask {
-    unsafe {
-        let ptr = buf.as_ptr() as *const __m256i;
-        let v1 = _mm256_loadu_si256(ptr);
-        let v2 = _mm256_loadu_si256(ptr.add(1));
-        bitpack_dna::<CONFIG>(v1, v2)
-    }
+pub fn line_feeds((v1, v2): Vectors) -> u64 {
+    u8_mask(v1, v2, LINE_FEED)
 }
 
 #[inline(always)]
-fn bitpack_dna<const CONFIG: Config>(v1: __m256i, v2: __m256i) -> Bitmask {
+pub fn scan_line_feeds(buf: &[u8]) -> u64 {
+    line_feeds(load(buf))
+}
+
+#[inline(always)]
+pub fn bitpack_dna<const CONFIG: Config>((v1, v2): Vectors) -> Bitmask {
     unsafe {
         let mut mask = Bitmask::ALL_DNA;
 

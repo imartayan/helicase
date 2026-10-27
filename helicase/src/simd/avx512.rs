@@ -10,51 +10,23 @@ const ASCII_N: __m512i = unsafe { transmute([b'N'; 64]) };
 const LUT_ACTG: __m512i =
     unsafe { transmute(*b"A_C_T_G_________A_C_T_G_________A_C_T_G_________A_C_T_G_________") };
 
-const NEEDS_DNA_MASKS: Config = COMPUTE_DNA_COLUMNAR
-    | COMPUTE_DNA_PACKED
-    | SPLIT_NON_ACTG
-    | COMPUTE_MASK_NON_ACTG
-    | COMPUTE_MASK_N;
-
 #[inline(always)]
-pub fn extract_bitmask<const CONFIG: Config, const MODE: u8>(buf: &[u8]) -> Bitmask {
-    unsafe {
-        let v = _mm512_loadu_si512(buf.as_ptr() as *const __m512i);
-
-        if MODE == SCAN_MODE_DNA || flag_is_not_set(CONFIG, NEEDS_DNA_MASKS) {
-            let mut mask = bitpack_dna::<CONFIG>(v);
-            if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) || mask.is_dna != !0 {
-                mask.line_feeds = u8_mask(v, LINE_FEED);
-            }
-            mask
-        } else {
-            let line_feeds = u8_mask(v, LINE_FEED);
-            let skip_dna = if MODE == SCAN_MODE_QUALITY {
-                (line_feeds & line_feeds.wrapping_sub(1)) == 0
-            } else {
-                line_feeds == 0
-            };
-            let mut mask = if skip_dna {
-                Bitmask::ALL_DNA
-            } else {
-                bitpack_dna::<CONFIG>(v)
-            };
-            mask.line_feeds = line_feeds;
-            mask
-        }
-    }
+pub fn load(buf: &[u8]) -> __m512i {
+    unsafe { _mm512_loadu_si512(buf.as_ptr() as *const __m512i) }
 }
 
 #[inline(always)]
-pub fn extract_dna_bitmask<const CONFIG: Config>(buf: &[u8]) -> Bitmask {
-    unsafe {
-        let v = _mm512_loadu_si512(buf.as_ptr() as *const __m512i);
-        bitpack_dna::<CONFIG>(v)
-    }
+pub fn line_feeds(v: __m512i) -> u64 {
+    u8_mask(v, LINE_FEED)
 }
 
 #[inline(always)]
-fn bitpack_dna<const CONFIG: Config>(v: __m512i) -> Bitmask {
+pub fn scan_line_feeds(buf: &[u8]) -> u64 {
+    line_feeds(load(buf))
+}
+
+#[inline(always)]
+pub fn bitpack_dna<const CONFIG: Config>(v: __m512i) -> Bitmask {
     unsafe {
         let mut mask = Bitmask::ALL_DNA;
 

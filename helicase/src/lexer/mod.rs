@@ -48,7 +48,6 @@ pub struct Bitmask {
 }
 
 impl Bitmask {
-    #[allow(dead_code)] // unused by the scalar fallback
     pub const ALL_DNA: Self = Self {
         line_feeds: 0,
         is_dna: !0,

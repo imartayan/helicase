@@ -9,64 +9,33 @@ const LINE_FEED: __m128i = unsafe { transmute([b'\n'; 16]) };
 const ASCII_N: __m128i = unsafe { transmute([b'N'; 16]) };
 const LUT_ACTG: __m128i = unsafe { transmute(*b"A_C_T_G_________") };
 
-const NEEDS_DNA_MASKS: Config = COMPUTE_DNA_COLUMNAR
-    | COMPUTE_DNA_PACKED
-    | SPLIT_NON_ACTG
-    | COMPUTE_MASK_NON_ACTG
-    | COMPUTE_MASK_N;
+type Vectors = (__m128i, __m128i, __m128i, __m128i);
 
 #[inline(always)]
-pub fn extract_bitmask<const CONFIG: Config, const MODE: u8>(buf: &[u8]) -> Bitmask {
+pub fn load(buf: &[u8]) -> Vectors {
     unsafe {
         let ptr = buf.as_ptr() as *const __m128i;
-        let v1 = _mm_loadu_si128(ptr);
-        let v2 = _mm_loadu_si128(ptr.add(1));
-        let v3 = _mm_loadu_si128(ptr.add(2));
-        let v4 = _mm_loadu_si128(ptr.add(3));
-
-        if MODE == SCAN_MODE_DNA || flag_is_not_set(CONFIG, NEEDS_DNA_MASKS) {
-            let mut mask = bitpack_dna::<CONFIG>(v1, v2, v3, v4);
-            if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) || mask.is_dna != !0 {
-                mask.line_feeds = u8_mask(v1, v2, v3, v4, LINE_FEED);
-            }
-            mask
-        } else {
-            let line_feeds = u8_mask(v1, v2, v3, v4, LINE_FEED);
-            let skip_dna = if MODE == SCAN_MODE_QUALITY {
-                (line_feeds & line_feeds.wrapping_sub(1)) == 0
-            } else {
-                line_feeds == 0
-            };
-            let mut mask = if skip_dna {
-                Bitmask::ALL_DNA
-            } else {
-                bitpack_dna::<CONFIG>(v1, v2, v3, v4)
-            };
-            mask.line_feeds = line_feeds;
-            mask
-        }
+        (
+            _mm_loadu_si128(ptr),
+            _mm_loadu_si128(ptr.add(1)),
+            _mm_loadu_si128(ptr.add(2)),
+            _mm_loadu_si128(ptr.add(3)),
+        )
     }
 }
 
 #[inline(always)]
-pub fn extract_dna_bitmask<const CONFIG: Config>(buf: &[u8]) -> Bitmask {
-    unsafe {
-        let ptr = buf.as_ptr() as *const __m128i;
-        let v1 = _mm_loadu_si128(ptr);
-        let v2 = _mm_loadu_si128(ptr.add(1));
-        let v3 = _mm_loadu_si128(ptr.add(2));
-        let v4 = _mm_loadu_si128(ptr.add(3));
-        bitpack_dna::<CONFIG>(v1, v2, v3, v4)
-    }
+pub fn line_feeds((v1, v2, v3, v4): Vectors) -> u64 {
+    u8_mask(v1, v2, v3, v4, LINE_FEED)
 }
 
 #[inline(always)]
-fn bitpack_dna<const CONFIG: Config>(
-    v1: __m128i,
-    v2: __m128i,
-    v3: __m128i,
-    v4: __m128i,
-) -> Bitmask {
+pub fn scan_line_feeds(buf: &[u8]) -> u64 {
+    line_feeds(load(buf))
+}
+
+#[inline(always)]
+pub fn bitpack_dna<const CONFIG: Config>((v1, v2, v3, v4): Vectors) -> Bitmask {
     unsafe {
         let mut mask = Bitmask::ALL_DNA;
 

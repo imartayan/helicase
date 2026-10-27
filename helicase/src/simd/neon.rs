@@ -19,53 +19,21 @@ const LUT_ACTG_XOR: uint8x16x2_t = {
     unsafe { transmute(lut) }
 };
 
-const NEEDS_DNA_MASKS: Config = COMPUTE_DNA_COLUMNAR
-    | COMPUTE_DNA_PACKED
-    | SPLIT_NON_ACTG
-    | COMPUTE_MASK_NON_ACTG
-    | COMPUTE_MASK_N;
-
 #[inline(always)]
-pub fn extract_bitmask<const CONFIG: Config, const MODE: u8>(buf: &[u8]) -> Bitmask {
-    unsafe {
-        let ptr = buf.as_ptr();
-
-        if flag_is_not_set(CONFIG, NEEDS_DNA_MASKS) {
-            return Bitmask {
-                line_feeds: extract_bitmask_contiguous(ptr),
-                ..Bitmask::ALL_DNA
-            };
-        }
-
-        if MODE == SCAN_MODE_DNA {
-            let v = vld4q_u8(ptr);
-            let mut mask = bitpack_dna::<CONFIG>(v);
-            if flag_is_not_set(CONFIG, SPLIT_NON_ACTG) || mask.is_dna != !0 {
-                mask.line_feeds = movemask_64(map_8x16x4(v, |v| vceqq_u8(v, LINE_FEED)));
-            }
-            mask
-        } else {
-            let line_feeds = extract_bitmask_contiguous(ptr);
-            let skip_dna = if MODE == SCAN_MODE_QUALITY {
-                (line_feeds & line_feeds.wrapping_sub(1)) == 0
-            } else {
-                line_feeds == 0
-            };
-            let mut mask = if skip_dna {
-                Bitmask::ALL_DNA
-            } else {
-                bitpack_dna::<CONFIG>(vld4q_u8(ptr))
-            };
-            mask.line_feeds = line_feeds;
-            mask
-        }
-    }
+pub fn load(buf: &[u8]) -> uint8x16x4_t {
+    unsafe { vld4q_u8(buf.as_ptr()) }
 }
 
-// Lower latency, line feed only
 #[inline(always)]
-unsafe fn extract_bitmask_contiguous(ptr: *const u8) -> u64 {
+pub fn line_feeds(v: uint8x16x4_t) -> u64 {
+    movemask_64(map_8x16x4(v, |v| unsafe { vceqq_u8(v, LINE_FEED) }))
+}
+
+// Lower latency than `line_feeds(load(buf))`
+#[inline(always)]
+pub fn scan_line_feeds(buf: &[u8]) -> u64 {
     unsafe {
+        let ptr = buf.as_ptr();
         let q0 = vld1q_u8(ptr);
         let q1 = vld1q_u8(ptr.add(16));
         let q2 = vld1q_u8(ptr.add(32));
@@ -81,12 +49,7 @@ unsafe fn extract_bitmask_contiguous(ptr: *const u8) -> u64 {
 }
 
 #[inline(always)]
-pub fn extract_dna_bitmask<const CONFIG: Config>(buf: &[u8]) -> Bitmask {
-    unsafe { bitpack_dna::<CONFIG>(vld4q_u8(buf.as_ptr())) }
-}
-
-#[inline(always)]
-fn bitpack_dna<const CONFIG: Config>(v: uint8x16x4_t) -> Bitmask {
+pub fn bitpack_dna<const CONFIG: Config>(v: uint8x16x4_t) -> Bitmask {
     unsafe {
         let mut mask = Bitmask::ALL_DNA;
 

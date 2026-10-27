@@ -1,7 +1,7 @@
 // Compares the SIMD backend with the scalar fallback on the same blocks.
+use super::scalar;
 use crate::config::{advanced::*, *};
 use crate::lexer::*;
-use crate::scalar;
 
 const FULL: Config =
     COMPUTE_DNA_PACKED | COMPUTE_DNA_COLUMNAR | COMPUTE_MASK_NON_ACTG | COMPUTE_MASK_N;
@@ -35,15 +35,15 @@ fn check<const CONFIG: Config>() {
     let set = |flag| flag_is_set(CONFIG, flag);
     for block in blocks() {
         let id = String::from_utf8_lossy(&block);
-        let simd = crate::simd::extract_bitmask::<CONFIG, SCAN_MODE_DNA>(&block);
-        let expected = scalar::extract_bitmask::<CONFIG, SCAN_MODE_DNA>(&block);
-        assert_eq!(simd.line_feeds, expected.line_feeds, "line feeds {id:?}");
-        let line_feeds = expected.line_feeds;
+        let simd = super::extract_bitmask::<CONFIG, SCAN_MODE_DNA>(&block);
+        let expected = scalar::bitpack_dna::<CONFIG>(&block);
+        let line_feeds = scalar::line_feeds(&block);
+        assert_eq!(simd.line_feeds, line_feeds, "line feeds {id:?}");
         for (simd, expected) in [
             (simd, expected),
             (
-                crate::simd::extract_dna_bitmask::<CONFIG>(&block),
-                scalar::extract_dna_bitmask::<CONFIG>(&block),
+                super::extract_dna_bitmask::<CONFIG>(&block),
+                scalar::bitpack_dna::<CONFIG>(&block),
             ),
         ] {
             if set(SPLIT_NON_ACTG) {
@@ -67,8 +67,8 @@ fn check<const CONFIG: Config>() {
             }
         }
         for simd in [
-            crate::simd::extract_bitmask::<CONFIG, SCAN_MODE_HEADER>(&block),
-            crate::simd::extract_bitmask::<CONFIG, SCAN_MODE_QUALITY>(&block),
+            super::extract_bitmask::<CONFIG, SCAN_MODE_HEADER>(&block),
+            super::extract_bitmask::<CONFIG, SCAN_MODE_QUALITY>(&block),
         ] {
             assert_eq!(simd.line_feeds, line_feeds, "line feeds {id:?}");
         }

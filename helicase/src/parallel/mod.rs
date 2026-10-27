@@ -1,7 +1,7 @@
 //! Parallel multi-chunk parsing.
 //!
-//! Provides lock-free work-stealing execution across multiple threads,
-//! for both reader and memory-mapped files.
+//! Provides work-stealing execution across multiple threads,
+//! for slices, files, and streams decompressed by a single thread.
 
 use crate::config::*;
 use crate::input::*;
@@ -11,13 +11,17 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::mpsc::{Receiver, SyncSender, channel, sync_channel};
+use std::sync::{Mutex, OnceLock};
+
+/// Target bytes per chunk when a compressed stream is decompressed by a single thread
+const STREAM_CHUNK_LEN: usize = 4 << 20;
 
 /// Maximum bytes per chunk in [`ParallelFastxParser::process_parallel`], where a chunk is a batch
 #[cfg(feature = "paraseq")]
 const PARASEQ_MAX_CHUNK_LEN: usize = 16 << 20;
 
-// Index of the current worker thread, 0 outside of `run_chunks` (single-threaded paths).
+// Index of the current worker thread, 0 outside of `run_workers` (single-threaded paths).
 #[cfg(feature = "paraseq")]
 thread_local!(static WORKER_ID: core::cell::Cell<usize> = const { core::cell::Cell::new(0) });
 
@@ -25,13 +29,62 @@ thread_local!(static WORKER_ID: core::cell::Cell<usize> = const { core::cell::Ce
 mod frames;
 #[cfg(feature = "zstd")]
 pub(crate) use frames::index_zstd_frames;
+#[cfg(test)]
+mod tests;
+
+/// Runs `threads` workers calling `work(ticket)` until it returns `None`, and reduces the results
+/// in worker order. Worker `t` starts with ticket `t`, then takes the next free ticket.
+/// If `work` fails, the other workers stop and the first error is returned.
+fn run_workers<State, Work, Reduce>(threads: usize, work: Work, reduce: Reduce) -> Result<State>
+where
+    State: Send + Default,
+    Work: Fn(usize) -> Option<Result<Option<State>>> + Sync,
+    Reduce: Fn(State, State) -> State + Sync,
+{
+    let next_ticket = &AtomicUsize::new(threads);
+    let stop = &AtomicBool::new(false);
+    let (work, reduce) = (&work, &reduce);
+    let results: Vec<_> = std::thread::scope(|scope| {
+        // Collected to spawn all the threads before joining them.
+        #[allow(clippy::needless_collect)]
+        let handles: Vec<_> = (0..threads)
+            .map(|worker| {
+                scope.spawn(move || -> Result<Option<State>> {
+                    #[cfg(feature = "paraseq")]
+                    WORKER_ID.set(worker);
+                    let mut thread_state = None;
+                    let mut ticket = worker;
+                    while !stop.load(Ordering::Relaxed)
+                        && let Some(res) = work(ticket)
+                    {
+                        if let Some(res) =
+                            res.inspect_err(|_| stop.store(true, Ordering::Relaxed))?
+                        {
+                            thread_state = Some(match thread_state {
+                                Some(acc) => reduce(acc, res),
+                                None => res,
+                            });
+                        }
+                        ticket = next_ticket.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok(thread_state)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let results = results.into_iter().collect::<Result<Vec<_>>>()?;
+    Ok(results
+        .into_iter()
+        .flatten()
+        .reduce(reduce)
+        .unwrap_or_default())
+}
 
 /// Processes `num_chunks` chunks across `threads` with work stealing, and reduces the results.
 ///
 /// Chunk `i` goes from split `i` to split `i + 1`. The first and last splits are given, the others
 /// are computed once by `split`, when a thread first needs them. Empty chunks are skipped.
-/// Thread `t` starts with chunk `t`, so results are in input order with one chunk per thread.
-/// If a chunk fails, the other threads stop and the first error is returned.
 fn run_chunks<P, State, Split, Parse, Reduce>(
     num_chunks: usize,
     threads: usize,
@@ -50,52 +103,80 @@ where
     let splits: Vec<OnceLock<P>> = (0..=num_chunks).map(|_| OnceLock::new()).collect();
     let _ = splits[0].set(first);
     let _ = splits[num_chunks].set(last);
-    let split_at = &|i: usize| *splits[i].get_or_init(|| split(i));
-    let workers = threads.min(num_chunks);
-    let next_chunk = &AtomicUsize::new(workers);
-    let stop = &AtomicBool::new(false);
-    let (parse_chunk, reduce) = (&parse_chunk, &reduce);
-    let results = std::thread::scope(|scope| {
-        // Collected to spawn all the threads before joining them.
-        #[allow(clippy::needless_collect)]
-        let handles: Vec<_> = (0..workers)
-            .map(|first_chunk| {
-                scope.spawn(move || -> Result<Option<State>> {
-                    #[cfg(feature = "paraseq")]
-                    WORKER_ID.set(first_chunk);
-                    let mut thread_state = None;
-                    let mut idx = first_chunk;
-                    while idx < num_chunks && !stop.load(Ordering::Relaxed) {
-                        let (start, end) = (split_at(idx), split_at(idx + 1));
-                        if start < end {
-                            let res = parse_chunk(start, end)
-                                .inspect_err(|_| stop.store(true, Ordering::Relaxed))?;
-                            thread_state = Some(match thread_state {
-                                Some(acc) => reduce(acc, res),
-                                None => res,
-                            });
-                        }
-                        idx = next_chunk.fetch_add(1, Ordering::Relaxed);
-                    }
-                    Ok(thread_state)
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|handle| handle.join().unwrap())
-            .collect::<Vec<_>>()
-    });
-    let mut total = None;
-    for thread_state in results {
-        if let Some(res) = thread_state? {
-            total = Some(match total {
-                Some(acc) => reduce(acc, res),
-                None => res,
-            });
+    let split_at = |i: usize| *splits[i].get_or_init(|| split(i));
+    let work = |i| {
+        let (start, end) = (i < num_chunks).then(|| (split_at(i), split_at(i + 1)))?;
+        Some((start < end).then(|| parse_chunk(start, end)).transpose())
+    };
+    run_workers(threads.min(num_chunks), work, reduce)
+}
+
+/// Decompresses `reader` in a separate thread, and processes record-aligned chunks of the output
+/// on `threads` workers.
+fn run_stream<const CONFIG: Config, State, Process, Reduce>(
+    reader: impl Read + Send,
+    threads: usize,
+    max_chunk_len: usize,
+    process: Process,
+    reduce: Reduce,
+) -> Result<State>
+where
+    State: Send + Default,
+    Process: Fn(FastxParser<'_, CONFIG>) -> Result<State> + Sync,
+    Reduce: Fn(State, State) -> State + Sync,
+{
+    let chunk_len = STREAM_CHUNK_LEN.min(max_chunk_len);
+    let (chunk_sender, chunks) = sync_channel(threads);
+    let (free_sender, free) = channel();
+    let chunks = Mutex::new(chunks);
+    // Dropped when the workers are done, which stops the reader thread
+    let work = move |_| {
+        let mut chunk: Vec<u8> = chunks.lock().unwrap().recv().ok()?;
+        let res = FastxParser::from_slice(&chunk).and_then(&process);
+        chunk.clear();
+        chunk.shrink_to(2 * chunk_len);
+        let _ = free_sender.send(chunk);
+        Some(res.map(Some))
+    };
+    std::thread::scope(|scope| {
+        let sent = scope.spawn(move || send_chunks(reader, chunk_len, free, chunk_sender));
+        let res = run_workers(threads, work, reduce);
+        sent.join().unwrap()?;
+        res
+    })
+}
+
+/// Sends the content of `reader` in chunks of `chunk_len` bytes or more, cut before a record start.
+/// Buffers are reused from `free`, and stops when `chunks` is closed.
+fn send_chunks(
+    mut reader: impl Read,
+    chunk_len: usize,
+    free: Receiver<Vec<u8>>,
+    chunks: SyncSender<Vec<u8>>,
+) -> Result<()> {
+    let mut carry = Vec::new();
+    loop {
+        let mut buf = free.try_recv().unwrap_or_default();
+        buf.append(&mut carry);
+        let from = buf.len() + chunk_len;
+        // Read ahead to find the next record start, doubling for long records
+        let mut slack = chunk_len.div_ceil(16);
+        let (cut, eof) = loop {
+            let missing = from + slack - buf.len();
+            if (&mut reader).take(missing as u64).read_to_end(&mut buf)? < missing {
+                break (buf.len(), true);
+            }
+            if let Some(cut) = Format::try_from_byte(buf[0])?.find_record_start(&buf, from) {
+                break (cut, false);
+            }
+            slack *= 2;
+        };
+        carry.extend_from_slice(&buf[cut..]);
+        buf.truncate(cut);
+        if buf.is_empty() || chunks.send(buf).is_err() || eof {
+            return Ok(());
         }
     }
-    Ok(total.unwrap_or_default())
 }
 
 fn run_slice<const CONFIG: Config, State, Process, Reduce>(
@@ -178,7 +259,8 @@ where
     Process: Fn(FastxParser<'_, CONFIG>) -> Result<State> + Sync,
     Reduce: Fn(State, State) -> State + Sync,
 {
-    match CompressionFormat::from_path(path)? {
+    let compression = CompressionFormat::from_path(path)?;
+    match compression {
         None => {}
         #[cfg(feature = "gz")]
         Some(CompressionFormat::Bgzf) if threads > 1 => {
@@ -207,9 +289,16 @@ where
                     reduce,
                 );
             }
+        }
+        Some(_) => {}
+    }
+    if compression.is_some() {
+        // The read-ahead of `from_file` is about 3% faster than `run_stream` on one thread
+        if threads == 1 {
             return process(FastxParser::from_file(path)?);
         }
-        Some(_) => return process(FastxParser::from_file(path)?),
+        let reader = decompress(File::open(path)?)?;
+        return run_stream::<CONFIG, _, _, _>(reader, threads, max_chunk_len, process, reduce);
     }
 
     let mut file = File::open(path)?;
@@ -371,7 +460,7 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
 
     /// Creates a parallel parser for an arbitrary streaming reader.
     ///
-    /// Non-seekable streaming readers currently execute in single-threaded streaming mode.
+    /// The reader is decompressed by a single thread, which distributes chunks to the workers.
     #[inline]
     pub fn from_reader<Reader: Read + Send + 'a>(reader: Reader) -> Self {
         Self::with_source(ParallelSource::Reader(Box::new(reader)))
@@ -555,14 +644,13 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
                 process,
                 reduce,
             ),
-            ParallelSource::Reader(reader) => {
-                if self.threads > 1 {
-                    eprintln!(
-                        "Warning: ParallelFastxParser currently processes streaming readers in single-threaded mode."
-                    );
-                }
-                process(FastxParser::<CONFIG>::from_reader(reader)?)
-            }
+            ParallelSource::Reader(reader) => run_stream::<CONFIG, State, _, _>(
+                decompress(reader)?,
+                self.threads,
+                self.max_chunk_len,
+                process,
+                reduce,
+            ),
         }
     }
 

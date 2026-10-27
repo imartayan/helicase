@@ -506,6 +506,11 @@ impl<'a, R: Read + 'a> ReaderInput<'a, R> {
     }
 }
 
+/// Decompresses `reader` on the fly, like [`ReaderInput::new`] but without parsing.
+pub(crate) fn decompress<R: Read>(reader: R) -> io::Result<impl Read> {
+    ReaderInput::<R>::decoder(reader).map(|(decoder, _)| decoder)
+}
+
 impl<R: Read + Send + 'static> ReaderInput<'static, R> {
     /// Build a reader input that reads and decompresses ahead in a background thread.
     pub fn with_read_ahead(reader: R) -> io::Result<Self> {

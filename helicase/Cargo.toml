@@ -1,6 +1,6 @@
 [package]
 name = "helicase"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2024"
 authors = ["Igor Martayan", "Charles Paperman"]
 description = "SIMD-accelerated library for FASTA/FASTQ parsing and bitpacking"

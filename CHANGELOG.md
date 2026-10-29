@@ -3,6 +3,8 @@
 <!-- next-header -->
 ## [Unreleased]
 
+## 1.2.0
+
 - `ParallelFastxParser` now uses all its threads on plain gzip, single-frame zstd and `from_reader` inputs: one thread decompresses while the workers parse the chunks.
 - `process_parallel` now supports ordered batch completion (`requires_ordering`, `Ordered`), calls `set_thread_id` and `on_thread_complete` once per worker thread, and `on_batch_complete` after each chunk.
 - `ParallelFastxParser::for_each_with` keeps a state per worker thread and returns these states, e.g. for k-mer tables.

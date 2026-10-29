@@ -15,9 +15,20 @@ fn count(mut parser: FastxParser<'_, CONFIG>) -> Result<(usize, usize)> {
 }
 
 fn count_stream(input: &[u8], threads: usize, chunk_len: usize) -> Result<(usize, usize)> {
-    run_stream(Cursor::new(input), threads, chunk_len, count, |a, b| {
-        (a.0 + b.0, a.1 + b.1)
-    })
+    let mut parser =
+        ParallelFastxParser::<CONFIG>::from_reader(Cursor::new(input)).threads(threads);
+    parser.max_chunk_len = chunk_len;
+    let counts = parser.for_each_with(
+        || (0, 0),
+        |acc, p| {
+            let (records, len) = count(p)?;
+            *acc = (acc.0 + records, acc.1 + len);
+            Ok(())
+        },
+    )?;
+    Ok(counts
+        .into_iter()
+        .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1)))
 }
 
 #[test]
@@ -48,8 +59,9 @@ fn stream_chunks_match_sequential() {
 #[test]
 fn stream_stops_on_error() {
     let input = FastxGen::fasta(1000, 100).generate_bytes();
-    let res =
-        run_stream::<CONFIG, (), _, _>(Cursor::new(&input), 2, 100, |_| Err("".into()), |_, _| ());
+    let mut parser = ParallelFastxParser::<CONFIG>::from_reader(Cursor::new(&input)).threads(2);
+    parser.max_chunk_len = 100;
+    let res = parser.for_each(|_| Err("".into()));
     assert!(res.is_err());
     assert!(count_stream(b"xyz\n".repeat(100).as_slice(), 2, 100).is_err());
 }

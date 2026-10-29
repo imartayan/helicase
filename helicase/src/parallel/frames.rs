@@ -1,6 +1,6 @@
 //! Parallel decompression of independent compressed frames (BGZF blocks, zstd frames).
 
-use super::run_chunks;
+use super::Job;
 use crate::config::*;
 use crate::input::*;
 use crate::parser::*;
@@ -217,56 +217,58 @@ fn find_record_start_in_frames<D: FrameDecoder>(
     (frames.len(), 0)
 }
 
-pub(super) fn run_frames<D, const CONFIG: Config, State, Process, Reduce>(
-    compressed: &[u8],
-    frames: &[Frame],
-    threads: usize,
-    max_chunk_len: usize,
-    process: Process,
-    reduce: Reduce,
-) -> Result<State>
+impl<const CONFIG: Config, T, State, Init, Process, Finish> Job<CONFIG, Init, Process, Finish>
 where
-    D: FrameDecoder,
-    State: Send + Default,
-    Process: Fn(FastxParser<'_, CONFIG>) -> Result<State> + Sync,
-    Reduce: Fn(State, State) -> State + Sync,
+    State: Send,
+    Init: Fn(usize) -> T + Sync,
+    Process: Fn(&mut T, usize, FastxParser<'_, CONFIG>) -> Result<()> + Sync,
+    Finish: Fn(T) -> Result<State> + Sync,
 {
-    let Some(first) = frames.first() else {
-        return Ok(State::default());
-    };
-    let format = Format::try_from_byte(D::first_byte(first.bytes(compressed))?)?;
-    let uncomp_len: usize = frames.iter().map(|frame| frame.uncomp_len).sum();
-    let num_chunks = threads
-        .max(uncomp_len.div_ceil(max_chunk_len))
-        .min(frames.len());
-    run_chunks(
-        num_chunks,
-        threads,
-        ((0, 0), (frames.len(), 0)),
-        |i| {
-            find_record_start_in_frames::<D>(
-                compressed,
-                frames,
-                i * frames.len() / num_chunks,
-                format,
-            )
-        },
-        |start, end| {
-            let reader = FrameRangeReader {
-                compressed,
-                frames,
-                start,
-                end,
-                next_frame: start.0,
-                decoder: D::new()?,
-                buf: Vec::new(),
-                pos: 0,
-                len: 0,
-            };
-            process(FastxParser::from_reader(reader)?)
-        },
-        reduce,
-    )
+    pub(super) fn run_frames<D: FrameDecoder>(
+        &self,
+        compressed: &[u8],
+        frames: &[Frame],
+        threads: usize,
+        custom_chunks: Option<usize>,
+        max_chunk_len: usize,
+    ) -> Result<Vec<State>> {
+        let Some(first) = frames.first() else {
+            return self.run_single(FastxParser::from_slice(&[]));
+        };
+        let format = Format::try_from_byte(D::first_byte(first.bytes(compressed))?)?;
+        let uncomp_len: usize = frames.iter().map(|frame| frame.uncomp_len).sum();
+        let num_chunks = custom_chunks
+            .unwrap_or(threads)
+            .max(uncomp_len.div_ceil(max_chunk_len))
+            .min(frames.len());
+        self.run_chunks(
+            num_chunks,
+            threads,
+            ((0, 0), (frames.len(), 0)),
+            |i| {
+                find_record_start_in_frames::<D>(
+                    compressed,
+                    frames,
+                    i * frames.len() / num_chunks,
+                    format,
+                )
+            },
+            |state, ticket, start, end| {
+                let reader = FrameRangeReader {
+                    compressed,
+                    frames,
+                    start,
+                    end,
+                    next_frame: start.0,
+                    decoder: D::new()?,
+                    buf: Vec::new(),
+                    pos: 0,
+                    len: 0,
+                };
+                (self.process)(state, ticket, FastxParser::from_reader(reader)?)
+            },
+        )
+    }
 }
 
 // Compressed size and decompressed size (or an upper bound if the header has none) of the zstd

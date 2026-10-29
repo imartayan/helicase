@@ -73,18 +73,19 @@ pub fn bench_helicase_parallel(
     for _ in 0..warmup {
         let total_len = ParallelFastxParser::<DNA_STRING>::from_slice(data)
             .threads(threads)
-            .reduce(
-                |mut parser| {
-                    let mut len = 0;
+            .for_each_with(
+                || 0,
+                |len, mut parser| {
                     while let Some(event) = parser.next() {
                         event?;
-                        len += parser.get_dna_string().len();
+                        *len += parser.get_dna_string().len();
                     }
-                    Ok(len)
+                    Ok(())
                 },
-                |a, b| a + b,
             )
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .sum::<usize>();
         std::hint::black_box(total_len);
     }
 
@@ -94,18 +95,19 @@ pub fn bench_helicase_parallel(
         let t0 = Instant::now();
         let total_len = ParallelFastxParser::<DNA_STRING>::from_slice(data)
             .threads(threads)
-            .reduce(
-                |mut parser| {
-                    let mut len = 0;
+            .for_each_with(
+                || 0,
+                |len, mut parser| {
                     while let Some(event) = parser.next() {
                         event?;
-                        len += parser.get_dna_string().len();
+                        *len += parser.get_dna_string().len();
                     }
-                    Ok(len)
+                    Ok(())
                 },
-                |a, b| a + b,
             )
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .sum::<usize>();
         let elapsed = t0.elapsed().as_secs_f64();
         times.push(elapsed);
         last_len = total_len;
@@ -125,18 +127,19 @@ pub fn bench_helicase_packed(
     for _ in 0..warmup {
         let total_len = ParallelFastxParser::<DNA_PACKED>::from_slice(data)
             .threads(threads)
-            .reduce(
-                |mut parser| {
-                    let mut len = 0;
+            .for_each_with(
+                || 0,
+                |len, mut parser| {
                     while let Some(event) = parser.next() {
                         event?;
-                        len += parser.get_dna_packed().len();
+                        *len += parser.get_dna_packed().len();
                     }
-                    Ok(len)
+                    Ok(())
                 },
-                |a, b| a + b,
             )
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .sum::<usize>();
         std::hint::black_box(total_len);
     }
 
@@ -146,18 +149,19 @@ pub fn bench_helicase_packed(
         let t0 = Instant::now();
         let total_len = ParallelFastxParser::<DNA_PACKED>::from_slice(data)
             .threads(threads)
-            .reduce(
-                |mut parser| {
-                    let mut len = 0;
+            .for_each_with(
+                || 0,
+                |len, mut parser| {
                     while let Some(event) = parser.next() {
                         event?;
-                        len += parser.get_dna_packed().len();
+                        *len += parser.get_dna_packed().len();
                     }
-                    Ok(len)
+                    Ok(())
                 },
-                |a, b| a + b,
             )
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .sum::<usize>();
         let elapsed = t0.elapsed().as_secs_f64();
         times.push(elapsed);
         last_len = total_len;
@@ -219,18 +223,19 @@ pub fn bench_helicase_file_parallel(
         .unwrap()
         .threads(threads);
         let total_len = builder
-            .reduce(
-                |mut parser| {
-                    let mut len = 0;
+            .for_each_with(
+                || 0,
+                |len, mut parser| {
                     while let Some(event) = parser.next() {
                         event?;
-                        len += parser.get_dna_string().len();
+                        *len += parser.get_dna_string().len();
                     }
-                    Ok(len)
+                    Ok(())
                 },
-                |a, b| a + b,
             )
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .sum::<usize>();
         std::hint::black_box(total_len);
     }
 
@@ -246,18 +251,19 @@ pub fn bench_helicase_file_parallel(
         .unwrap()
         .threads(threads);
         let total_len = builder
-            .reduce(
-                |mut parser| {
-                    let mut len = 0;
+            .for_each_with(
+                || 0,
+                |len, mut parser| {
                     while let Some(event) = parser.next() {
                         event?;
-                        len += parser.get_dna_string().len();
+                        *len += parser.get_dna_string().len();
                     }
-                    Ok(len)
+                    Ok(())
                 },
-                |a, b| a + b,
             )
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .sum::<usize>();
         let elapsed = t0.elapsed().as_secs_f64();
         times.push(elapsed);
         last_len = total_len;
@@ -598,18 +604,19 @@ pub fn run_parallel_file_benchmarks(
             let total_len = ParallelFastxParser::<DNA_STRING>::from_file(path)
                 .unwrap()
                 .threads(threads)
-                .reduce(
-                    |mut parser| {
-                        let mut len = 0;
+                .for_each_with(
+                    || 0,
+                    |len, mut parser| {
                         while let Some(event) = parser.next() {
                             event?;
-                            len += parser.get_dna_string().len();
+                            *len += parser.get_dna_string().len();
                         }
-                        Ok(len)
+                        Ok(())
                     },
-                    |a, b| a + b,
                 )
-                .unwrap();
+                .unwrap()
+                .into_iter()
+                .sum::<usize>();
             std::hint::black_box(total_len);
         }
         for _ in 0..repeat {
@@ -617,18 +624,19 @@ pub fn run_parallel_file_benchmarks(
             let total_len = ParallelFastxParser::<DNA_STRING>::from_file(path)
                 .unwrap()
                 .threads(threads)
-                .reduce(
-                    |mut parser| {
-                        let mut len = 0;
+                .for_each_with(
+                    || 0,
+                    |len, mut parser| {
                         while let Some(event) = parser.next() {
                             event?;
-                            len += parser.get_dna_string().len();
+                            *len += parser.get_dna_string().len();
                         }
-                        Ok(len)
+                        Ok(())
                     },
-                    |a, b| a + b,
                 )
-                .unwrap();
+                .unwrap()
+                .into_iter()
+                .sum::<usize>();
             times.push(t0.elapsed().as_secs_f64());
             last_len = total_len;
         }
@@ -839,18 +847,19 @@ pub fn run_parallel_mmap_benchmarks(
             let total_len = ParallelFastxParser::<DNA_STRING>::from_file_mmap(path)
                 .unwrap()
                 .threads(threads)
-                .reduce(
-                    |mut parser| {
-                        let mut len = 0;
+                .for_each_with(
+                    || 0,
+                    |len, mut parser| {
                         while let Some(event) = parser.next() {
                             event?;
-                            len += parser.get_dna_string().len();
+                            *len += parser.get_dna_string().len();
                         }
-                        Ok(len)
+                        Ok(())
                     },
-                    |a, b| a + b,
                 )
-                .unwrap();
+                .unwrap()
+                .into_iter()
+                .sum::<usize>();
             std::hint::black_box(total_len);
         }
         for _ in 0..repeat {
@@ -858,18 +867,19 @@ pub fn run_parallel_mmap_benchmarks(
             let total_len = ParallelFastxParser::<DNA_STRING>::from_file_mmap(path)
                 .unwrap()
                 .threads(threads)
-                .reduce(
-                    |mut parser| {
-                        let mut len = 0;
+                .for_each_with(
+                    || 0,
+                    |len, mut parser| {
                         while let Some(event) = parser.next() {
                             event?;
-                            len += parser.get_dna_string().len();
+                            *len += parser.get_dna_string().len();
                         }
-                        Ok(len)
+                        Ok(())
                     },
-                    |a, b| a + b,
                 )
-                .unwrap();
+                .unwrap()
+                .into_iter()
+                .sum::<usize>();
             times.push(t0.elapsed().as_secs_f64());
             last_len = total_len;
         }

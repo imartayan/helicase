@@ -136,7 +136,7 @@ fn main() -> std::io::Result<()> {
 
 Helicase implements `paraseq::Record` for `&FastxParser`, so `record.seq_raw()` returns borrowed zero-copy slices.
 
-### Native API (`for_each` and `reduce`)
+### Native API (`for_each` and `for_each_with`)
 
 Helicase native parallel parsing uses closures instead of processor traits.
 
@@ -171,9 +171,9 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-#### `reduce` for aggregations
+#### `for_each_with` for aggregations
 
-Instead of atomic counters or shared mutexes, use `reduce` with a thread-local accumulator and error propagation:
+Instead of atomic counters or shared mutexes, keep a state per thread with `for_each_with`, which returns the state of each thread:
 
 ```rust
 use helicase::config::*;
@@ -182,21 +182,21 @@ use helicase::*;
 const CONFIG: Config = ParserOptions::default().ignore_headers().config();
 
 fn main() -> std::io::Result<()> {
-    let (total_records, total_len) = ParallelFastxParser::<CONFIG>::from_file("reads.fastq")?
+    let counts = ParallelFastxParser::<CONFIG>::from_file("reads.fastq")?
         .threads(8)
-        .reduce(
-            |mut parser| {
-                let mut records = 0;
-                let mut len = 0;
+        .for_each_with(
+            || (0, 0),
+            |(records, len), mut parser| {
                 while let Some(event) = parser.next() {
                     event?;
-                    records += 1;
-                    len += parser.get_dna_len();
+                    *records += 1;
+                    *len += parser.get_dna_len();
                 }
-                Ok((records, len))
+                Ok(())
             },
-            |acc, val| (acc.0 + val.0, acc.1 + val.1),
         )?;
+    let total_records: usize = counts.iter().map(|c| c.0).sum();
+    let total_len: usize = counts.iter().map(|c| c.1).sum();
 
     println!("Records: {total_records}, Total len: {total_len}");
     Ok(())

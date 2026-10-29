@@ -46,20 +46,20 @@ mod tests {
             let (total_records, total_len) = ParallelFastxParser::<CONFIG>::from_file(temp_file)
                 .unwrap()
                 .threads(threads)
-                .reduce(
-                    |mut parser| {
-                        let mut count = 0;
-                        let mut len = 0;
+                .for_each_with(
+                    || (0, 0),
+                    |(count, len), mut parser| {
                         while let Some(event) = parser.next() {
                             event?;
-                            count += 1;
-                            len += parser.get_dna_len();
+                            *count += 1;
+                            *len += parser.get_dna_len();
                         }
-                        Ok((count, len))
+                        Ok(())
                     },
-                    |a, b| (a.0 + b.0, a.1 + b.1),
                 )
-                .unwrap();
+                .unwrap()
+                .into_iter()
+                .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
 
             assert_eq!(total_records, 5000, "Failed at threads={threads}");
             assert_eq!(total_len, 5000 * 30, "Failed at threads={threads}");
@@ -112,20 +112,20 @@ mod tests {
             let (total_records, total_len) = ParallelFastxParser::<CONFIG>::from_file(temp_file)
                 .unwrap()
                 .threads(threads)
-                .reduce(
-                    |mut parser| {
-                        let mut count = 0;
-                        let mut len = 0;
+                .for_each_with(
+                    || (0, 0),
+                    |(count, len), mut parser| {
                         while let Some(event) = parser.next() {
                             event?;
-                            count += 1;
-                            len += parser.get_dna_len();
+                            *count += 1;
+                            *len += parser.get_dna_len();
                         }
-                        Ok((count, len))
+                        Ok(())
                     },
-                    |a, b| (a.0 + b.0, a.1 + b.1),
                 )
-                .unwrap();
+                .unwrap()
+                .into_iter()
+                .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
 
             assert_eq!(total_records, 3000, "Failed at threads={threads}");
             assert_eq!(total_len, 3000 * 30, "Failed at threads={threads}");
@@ -146,20 +146,20 @@ mod tests {
             let (total_records, total_len) = ParallelFastxParser::<CONFIG>::from_file(temp_file)
                 .unwrap()
                 .threads(threads)
-                .reduce(
-                    |mut parser| {
-                        let mut count = 0;
-                        let mut len = 0;
+                .for_each_with(
+                    || (0, 0),
+                    |(count, len), mut parser| {
                         while let Some(event) = parser.next() {
                             event?;
-                            count += 1;
-                            len += parser.get_dna_len();
+                            *count += 1;
+                            *len += parser.get_dna_len();
                         }
-                        Ok((count, len))
+                        Ok(())
                     },
-                    |a, b| (a.0 + b.0, a.1 + b.1),
                 )
-                .unwrap();
+                .unwrap()
+                .into_iter()
+                .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
 
             assert_eq!(total_records, 1000, "Failed at threads={threads}");
             assert_eq!(total_len, 1000 * 30, "Failed at threads={threads}");
@@ -188,49 +188,32 @@ mod tests {
         std::fs::write(temp_file, &zst_data).unwrap();
 
         for threads in [1, 2, 4, 8] {
-            let (total_records, total_len, records) =
-                ParallelFastxParser::<CONFIG>::from_file(temp_file)
-                    .unwrap()
-                    .threads(threads)
-                    .reduce(
-                        |mut parser| {
-                            let mut count = 0;
-                            let mut len = 0;
-                            let mut recs = Vec::new();
-                            while let Some(event) = parser.next() {
-                                event?;
-                                count += 1;
-                                len += parser.get_dna_len();
-                                recs.push((
-                                    parser.get_header().to_vec(),
-                                    parser.get_dna_string().to_vec(),
-                                ));
-                            }
-                            Ok((count, len, recs))
-                        },
-                        |mut a, b| {
-                            a.0 += b.0;
-                            a.1 += b.1;
-                            a.2.extend(b.2);
-                            a
-                        },
-                    )
-                    .unwrap();
+            let mut records: Vec<_> = ParallelFastxParser::<CONFIG>::from_file(temp_file)
+                .unwrap()
+                .threads(threads)
+                .for_each_with(Vec::new, |recs, mut parser| {
+                    while let Some(event) = parser.next() {
+                        event?;
+                        recs.push((
+                            parser.get_header().to_vec(),
+                            parser.get_dna_string().to_vec(),
+                        ));
+                    }
+                    Ok(())
+                })
+                .unwrap()
+                .into_iter()
+                .flatten()
+                .collect();
 
-            assert_eq!(total_records, 3000, "Failed at threads={threads}");
-            assert_eq!(total_len, 3000 * 30, "Failed at threads={threads}");
-
-            // Verify exact sequential match with original records
-            for (i, (hdr, seq)) in records.iter().enumerate() {
-                let expected_hdr = format!("read_{i}");
-                let expected_seq = b"ACGTACGTACGTNNACGTACGTACGTACGT";
-                assert_eq!(
-                    hdr,
-                    expected_hdr.as_bytes(),
-                    "Header mismatch at record {i}"
-                );
-                assert_eq!(seq, expected_seq, "Sequence mismatch at record {i}");
-            }
+            // The order of the records across threads is not specified
+            let seq = b"ACGTACGTACGTNNACGTACGTACGTACGT";
+            let mut expected: Vec<_> = (0..3000)
+                .map(|i| (format!("read_{i}").into_bytes(), seq.to_vec()))
+                .collect();
+            records.sort_unstable();
+            expected.sort_unstable();
+            assert_eq!(records, expected, "Failed at threads={threads}");
         }
 
         let _ = std::fs::remove_file(temp_file);
@@ -254,20 +237,20 @@ mod tests {
                 ParallelFastxParser::<CONFIG>::from_file(temp_fasta_file)
                     .unwrap()
                     .threads(threads)
-                    .reduce(
-                        |mut parser| {
-                            let mut count = 0;
-                            let mut len = 0;
+                    .for_each_with(
+                        || (0, 0),
+                        |(count, len), mut parser| {
                             while let Some(event) = parser.next() {
                                 event?;
-                                count += 1;
-                                len += parser.get_dna_len();
+                                *count += 1;
+                                *len += parser.get_dna_len();
                             }
-                            Ok((count, len))
+                            Ok(())
                         },
-                        |a, b| (a.0 + b.0, a.1 + b.1),
                     )
-                    .unwrap();
+                    .unwrap()
+                    .into_iter()
+                    .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
 
             assert_eq!(total_records, 3000, "FASTA failed at threads={threads}");
             assert_eq!(total_len, 3000 * 30, "FASTA failed at threads={threads}");
@@ -312,20 +295,20 @@ mod tests {
             let (total_records, total_len) = ParallelFastxParser::<CONFIG>::from_file(temp_file)
                 .unwrap()
                 .threads(threads)
-                .reduce(
-                    |mut parser| {
-                        let mut count = 0;
-                        let mut len = 0;
+                .for_each_with(
+                    || (0, 0),
+                    |(count, len), mut parser| {
                         while let Some(event) = parser.next() {
                             event?;
-                            count += 1;
-                            len += parser.get_dna_len();
+                            *count += 1;
+                            *len += parser.get_dna_len();
                         }
-                        Ok((count, len))
+                        Ok(())
                     },
-                    |a, b| (a.0 + b.0, a.1 + b.1),
                 )
-                .unwrap();
+                .unwrap()
+                .into_iter()
+                .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
 
             assert_eq!(total_records, 2000, "Failed at threads={threads}");
             assert_eq!(total_len, 2000 * 30, "Failed at threads={threads}");

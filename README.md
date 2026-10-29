@@ -200,22 +200,23 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-Or aggregate results across threads with `reduce`:
+Or keep a state per thread with `for_each_with`, which returns the state of each thread:
 
 ```rust
 let total_len: usize = ParallelFastxParser::<CONFIG>::from_file(&path)?
     .threads(8)
-    .reduce(
-        |mut parser| {
-            let mut local_len = 0;
+    .for_each_with(
+        || 0,
+        |len, mut parser| {
             while let Some(event) = parser.next() {
                 event?;
-                local_len += parser.get_dna_string().len();
+                *len += parser.get_dna_string().len();
             }
-            Ok(local_len)
+            Ok(())
         },
-        |acc, val| acc + val,
-    )?;
+    )?
+    .into_iter()
+    .sum();
 ```
 
 ## Crate features

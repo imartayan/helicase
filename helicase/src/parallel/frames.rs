@@ -29,8 +29,16 @@ pub(super) trait FrameDecoder: Sized + Send {
     // Replaces the content of `out` with the decompressed frame.
     fn decode(&mut self, frame: &[u8], uncomp_len: usize, out: &mut Vec<u8>) -> io::Result<()>;
 
-    // First decompressed byte of the frame, without decompressing all of it.
-    fn first_byte(frame: &[u8]) -> io::Result<u8>;
+    // Like `decode`, but may stop after the first `len` bytes.
+    fn decode_prefix(
+        &mut self,
+        frame: &[u8],
+        uncomp_len: usize,
+        _len: usize,
+        out: &mut Vec<u8>,
+    ) -> io::Result<()> {
+        self.decode(frame, uncomp_len, out)
+    }
 }
 
 #[cfg(feature = "gz")]
@@ -50,16 +58,6 @@ impl FrameDecoder for BgzfDecoder {
             len.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{e:?}")))?,
         );
         Ok(())
-    }
-
-    fn first_byte(frame: &[u8]) -> io::Result<u8> {
-        let mut prefix = [0u8; 64];
-        let mut decoder = sirocco::inflate::Decoder::new(sirocco::Format::Gzip);
-        let first = decoder
-            .decompress(frame, &mut prefix, false)
-            .ok()
-            .and_then(|p| p.output.first().copied());
-        Ok(first.unwrap_or(0))
     }
 }
 
@@ -94,26 +92,64 @@ pub(super) fn index_bgzf_blocks(compressed: &[u8]) -> Vec<Frame> {
 }
 
 #[cfg(feature = "zstd")]
-pub(super) struct ZstdDecoder(zstd::bulk::Decompressor<'static>);
+pub(super) struct ZstdDecoder(zstd::zstd_safe::DCtx<'static>);
 
 #[cfg(feature = "zstd")]
 impl FrameDecoder for ZstdDecoder {
     fn new() -> io::Result<Self> {
-        Ok(Self(zstd::bulk::Decompressor::new()?))
+        let context = zstd::zstd_safe::DCtx::try_create();
+        context
+            .map(Self)
+            .ok_or_else(|| io::Error::other("cannot create zstd context"))
     }
 
     fn decode(&mut self, frame: &[u8], uncomp_len: usize, out: &mut Vec<u8>) -> io::Result<()> {
         out.resize(uncomp_len, 0);
-        let len = self.0.decompress_to_buffer(frame, out)?;
+        let len = self
+            .0
+            .decompress(out.as_mut_slice(), frame)
+            .map_err(zstd_error)?;
         out.truncate(len);
         Ok(())
     }
 
-    fn first_byte(frame: &[u8]) -> io::Result<u8> {
-        let mut first = [0u8; 1];
-        zstd::stream::read::Decoder::new(frame)?.read_exact(&mut first)?;
-        Ok(first[0])
+    // Streams the frame block by block (at most 128 KiB each) until `len` bytes are out.
+    fn decode_prefix(
+        &mut self,
+        frame: &[u8],
+        uncomp_len: usize,
+        len: usize,
+        out: &mut Vec<u8>,
+    ) -> io::Result<()> {
+        use zstd::zstd_safe::{InBuffer, OutBuffer, ResetDirective};
+        let len = len.min(uncomp_len);
+        out.resize(len, 0);
+        self.0
+            .reset(ResetDirective::SessionOnly)
+            .map_err(zstd_error)?;
+        let mut input = InBuffer::around(frame);
+        let mut output = OutBuffer::around(out.as_mut_slice());
+        while output.pos() < len {
+            let remaining = self
+                .0
+                .decompress_stream(&mut output, &mut input)
+                .map_err(zstd_error)?;
+            if remaining == 0 {
+                break;
+            }
+            if input.pos() == frame.len() {
+                return Err(io::ErrorKind::UnexpectedEof.into());
+            }
+        }
+        let decoded = output.pos();
+        out.truncate(decoded);
+        Ok(())
     }
+}
+
+#[cfg(feature = "zstd")]
+fn zstd_error(code: usize) -> io::Error {
+    io::Error::other(zstd::zstd_safe::get_error_name(code))
 }
 
 // Frames of the file, without the skippable frames written by pzstd.
@@ -173,11 +209,16 @@ impl<D: FrameDecoder> Read for FrameRangeReader<'_, D> {
                 return Ok(0);
             }
             let frame = self.frames[idx];
-            self.decoder.decode(
-                frame.bytes(self.compressed),
-                frame.uncomp_len,
-                &mut self.buf,
-            )?;
+            let bytes = frame.bytes(self.compressed);
+            if idx == self.end.0 {
+                // Only the bytes before the end of the range are needed
+                let len = self.end.1;
+                self.decoder
+                    .decode_prefix(bytes, frame.uncomp_len, len, &mut self.buf)?;
+            } else {
+                self.decoder
+                    .decode(bytes, frame.uncomp_len, &mut self.buf)?;
+            }
             self.pos = if idx == self.start.0 { self.start.1 } else { 0 };
             self.len = if idx == self.end.0 {
                 self.end.1
@@ -204,12 +245,19 @@ fn find_record_start_in_frames<D: FrameDecoder>(
     if let Ok(mut decoder) = D::new() {
         while frame_idx < frames.len() {
             let frame = frames[frame_idx];
-            if decoder
-                .decode(frame.bytes(compressed), frame.uncomp_len, &mut data)
+            // The record start is usually close to the frame start, so decode a doubling prefix
+            let mut len = 64 * 1024;
+            while decoder
+                .decode_prefix(frame.bytes(compressed), frame.uncomp_len, len, &mut data)
                 .is_ok()
-                && let Some(cand) = format.find_record_start(&data, 0)
             {
-                return (frame_idx, cand);
+                if let Some(cand) = format.find_record_start(&data, 0) {
+                    return (frame_idx, cand);
+                }
+                if data.len() < len {
+                    break;
+                }
+                len *= 2;
             }
             frame_idx += 1;
         }
@@ -235,7 +283,14 @@ where
         let Some(first) = frames.first() else {
             return self.run_single(FastxParser::from_slice(&[]));
         };
-        let format = Format::try_from_byte(D::first_byte(first.bytes(compressed))?)?;
+        let mut first_bytes = Vec::new();
+        D::new()?.decode_prefix(
+            first.bytes(compressed),
+            first.uncomp_len,
+            1,
+            &mut first_bytes,
+        )?;
+        let format = Format::try_from_byte(first_bytes.first().copied().unwrap_or(0))?;
         let uncomp_len: usize = frames.iter().map(|frame| frame.uncomp_len).sum();
         let num_chunks = custom_chunks
             .unwrap_or(threads)

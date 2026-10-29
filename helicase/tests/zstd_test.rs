@@ -326,4 +326,49 @@ mod tests {
 
         let _ = std::fs::remove_file(temp_file);
     }
+
+    #[test]
+    fn test_parallel_zstd_chunks_inside_frames() {
+        // Records of 200 kb in frames of 1 MB: record starts are up to 200 kb into a frame,
+        // and most chunk boundaries fall inside a frame
+        let bytes = fastx_gen::FastxGen::fasta(20, 200_000)
+            .with_seed(9)
+            .generate_bytes();
+        let mut zst_data = Vec::new();
+        for frame in bytes.chunks(1 << 20) {
+            zst_data.extend_from_slice(&zstd::bulk::compress(frame, 1).unwrap());
+        }
+        let path = std::env::temp_dir().join("test_helicase_zstd_chunks_inside_frames.fa.zst");
+        std::fs::write(&path, &zst_data).unwrap();
+
+        let mut expected = Vec::new();
+        let mut parser = FastxParser::<CONFIG>::from_slice(&bytes).unwrap();
+        while let Some(event) = parser.next() {
+            event.unwrap();
+            expected.push((parser.get_header().to_vec(), parser.get_dna_len()));
+        }
+        assert_eq!(expected.len(), 20);
+        for chunks in [2, 5, 64] {
+            let mut records: Vec<_> = ParallelFastxParser::<CONFIG>::from_file(&path)
+                .unwrap()
+                .threads(4)
+                .chunks(chunks)
+                .for_each_with(Vec::new, |records, mut parser| {
+                    while let Some(event) = parser.next() {
+                        event?;
+                        records.push((parser.get_header().to_vec(), parser.get_dna_len()));
+                    }
+                    Ok(())
+                })
+                .unwrap()
+                .into_iter()
+                .flatten()
+                .collect();
+            records.sort_unstable();
+            let mut expected = expected.clone();
+            expected.sort_unstable();
+            assert_eq!(records, expected, "{chunks} chunks");
+        }
+        let _ = std::fs::remove_file(path);
+    }
 }

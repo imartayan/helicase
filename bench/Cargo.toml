@@ -20,12 +20,15 @@ needletail = { version = "0.7", default-features = false, features = [
     "flate2",
     "zstd",
 ] }
-niffler = { version = "3.0", default-features = false, features = ["gz", "zstd"] }
+niffler = { version = "3.0", default-features = false, features = [
+    "gz",
+    "zstd",
+] }
 paraseq = { version = "0.6", default-features = false, features = ["niffler"] }
 rayon = "1.12"
-sysinfo = "0.39"
+sysinfo = "0.40"
 simd-minimizers = { version = "3.0", features = ["scalar"], optional = true }
-sirocco = "0.2"
+sirocco = "0.3"
 zstd = "0.14"
 
 [package.metadata.cargo-machete]

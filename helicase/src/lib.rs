@@ -26,7 +26,6 @@
 //! and build a [`FastxParser`]/[`ParallelFastxParser`] with this configuration.
 //!
 //! ```rust,no_run
-//! use helicase::input::*;
 //! use helicase::*;
 //!
 //! // set the options of the parser (at compile-time)
@@ -57,9 +56,10 @@
 //! ```
 //! ## Input
 //!
-//! Files are opened with [`from_file`](input::FromFile::from_file) or [`from_file_mmap`](FastxParser::from_file_mmap) (both supporting [transparent decompression](#crate-features) for [`FastxParser`] and [`ParallelFastxParser`](parallel::ParallelFastxParser)).
+//! Files are opened with [`from_file`](FastxParser::from_file) or [`from_file_mmap`](FastxParser::from_file_mmap) (both supporting [transparent decompression](#crate-features) for [`FastxParser`] and [`ParallelFastxParser`](parallel::ParallelFastxParser)).
 //! `from_file_mmap` memory-maps the file for zero-copy parsing on uncompressed data, while transparently decompressing compressed inputs.
-//! In-memory slices ([`from_slice`](input::FromSlice::from_slice)) and generic streams ([`from_reader`](input::FromReader::from_reader)) are also supported.
+//! In-memory slices ([`from_slice`](FastxParser::from_slice)) and generic streams ([`from_reader`](FastxParser::from_reader)) are also supported (`FastxParser::from_slice` does not decompress).
+//! [`FastaParser`](parser::FastaParser) and [`FastqParser`](parser::FastqParser) have the same constructors, but their `from_file_mmap` rejects compressed files.
 //!
 //! ## Adjusting the configuration
 //!
@@ -107,7 +107,6 @@
 //! matching is unnecessary and errors can simply be propagated with `event?;`:
 //!
 //! ```rust,no_run
-//! use helicase::input::*;
 //! use helicase::*;
 //!
 //! const CONFIG: Config = ParserOptions::default().config();
@@ -130,7 +129,6 @@
 //! When both records and chunks are active (e.g. `dna_packed().return_record(true)`), match on the event using `?` to distinguish them:
 //!
 //! ```rust,no_run
-//! use helicase::input::*;
 //! use helicase::parser::Event;
 //! use helicase::*;
 //!
@@ -164,7 +162,6 @@
 //! To parse sequences into contiguous 2-bit chunks:
 //!
 //! ```rust,no_run
-//! use helicase::input::*;
 //! use helicase::*;
 //!
 //! const CONFIG: Config = ParserOptions::default()
@@ -275,7 +272,7 @@
 //!
 //! ## Decompression
 //!
-//! Helicase supports transparent decompression via [`from_file`](input::FromFile::from_file), automatically detecting the following formats:
+//! Helicase supports transparent decompression via [`from_file`](FastxParser::from_file), automatically detecting the following formats:
 //! - `gz` (default) for gzip and BGZF using [sirocco](https://github.com/srijs/sirocco)
 //! - `zstd` (default) for zstd, including multi-frame files
 //! - `bz2` for bzip2

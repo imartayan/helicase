@@ -10,7 +10,6 @@ use alloc::boxed::Box;
 /// # Example
 ///
 /// ```rust,no_run
-/// use helicase::input::*;
 /// use helicase::*;
 ///
 /// // set the options of the parser (at compile-time)
@@ -38,10 +37,22 @@ use alloc::boxed::Box;
 pub struct FastxParser<'a, const CONFIG: Config>(Box<dyn HelicaseParserIter + Send + 'a>);
 
 impl<'a, const CONFIG: Config> FastxParser<'a, CONFIG> {
-    /// Creates a parser reading `slice`.
+    /// Creates a parser reading `slice`, without transparent decompression.
     #[inline(always)]
     pub fn from_slice(slice: &'a [u8]) -> Result<Self> {
-        Self::from_input(SliceInput::new(slice))
+        Self::new(SliceInput::new(slice))
+    }
+
+    fn new<I: InputData<'a> + Send + 'a>(input: I) -> Result<Self> {
+        let format = if input.buffer().is_empty() {
+            Format::Fasta
+        } else {
+            Format::try_from_byte(input.first_byte())?
+        };
+        match format {
+            Format::Fasta => Ok(Self(Box::new(FastaParser::<CONFIG, I>::new(input)?))),
+            Format::Fastq => Ok(Self(Box::new(FastqParser::<CONFIG, I>::new(input)?))),
+        }
     }
 }
 
@@ -50,13 +61,13 @@ impl<'a, const CONFIG: Config> FastxParser<'a, CONFIG> {
     /// Creates a parser reading from `path`, with transparent decompression.
     #[inline(always)]
     pub fn from_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
-        Self::from_input(FileInput::open(path)?)
+        Self::new(FileInput::open(path)?)
     }
 
     /// Creates a parser reading from `reader`, with transparent decompression.
     #[inline(always)]
     pub fn from_reader<R: std::io::Read + Send + 'a>(reader: R) -> Result<Self> {
-        Self::from_input(ReaderInput::new(reader)?)
+        Self::new(ReaderInput::new(reader)?)
     }
 
     /// Opens a memory-mapped file, with transparent decompression if compressed.
@@ -68,24 +79,17 @@ impl<'a, const CONFIG: Config> FastxParser<'a, CONFIG> {
         if CompressionFormat::from_bytes(&mmap).is_some() {
             Self::from_reader(std::io::Cursor::new(mmap))
         } else {
-            Self::from_input(MmapInput::from_mmap(mmap))
+            Self::new(MmapInput::from_mmap(mmap))
         }
     }
 }
 
+#[allow(deprecated)]
 impl<'a, const CONFIG: Config, I: InputData<'a> + Send + 'a> FromInputData<'a, I>
     for FastxParser<'a, CONFIG>
 {
     fn from_input(input: I) -> Result<Self> {
-        let format = if input.buffer().is_empty() {
-            Format::Fasta
-        } else {
-            Format::try_from_byte(input.first_byte())?
-        };
-        match format {
-            Format::Fasta => Ok(Self(Box::new(FastaParser::<CONFIG, I>::from_input(input)?))),
-            Format::Fastq => Ok(Self(Box::new(FastqParser::<CONFIG, I>::from_input(input)?))),
-        }
+        Self::new(input)
     }
 }
 

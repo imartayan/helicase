@@ -4,7 +4,6 @@ use fastx_gen::{Alphabet, FastxGen};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use helicase::config::*;
-use helicase::input::*;
 use helicase::parser::Event;
 use helicase::*;
 use std::fs::File;
@@ -111,6 +110,52 @@ fn test_across_all_inputs(generator: FastxGen, test_id: &str) {
     // Clean up
     let _ = std::fs::remove_dir_all(&tmp_dir);
 }
+
+// Constructors of `FastaParser` and `FastqParser`, one per input type
+macro_rules! test_parser_constructors {
+    ($name:ident, $parser:ident, $generator:expr) => {
+        #[test]
+        fn $name() {
+            let bytes = $generator.with_seed(42).generate_bytes();
+            let expected = parse_all(FastxParser::<CONFIG>::from_slice(&bytes).unwrap());
+            let path = std::env::temp_dir().join(format!("helicase_{}.raw", stringify!($name)));
+            std::fs::write(&path, &bytes).unwrap();
+            let slice = parse_all(parser::$parser::<CONFIG, _>::from_slice(&bytes).unwrap());
+            let reader = parse_all(
+                parser::$parser::<CONFIG, _>::from_reader(Cursor::new(bytes.clone())).unwrap(),
+            );
+            let file = parse_all(parser::$parser::<CONFIG, _>::from_file(&path).unwrap());
+            let mmap = parse_all(parser::$parser::<CONFIG, _>::from_file_mmap(&path).unwrap());
+            for output in [slice, reader, file, mmap] {
+                assert_eq!(expected, output);
+            }
+
+            let mut encoder = GzEncoder::new(File::create(&path).unwrap(), Compression::fast());
+            encoder.write_all(&bytes).unwrap();
+            encoder.finish().unwrap();
+            let error = parser::$parser::<CONFIG, _>::from_file_mmap(&path)
+                .err()
+                .unwrap();
+            assert!(error.to_string().contains("compressed"), "{error}");
+            if cfg!(feature = "gz") {
+                let file = parse_all(parser::$parser::<CONFIG, _>::from_file(&path).unwrap());
+                assert_eq!(expected, file);
+            }
+            let _ = std::fs::remove_file(&path);
+        }
+    };
+}
+
+test_parser_constructors!(
+    test_fastq_parser_constructors,
+    FastqParser,
+    FastxGen::illumina(30)
+);
+test_parser_constructors!(
+    test_fasta_parser_constructors,
+    FastaParser,
+    FastxGen::fasta(20, 200)
+);
 
 #[test]
 fn test_all_inputs_fastq_short() {

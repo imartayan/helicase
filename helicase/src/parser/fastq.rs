@@ -12,7 +12,6 @@ use core::ops::Range;
 /// # Example
 ///
 /// ```rust,no_run
-/// use helicase::input::*;
 /// use helicase::parser::FastqParser;
 /// use helicase::*;
 ///
@@ -107,13 +106,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
             record_counter: 0,
         }
     }
-}
 
-impl<'a, const CONFIG: Config, I: InputData<'a>> FromInputData<'a, I>
-    for FastqParser<'a, CONFIG, I>
-{
-    fn from_input(input: I) -> Result<Self> {
-        let lexer = Lexer::from_input(input)?;
+    pub(crate) fn new(input: I) -> Result<Self> {
+        let lexer = Lexer::new(input);
         if !lexer.input.buffer().is_empty() && lexer.input.first_byte() != b'@' {
             return Err(Error::invalid_record_start("'@'", lexer.input.first_byte()));
         }
@@ -526,3 +521,4 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
 }
 
 shared_iterator!(FastqParser);
+input_constructors!(FastqParser);

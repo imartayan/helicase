@@ -52,7 +52,6 @@ With native helicase, options are configured at compile-time via `ParserOptions`
 
 ```rust
 use helicase::config::*;
-use helicase::input::*;
 use helicase::*;
 
 const CONFIG: Config = ParserOptions::default().config();

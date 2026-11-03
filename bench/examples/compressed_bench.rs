@@ -1,6 +1,5 @@
 use fastx_gen::FastxGen;
 use helicase::config::*;
-use helicase::input::*;
 use helicase::*;
 use needletail::parse_fastx_file;
 use niffler::compression::{Format as NifflerFormat, Level as NifflerLevel};

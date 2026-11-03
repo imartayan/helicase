@@ -3,7 +3,6 @@
 use super::without_index;
 use crate::config::advanced::*;
 use crate::config::*;
-use crate::input::*;
 use crate::parser::{FastaParser, FastqParser};
 use crate::*;
 use fastx_gen::{Alphabet, FastxGen};

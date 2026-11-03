@@ -164,6 +164,9 @@ mod buffer {
 }
 
 /// Types that can be built from an [`InputData`], such as parsers.
+#[deprecated(
+    note = "use the `from_slice`, `from_reader`, `from_file` and `from_file_mmap` methods of the parsers"
+)]
 pub trait FromInputData<'a, I: InputData<'a>>: Sized {
     /// Build the struct from a type implementing [`InputData`].
     fn from_input(input: I) -> Result<Self>;

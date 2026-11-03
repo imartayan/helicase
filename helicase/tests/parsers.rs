@@ -1,5 +1,4 @@
 use helicase::config::*;
-use helicase::input::*;
 use helicase::*;
 
 mod fasta {

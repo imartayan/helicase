@@ -2,7 +2,7 @@ use std::fs::{metadata, read};
 
 use helicase::config::advanced::*;
 use helicase::config::*;
-use helicase::input::*;
+use helicase::input::CompressionFormat;
 use helicase::*;
 use needletail::parse_fastx_reader;
 use paraseq::{ReaderBuilder, Record, fastx};

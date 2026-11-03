@@ -1,4 +1,6 @@
-use super::{CompressionFormat, FromInputData, InputBuffer};
+#[allow(deprecated)]
+use super::FromInputData;
+use super::{CompressionFormat, InputBuffer};
 use crate::parser::Result;
 use core::marker::PhantomData;
 use core::mem::{replace, take};
@@ -298,7 +300,7 @@ impl<'a, R: Read + 'a> ReaderInput<'a, R> {
     }
 
     /// Creates an input reading from `reader`, with transparent decompression.
-    pub fn new(reader: R) -> io::Result<Self> {
+    pub(crate) fn new(reader: R) -> io::Result<Self> {
         let (decoder, compression) = Self::decoder(reader)?;
         Self::with_source(Source::Direct(decoder), compression)
     }
@@ -398,7 +400,7 @@ pub(crate) fn decompress<R: Read>(reader: R) -> io::Result<impl Read> {
 
 impl<R: Read + Send + 'static> ReaderInput<'static, R> {
     /// Build a reader input that reads and decompresses ahead in a background thread.
-    pub fn with_read_ahead(reader: R) -> io::Result<Self> {
+    pub(crate) fn with_read_ahead(reader: R) -> io::Result<Self> {
         let (decoder, compression) = Self::decoder(reader)?;
         let (filled_sender, filled) = sync_channel(BUFFERS_AHEAD);
         let (free, free_receiver) = channel();
@@ -498,6 +500,8 @@ impl<'a, R: Read + 'a> InputBuffer<'a> for ReaderInput<'a, R> {
 }
 
 /// Types that can be built from a reader, such as parsers.
+#[deprecated(note = "use the `from_reader` method of the parsers")]
+#[allow(deprecated)]
 pub trait FromReader<'a, R: Read + 'a>: FromInputData<'a, ReaderInput<'a, R>> {
     /// Build the struct from a reader.
     /// It supports transparent decompression.
@@ -507,6 +511,7 @@ pub trait FromReader<'a, R: Read + 'a>: FromInputData<'a, ReaderInput<'a, R>> {
     }
 }
 
+#[allow(deprecated)]
 impl<'a, R: Read + 'a, F: FromInputData<'a, ReaderInput<'a, R>>> FromReader<'a, R> for F {}
 
 /// File input alias.
@@ -516,7 +521,7 @@ pub type FileInput = ReaderInput<'static, File>;
 impl ReaderInput<'static, File> {
     /// Open a file for reading with transparent decompression.
     /// It reads ahead in a background thread when more than one CPU is available.
-    pub fn open<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+    pub(crate) fn open<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         let file = File::open(path)?;
         if std::thread::available_parallelism().map_or(1, |n| n.get()) > 1 {
             Self::with_read_ahead(file)
@@ -527,17 +532,18 @@ impl ReaderInput<'static, File> {
 }
 
 /// Types that can be built from a file, such as parsers.
+#[deprecated(note = "use the `from_file` method of the parsers")]
+#[allow(deprecated)]
 pub trait FromFile: FromInputData<'static, FileInput> {
     /// Build the struct from a file.
     /// It supports transparent decompression.
-    ///
-    /// Also see [`from_file_mmap`](FromMmap::from_file_mmap) to use a memory-mapped file.
     #[inline(always)]
     fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         Self::from_input(FileInput::open(path)?)
     }
 }
 
+#[allow(deprecated)]
 impl<F: FromInputData<'static, FileInput>> FromFile for F {}
 
 fn grown_len(len: usize, needed: usize) -> usize {
@@ -585,3 +591,6 @@ fn read_buffers<R: Read>(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -29,7 +29,6 @@ If you are migrating from `needletail` or `paraseq`, see the [migration guide](M
 The main entry point is to define a configuration via `ParserOptions` and build a `FastxParser`/`ParallelFastxParser` with this configuration.
 
 ```rust
-use helicase::input::*;
 use helicase::*;
 
 // set the options of the parser (at compile-time)
@@ -107,7 +106,6 @@ while let Some(event) = parser.next() {
 When both records and chunks are active (e.g. `dna_packed().return_record(true)`), match on the event using `?` to distinguish them:
 
 ```rust
-use helicase::input::*;
 use helicase::parser::Event;
 use helicase::*;
 
@@ -138,7 +136,6 @@ fn main() -> std::io::Result<()> {
 To parse sequences into contiguous 2-bit chunks:
 
 ```rust
-use helicase::input::*;
 use helicase::*;
 
 const CONFIG: Config = ParserOptions::default()

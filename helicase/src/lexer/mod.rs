@@ -125,17 +125,15 @@ pub struct Lexer<'a, const CONFIG: Config, I: InputData<'a>> {
     _phantom: PhantomData<&'a [u8]>,
 }
 
-impl<'a, const CONFIG: Config, I: InputData<'a>> FromInputData<'a, I> for Lexer<'a, CONFIG, I> {
-    fn from_input(input: I) -> Result<Self> {
-        Ok(Self {
+impl<'a, const CONFIG: Config, I: InputData<'a>> Lexer<'a, CONFIG, I> {
+    pub(crate) const fn new(input: I) -> Self {
+        Self {
             input,
             last_found_line_feed: 0,
             _phantom: PhantomData,
-        })
+        }
     }
-}
 
-impl<'a, const CONFIG: Config, I: InputData<'a>> Lexer<'a, CONFIG, I> {
     #[inline(always)]
     pub(crate) fn scan_current_block(&self, len: usize) -> Chunk {
         Chunk::from_mask::<CONFIG>(
@@ -279,8 +277,7 @@ mod tests {
     #[test]
     fn test_lexer() {
         let fasta = b">head\nACGT\n";
-        let chunk = Lexer::<CONFIG_COLUMNAR, _>::from_slice(fasta)
-            .unwrap()
+        let chunk = Lexer::<CONFIG_COLUMNAR, _>::new(SliceInput::new(fasta))
             .next_block::<SCAN_MODE_DNA>()
             .unwrap()
             .unwrap();

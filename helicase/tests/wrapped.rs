@@ -5,7 +5,7 @@
 use fastx_gen::{Alphabet, FastxGen};
 use helicase::config::advanced::*;
 use helicase::config::*;
-use helicase::input::*;
+use helicase::input::InputData;
 use helicase::parser::{FastaParser, FastqParser};
 use helicase::*;
 use std::io::Cursor;

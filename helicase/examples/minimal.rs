@@ -1,6 +1,5 @@
 #![allow(unused)]
 
-use helicase::input::*;
 use helicase::*;
 
 // set the options of the parser (at compile-time)

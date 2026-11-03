@@ -1,8 +1,12 @@
-use super::{FromInputData, InputBuffer};
+#[allow(deprecated)]
+use super::FromInputData;
+use super::InputBuffer;
 use crate::parser::Result;
 
 #[cfg(feature = "std")]
-use {super::CompressionFormat, memmap2::Mmap, std::fs::File, std::path::Path};
+use {
+    super::CompressionFormat, crate::parser::Error, memmap2::Mmap, std::fs::File, std::path::Path,
+};
 
 /// Slice input.
 /// It does not support transparent decompression.
@@ -15,7 +19,7 @@ pub struct SliceInput<'a> {
 
 impl<'a> SliceInput<'a> {
     /// Creates an input reading `data`.
-    pub fn new(data: &'a [u8]) -> Self {
+    pub(crate) fn new(data: &'a [u8]) -> Self {
         let mut last_block = [0; 64];
         last_block[..data.len() % 64].copy_from_slice(&data[(data.len() / 64) * 64..]);
         Self {
@@ -93,6 +97,8 @@ impl<'a> InputBuffer<'a> for SliceInput<'a> {
 }
 
 /// Types that can be built from a slice, such as parsers.
+#[deprecated(note = "use the `from_slice` method of the parsers")]
+#[allow(deprecated)]
 pub trait FromSlice<'a>: FromInputData<'a, SliceInput<'a>> {
     /// Build the struct from a slice.
     /// It does not support transparent decompression.
@@ -102,12 +108,13 @@ pub trait FromSlice<'a>: FromInputData<'a, SliceInput<'a>> {
     }
 }
 
+#[allow(deprecated)]
 impl<'a, F: FromInputData<'a, SliceInput<'a>>> FromSlice<'a> for F {}
 
 /// Memory-mapped file.
 ///
 /// Provides zero-copy parsing over memory-mapped files without decompression overhead.
-/// For transparent decompression on compressed inputs, use [`from_file`](super::FromFile::from_file)
+/// For transparent decompression on compressed inputs, use [`FastxParser::from_file`](crate::parser::FastxParser::from_file)
 /// or [`FastxParser::from_file_mmap`](crate::parser::FastxParser::from_file_mmap).
 #[cfg(feature = "std")]
 pub struct MmapInput<'a> {
@@ -126,10 +133,15 @@ impl<'a> MmapInput<'a> {
         }
     }
 
-    /// Memory-maps the file at `path`.
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
+    /// Memory-maps the file at `path`, which must not be compressed.
+    pub(crate) fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         let file = File::open(path)?;
         let mmap = unsafe { Mmap::map(&file)? };
+        if let Some(format) = CompressionFormat::from_bytes(&mmap) {
+            return Err(Error::custom(format!(
+                "input is compressed ({format}), use `from_file` or `FastxParser::from_file_mmap`"
+            )));
+        }
         Ok(Self::from_mmap(mmap))
     }
 }
@@ -181,14 +193,12 @@ impl<'a> InputBuffer<'a> for MmapInput<'a> {
 
 /// Types that can be built from a memory-mapped file, such as parsers.
 #[cfg(feature = "std")]
+#[deprecated(note = "use the `from_file_mmap` method of the parsers")]
+#[allow(deprecated)]
 pub trait FromMmap<'a>: FromInputData<'a, MmapInput<'a>> {
     /// Build the struct from a memory-mapped file.
     ///
     /// Memory maps the file for zero-copy parsing on uncompressed inputs.
-    /// For transparent decompression on compressed files with `from_file_mmap`, use
-    /// [`FastxParser`](crate::parser::FastxParser) or [`ParallelFastxParser`](crate::parallel::ParallelFastxParser).
-    ///
-    /// Also see [`from_file`](super::FromFile::from_file) to parse streaming files.
     #[inline(always)]
     fn from_file_mmap<P: AsRef<Path>>(path: P) -> Result<Self> {
         Self::from_input(MmapInput::new(path)?)
@@ -196,4 +206,5 @@ pub trait FromMmap<'a>: FromInputData<'a, MmapInput<'a>> {
 }
 
 #[cfg(feature = "std")]
+#[allow(deprecated)]
 impl<'a, F: FromInputData<'a, MmapInput<'a>>> FromMmap<'a> for F {}

@@ -319,3 +319,54 @@ macro_rules! shared_iterator {
         }
     };
 }
+
+// Constructors for each input type, and the deprecated `FromInputData`.
+macro_rules! input_constructors {
+    ($parser:ident) => {
+        #[allow(deprecated)]
+        impl<'a, const CONFIG: Config, I: InputData<'a>> FromInputData<'a, I>
+            for $parser<'a, CONFIG, I>
+        {
+            fn from_input(input: I) -> Result<Self> {
+                Self::new(input)
+            }
+        }
+
+        impl<'a, const CONFIG: Config> $parser<'a, CONFIG, SliceInput<'a>> {
+            /// Creates a parser reading `data`, without transparent decompression.
+            #[inline(always)]
+            pub fn from_slice(data: &'a [u8]) -> Result<Self> {
+                Self::new(SliceInput::new(data))
+            }
+        }
+
+        #[cfg(feature = "std")]
+        impl<'a, const CONFIG: Config, R: std::io::Read + 'a>
+            $parser<'a, CONFIG, ReaderInput<'a, R>>
+        {
+            /// Creates a parser reading from `reader`, with transparent decompression.
+            #[inline(always)]
+            pub fn from_reader(reader: R) -> Result<Self> {
+                Self::new(ReaderInput::new(reader)?)
+            }
+        }
+
+        #[cfg(feature = "std")]
+        impl<const CONFIG: Config> $parser<'static, CONFIG, FileInput> {
+            /// Creates a parser reading from `path`, with transparent decompression.
+            #[inline(always)]
+            pub fn from_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
+                Self::new(FileInput::open(path)?)
+            }
+        }
+
+        #[cfg(feature = "std")]
+        impl<'a, const CONFIG: Config> $parser<'a, CONFIG, MmapInput<'a>> {
+            /// Creates a parser reading the memory-mapped file at `path`, which must not be compressed.
+            #[inline(always)]
+            pub fn from_file_mmap<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
+                Self::new(MmapInput::new(path)?)
+            }
+        }
+    };
+}

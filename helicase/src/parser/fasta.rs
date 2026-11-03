@@ -28,7 +28,6 @@ enum State {
 /// # Example
 ///
 /// ```rust,no_run
-/// use helicase::input::*;
 /// use helicase::parser::FastaParser;
 /// use helicase::*;
 ///
@@ -129,13 +128,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
             record_counter: 0,
         }
     }
-}
 
-impl<'a, const CONFIG: Config, I: InputData<'a>> FromInputData<'a, I>
-    for FastaParser<'a, CONFIG, I>
-{
-    fn from_input(input: I) -> Result<Self> {
-        let lexer = Lexer::from_input(input)?;
+    pub(crate) fn new(input: I) -> Result<Self> {
+        let lexer = Lexer::new(input);
         if !lexer.input.buffer().is_empty() && lexer.input.first_byte() != b'>' {
             return Err(Error::invalid_record_start("'>'", lexer.input.first_byte()));
         }
@@ -742,6 +737,7 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastaParser<'a, CONFIG, I> {
 }
 
 shared_iterator!(FastaParser);
+input_constructors!(FastaParser);
 
 // Whether the first line feed from `pos` is at `pos + newline_offset`, with `BLOCKS == 0` for long lines.
 #[inline(always)]

@@ -1,6 +1,5 @@
 #![allow(unused)]
 
-use helicase::input::*;
 use helicase::*;
 
 const CONFIG: Config = ParserOptions::default()

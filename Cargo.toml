@@ -13,3 +13,4 @@ lto = "fat"
 
 [profile.test]
 opt-level = 1
+debug = "line-tables-only"

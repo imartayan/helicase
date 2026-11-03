@@ -165,51 +165,74 @@ fn test_indexed_mixed_lengths() {
     }
 }
 
+// The slowest tests are split by format so that they run in parallel.
 #[test]
-fn test_indexed_truncated() {
-    for fasta in [false, true] {
-        let data = generate(fasta, 1, false);
-        for end in data.len() - 600..data.len() {
-            check(&data[..end], &format!("fasta {fasta} truncated at {end}"));
-        }
-    }
+fn test_indexed_truncated_fastq() {
+    check_truncated(false);
 }
 
 #[test]
-fn test_indexed_malformed_lines() {
-    for fasta in [false, true] {
-        for crlf in [false, true] {
-            let line_end: &[u8] = if crlf { b"\r\n" } else { b"\n" };
-            let data = generate(fasta, 2, crlf);
-            let starts = line_starts(&data);
-            for (k, &start) in starts.iter().enumerate().step_by(5) {
-                let id = format!("fasta {fasta} crlf {crlf} line {k}");
-                let mut extra = data.clone();
-                extra.insert(start + 1, b'I');
-                check(&extra, &format!("{id} extra byte"));
+fn test_indexed_truncated_fasta() {
+    check_truncated(true);
+}
 
-                let mut missing = data.clone();
-                missing.remove(start + 1);
-                check(&missing, &format!("{id} missing byte"));
+#[test]
+fn test_indexed_malformed_lines_fastq() {
+    check_malformed_lines(false, false);
+}
 
-                let mut carriage_return = data.clone();
-                carriage_return.insert(start, b'\r');
-                check(&carriage_return, &format!("{id} carriage return"));
+#[test]
+fn test_indexed_malformed_lines_fastq_crlf() {
+    check_malformed_lines(false, true);
+}
 
-                if let Some(&end) = starts.get(k + 3) {
-                    let mut no_lines = data.clone();
-                    no_lines.drain(starts[k + 2]..end);
-                    no_lines.drain(start..starts[k + 1]);
-                    check(&no_lines, &format!("{id} lines removed"));
-                }
+#[test]
+fn test_indexed_malformed_lines_fasta() {
+    check_malformed_lines(true, false);
+}
 
-                // A blank line before a FASTQ header panics in the block parser.
-                if fasta || k % 4 != 0 {
-                    let mut blank = data.clone();
-                    blank.splice(start..start, line_end.iter().copied());
-                    check(&blank, &format!("{id} blank line before"));
-                }
-            }
+#[test]
+fn test_indexed_malformed_lines_fasta_crlf() {
+    check_malformed_lines(true, true);
+}
+
+fn check_truncated(fasta: bool) {
+    let data = generate(fasta, 1, false);
+    for end in data.len() - 600..data.len() {
+        check(&data[..end], &format!("fasta {fasta} truncated at {end}"));
+    }
+}
+
+fn check_malformed_lines(fasta: bool, crlf: bool) {
+    let line_end: &[u8] = if crlf { b"\r\n" } else { b"\n" };
+    let data = generate(fasta, 2, crlf);
+    let starts = line_starts(&data);
+    for (k, &start) in starts.iter().enumerate().step_by(5) {
+        let id = format!("fasta {fasta} crlf {crlf} line {k}");
+        let mut extra = data.clone();
+        extra.insert(start + 1, b'I');
+        check(&extra, &format!("{id} extra byte"));
+
+        let mut missing = data.clone();
+        missing.remove(start + 1);
+        check(&missing, &format!("{id} missing byte"));
+
+        let mut carriage_return = data.clone();
+        carriage_return.insert(start, b'\r');
+        check(&carriage_return, &format!("{id} carriage return"));
+
+        if let Some(&end) = starts.get(k + 3) {
+            let mut no_lines = data.clone();
+            no_lines.drain(starts[k + 2]..end);
+            no_lines.drain(start..starts[k + 1]);
+            check(&no_lines, &format!("{id} lines removed"));
+        }
+
+        // A blank line before a FASTQ header panics in the block parser.
+        if fasta || k % 4 != 0 {
+            let mut blank = data.clone();
+            blank.splice(start..start, line_end.iter().copied());
+            check(&blank, &format!("{id} blank line before"));
         }
     }
 }
@@ -260,30 +283,38 @@ fn test_indexed_fastq_line_pairs() {
 
 // Records cross many reader buffer boundaries, where the index hands over to the block parser.
 #[test]
-fn test_indexed_reader_buffers() {
-    let tmp_dir = std::env::temp_dir().join(format!("helicase_indexed_{}", std::process::id()));
+fn test_indexed_reader_buffers_fastq() {
+    check_reader_buffers(false);
+}
+
+#[test]
+fn test_indexed_reader_buffers_fasta() {
+    check_reader_buffers(true);
+}
+
+fn check_reader_buffers(fasta: bool) {
+    let tmp_dir =
+        std::env::temp_dir().join(format!("helicase_indexed_{}_{fasta}", std::process::id()));
     std::fs::create_dir_all(&tmp_dir).unwrap();
-    for fasta in [false, true] {
-        for crlf in [false, true] {
-            let generator = if fasta {
-                FastxGen::fasta(15_000, 250)
-            } else {
-                FastxGen::fastq(10_000, 150)
-            };
-            let data = generator
-                .with_std_dev(0.8)
-                .with_alphabet(Alphabet::DnaIupac)
-                .with_non_actg_prob(0.001)
-                .with_crlf(crlf)
-                .with_seed(5)
-                .generate_bytes();
-            let id = format!("fasta {fasta} crlf {crlf}");
-            check(&data, &id);
-            let path = tmp_dir.join(format!("{fasta}_{crlf}"));
-            std::fs::write(&path, &data).unwrap();
-            check_file::<STRING>(&data, &path, &id);
-            check_file::<PACKED>(&data, &path, &id);
-        }
+    for crlf in [false, true] {
+        let generator = if fasta {
+            FastxGen::fasta(15_000, 250)
+        } else {
+            FastxGen::fastq(10_000, 150)
+        };
+        let data = generator
+            .with_std_dev(0.8)
+            .with_alphabet(Alphabet::DnaIupac)
+            .with_non_actg_prob(0.001)
+            .with_crlf(crlf)
+            .with_seed(5)
+            .generate_bytes();
+        let id = format!("fasta {fasta} crlf {crlf}");
+        check(&data, &id);
+        let path = tmp_dir.join(format!("{crlf}"));
+        std::fs::write(&path, &data).unwrap();
+        check_file::<STRING>(&data, &path, &id);
+        check_file::<PACKED>(&data, &path, &id);
     }
     let _ = std::fs::remove_dir_all(&tmp_dir);
 }

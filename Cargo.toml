@@ -10,3 +10,6 @@ pre-release-replacements = [
 
 [profile.release]
 lto = "fat"
+
+[profile.test]
+opt-level = 1

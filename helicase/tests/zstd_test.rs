@@ -471,4 +471,39 @@ mod tests {
         }
         let _ = std::fs::remove_file(path);
     }
+
+    #[test]
+    fn test_parallel_zstd_trailing_garbage_matches_single_thread() {
+        let mut zst_data = Vec::new();
+        for _ in 0..4 {
+            zst_data.extend(zstd::bulk::compress(&generate_test_fastq(500), 1).unwrap());
+        }
+        zst_data.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7]);
+        let path = std::env::temp_dir().join("test_helicase_zstd_trailing_garbage.fastq.zst");
+        std::fs::write(&path, &zst_data).unwrap();
+        let count = |threads, mmap| {
+            let parser = if mmap {
+                ParallelFastxParser::<CONFIG>::from_file_mmap(&path)
+            } else {
+                ParallelFastxParser::<CONFIG>::from_file(&path)
+            };
+            let counts = parser.unwrap().threads(threads).for_each_with(
+                || 0,
+                |count, parser| {
+                    for event in parser {
+                        event?;
+                        *count += 1;
+                    }
+                    Ok(())
+                },
+            );
+            counts.map(|counts| counts.into_iter().sum::<usize>()).ok()
+        };
+        let single = count(1, false);
+        assert!(single.is_none_or(|n| n == 2000));
+        for mmap in [false, true] {
+            assert_eq!(count(4, mmap), single, "mmap={mmap}");
+        }
+        let _ = std::fs::remove_file(path);
+    }
 }

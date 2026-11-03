@@ -278,15 +278,11 @@ where
             match format {
                 #[cfg(feature = "gz")]
                 CompressionFormat::Bgzf => {
-                    let blocks = match source {
-                        FramesSource::Slice(slice) => frames::index_bgzf_blocks(slice),
-                        FramesSource::File(path) => frames::index_bgzf_file(path)?,
-                    };
-                    // `None` if a member is not BGZF, a single decoder reads all the members
-                    if let Some(blocks) = blocks {
-                        return self.run_frames::<frames::BgzfDecoder>(
-                            source,
-                            &blocks,
+                    // Without the BGZF EOF marker, a single decoder reads all the members
+                    if let Some(len) = frames::bgzf_input_len(source)? {
+                        return self.run_frames::<frames::BgzfDecoder, _>(
+                            len,
+                            |pos, limit| frames::BgzfBlocks::new(source, pos, limit),
                             threads,
                             custom_chunks,
                             max_chunk_len,
@@ -303,10 +299,12 @@ where
                             frames::index_zstd_frames(&mut File::open(path)?)
                         }
                     };
-                    if zstd_frames.len() > 1 {
-                        return self.run_frames::<frames::ZstdDecoder>(
-                            source,
-                            &zstd_frames,
+                    // `None` if the input does not end with a frame, the single decoder reports it
+                    if let Some(zstd_frames) = zstd_frames.filter(|frames| frames.len() > 1) {
+                        let len = zstd_frames.last().map_or(0, |f| f.comp_offset + f.comp_len);
+                        return self.run_frames::<frames::ZstdDecoder, _>(
+                            len,
+                            |pos, limit| frames::ZstdFrames::new(source, &zstd_frames, pos, limit),
                             threads,
                             custom_chunks,
                             max_chunk_len,

@@ -230,10 +230,20 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let block = generate_test_fastq(1000);
-        let bgzf_data = encode_bgzf(&[&block[..]; 8]);
+        let bgzf_data = encode_bgzf(&[
+            &block[..],
+            &block,
+            &block,
+            &block,
+            &block,
+            &block,
+            &block,
+            &block,
+            b"",
+        ]);
         let path = std::env::temp_dir().join("test_helicase_bgzf_chunks.fastq.gz");
         std::fs::write(&path, &bgzf_data).unwrap();
-        for (chunks, expected) in [(None, 2), (Some(3), 3), (Some(100), 8)] {
+        for (chunks, expected) in [(None, 2), (Some(3), 3), (Some(100), 9)] {
             let parser = ParallelFastxParser::<CONFIG>::from_file(&path)
                 .unwrap()
                 .threads(2);
@@ -264,6 +274,39 @@ mod tests {
             },
         );
         counts.unwrap().into_iter().sum()
+    }
+
+    #[test]
+    fn test_parallel_bgzf_corrupt_first_block_is_an_error() {
+        let chunks = [
+            &generate_test_fastq(1000)[..],
+            &generate_test_fastq(1000),
+            b"",
+        ];
+        let mut file = encode_bgzf(&chunks);
+        // A truncated first block must not make the first chunk skip to the next block
+        let bsize = u16::from_le_bytes([file[16], file[17]]) - 100;
+        file[16..18].copy_from_slice(&bsize.to_le_bytes());
+        let path = std::env::temp_dir().join("test_helicase_bgzf_corrupt_first_block.fastq.gz");
+        std::fs::write(&path, file).unwrap();
+        for mmap in [false, true] {
+            let parser = if mmap {
+                ParallelFastxParser::<CONFIG>::from_file_mmap(&path)
+            } else {
+                ParallelFastxParser::<CONFIG>::from_file(&path)
+            };
+            let res = parser.unwrap().threads(4).for_each_with(
+                || (),
+                |_, parser| {
+                    for event in parser {
+                        event?;
+                    }
+                    Ok(())
+                },
+            );
+            assert!(res.is_err(), "mmap={mmap}");
+        }
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
@@ -304,6 +347,59 @@ mod tests {
                 let count = count_records(parser.unwrap().threads(threads));
                 assert_eq!(count, 3000, "threads={threads} mmap={mmap}");
             }
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_parallel_bgzf_larger_than_read_window() {
+        // About 1 MB compressed in 70 blocks, records cross block boundaries
+        let bytes = fastx_gen::FastxGen::fasta(4000, 1000)
+            .with_seed(3)
+            .generate_bytes();
+        let mut blocks: Vec<&[u8]> = bytes.chunks(60_000).collect();
+        blocks.push(b"");
+        let path = std::env::temp_dir().join("test_helicase_bgzf_large.fa.gz");
+        std::fs::write(&path, encode_bgzf(&blocks)).unwrap();
+        for chunks in [3, 7, 64] {
+            for mmap in [false, true] {
+                let parser = if mmap {
+                    ParallelFastxParser::<CONFIG>::from_file_mmap(&path)
+                } else {
+                    ParallelFastxParser::<CONFIG>::from_file(&path)
+                };
+                let count = count_records(parser.unwrap().threads(4).chunks(chunks));
+                assert_eq!(count, 4000, "chunks={chunks} mmap={mmap}");
+            }
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_parallel_bgzf_with_plain_gzip_in_the_middle() {
+        let bgzf = encode_bgzf(&[&generate_test_fastq(1000), &generate_test_fastq(1000), b""]);
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(&generate_test_fastq(1000)).unwrap();
+        let data = [bgzf.clone(), encoder.finish().unwrap(), bgzf].concat();
+        let path = std::env::temp_dir().join("test_helicase_bgzf_gzip_bgzf.fastq.gz");
+        std::fs::write(&path, &data).unwrap();
+        for mmap in [false, true] {
+            let parser = if mmap {
+                ParallelFastxParser::<CONFIG>::from_file_mmap(&path)
+            } else {
+                ParallelFastxParser::<CONFIG>::from_file(&path)
+            };
+            let counts = parser.unwrap().threads(4).for_each_with(
+                || 0,
+                |count, parser| {
+                    for event in parser {
+                        event?;
+                        *count += 1;
+                    }
+                    Ok(())
+                },
+            );
+            assert!(counts.is_err(), "mmap={mmap}");
         }
         let _ = std::fs::remove_file(path);
     }

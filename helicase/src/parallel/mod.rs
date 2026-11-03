@@ -32,6 +32,13 @@ struct Job<const CONFIG: Config, Init, Process, Finish> {
     finish: Finish,
 }
 
+/// Where the compressed frames of a file are read from.
+#[derive(Clone, Copy)]
+enum FramesSource<'a> {
+    Slice(&'a [u8]),
+    File(&'a Path),
+}
+
 /// Coordinates worker threads so `on_batch_complete` runs in stream order.
 #[cfg(feature = "paraseq")]
 struct OrderGate {
@@ -51,7 +58,7 @@ struct ParaseqWorker<'a, P> {
 impl OrderGate {
     const POISONED: usize = usize::MAX;
 
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             state: Mutex::new(0),
             cond: Condvar::new(),
@@ -63,12 +70,14 @@ impl OrderGate {
         while *cur != ticket && *cur != Self::POISONED {
             cur = self.cond.wait(cur).unwrap();
         }
+        drop(cur);
     }
 
     fn advance(&self, ticket: usize) {
         let mut cur = self.state.lock().unwrap();
         if *cur != Self::POISONED && ticket + 1 > *cur {
             *cur = ticket + 1;
+            drop(cur);
             self.cond.notify_all();
         }
     }
@@ -76,6 +85,7 @@ impl OrderGate {
     fn poison(&self) {
         let mut cur = self.state.lock().unwrap();
         *cur = Self::POISONED;
+        drop(cur);
         self.cond.notify_all();
     }
 }
@@ -92,7 +102,7 @@ impl<P> Drop for ParaseqWorker<'_, P> {
 #[cfg(any(feature = "gz", feature = "zstd"))]
 mod frames;
 #[cfg(feature = "zstd")]
-pub(crate) use frames::index_zstd_frames;
+pub(crate) use frames::zstd_frame_sizes;
 #[cfg(test)]
 mod tests;
 
@@ -107,10 +117,10 @@ where
         let (threads, chunks, max_chunk_len) =
             (parser.threads, parser.chunks, parser.max_chunk_len);
         match parser.source {
-            ParallelSource::Slice(slice) => self.run_slice(slice, threads, chunks, max_chunk_len),
+            ParallelSource::Slice(slice) => self.run_mmap(slice, threads, chunks, max_chunk_len),
             ParallelSource::Mmap(path) => {
                 let mmap = unsafe { memmap2::Mmap::map(&File::open(&path)?)? };
-                self.run_slice(&mmap, threads, chunks, max_chunk_len)
+                self.run_mmap(&mmap, threads, chunks, max_chunk_len)
             }
             ParallelSource::File(path) => self.run_file(&path, threads, chunks, max_chunk_len),
             ParallelSource::Reader(reader) => {
@@ -235,6 +245,88 @@ where
         )
     }
 
+    fn run_mmap(
+        &self,
+        mmap: &[u8],
+        threads: usize,
+        custom_chunks: Option<usize>,
+        max_chunk_len: usize,
+    ) -> Result<Vec<State>> {
+        let Some(format) = CompressionFormat::from_bytes(mmap) else {
+            return self.run_slice(mmap, threads, custom_chunks, max_chunk_len);
+        };
+        self.run_compressed(
+            FramesSource::Slice(mmap),
+            format,
+            threads,
+            custom_chunks,
+            max_chunk_len,
+        )
+    }
+
+    // Parallel decompression of independent frames, or a single decompression thread otherwise.
+    #[cfg_attr(not(any(feature = "gz", feature = "zstd")), allow(unused_variables))]
+    fn run_compressed(
+        &self,
+        source: FramesSource<'_>,
+        format: CompressionFormat,
+        threads: usize,
+        custom_chunks: Option<usize>,
+        max_chunk_len: usize,
+    ) -> Result<Vec<State>> {
+        if threads > 1 {
+            match format {
+                #[cfg(feature = "gz")]
+                CompressionFormat::Bgzf => {
+                    let blocks = match source {
+                        FramesSource::Slice(slice) => frames::index_bgzf_blocks(slice),
+                        FramesSource::File(path) => frames::index_bgzf_file(path)?,
+                    };
+                    return self.run_frames::<frames::BgzfDecoder>(
+                        source,
+                        &blocks,
+                        threads,
+                        custom_chunks,
+                        max_chunk_len,
+                    );
+                }
+                #[cfg(feature = "zstd")]
+                CompressionFormat::Zstd | CompressionFormat::Pzstd => {
+                    let zstd_frames = match source {
+                        FramesSource::Slice(slice) => {
+                            frames::index_zstd_frames(&mut std::io::Cursor::new(slice))
+                        }
+                        FramesSource::File(path) => {
+                            frames::index_zstd_frames(&mut File::open(path)?)
+                        }
+                    };
+                    if zstd_frames.len() > 1 {
+                        return self.run_frames::<frames::ZstdDecoder>(
+                            source,
+                            &zstd_frames,
+                            threads,
+                            custom_chunks,
+                            max_chunk_len,
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+        // The read-ahead of `from_file` is about 3% faster than `run_stream` on one thread
+        if threads == 1 {
+            return self.run_single(match source {
+                FramesSource::Slice(slice) => FastxParser::from_reader(std::io::Cursor::new(slice)),
+                FramesSource::File(path) => FastxParser::from_file(path),
+            });
+        }
+        let reader: Box<dyn Read + Send + '_> = match source {
+            FramesSource::Slice(slice) => Box::new(std::io::Cursor::new(slice)),
+            FramesSource::File(path) => Box::new(File::open(path)?),
+        };
+        self.run_stream(decompress(reader)?, threads, max_chunk_len)
+    }
+
     fn run_file(
         &self,
         path: &Path,
@@ -242,43 +334,14 @@ where
         custom_chunks: Option<usize>,
         max_chunk_len: usize,
     ) -> Result<Vec<State>> {
-        let compression = CompressionFormat::from_path(path)?;
-        match compression {
-            None => {}
-            #[cfg(feature = "gz")]
-            Some(CompressionFormat::Bgzf) if threads > 1 => {
-                let mmap = unsafe { memmap2::Mmap::map(&File::open(path)?)? };
-                let blocks = frames::index_bgzf_blocks(&mmap);
-                return self.run_frames::<frames::BgzfDecoder>(
-                    &mmap,
-                    &blocks,
-                    threads,
-                    custom_chunks,
-                    max_chunk_len,
-                );
-            }
-            #[cfg(feature = "zstd")]
-            Some(CompressionFormat::Pzstd) if threads > 1 => {
-                let mmap = unsafe { memmap2::Mmap::map(&File::open(path)?)? };
-                let zstd_frames = frames::index_zstd_frames(&mmap);
-                if zstd_frames.len() > 1 {
-                    return self.run_frames::<frames::ZstdDecoder>(
-                        &mmap,
-                        &zstd_frames,
-                        threads,
-                        custom_chunks,
-                        max_chunk_len,
-                    );
-                }
-            }
-            Some(_) => {}
-        }
-        if compression.is_some() {
-            // The read-ahead of `from_file` is about 3% faster than `run_stream` on one thread
-            if threads == 1 {
-                return self.run_single(FastxParser::from_file(path));
-            }
-            return self.run_stream(decompress(File::open(path)?)?, threads, max_chunk_len);
+        if let Some(format) = CompressionFormat::from_path(path)? {
+            return self.run_compressed(
+                FramesSource::File(path),
+                format,
+                threads,
+                custom_chunks,
+                max_chunk_len,
+            );
         }
 
         let mut file = File::open(path)?;
@@ -379,12 +442,13 @@ fn probe_file_record_start(
     }
 }
 
-/// Runs `f` on `path` opened once per worker (reopening it per chunk costs 5-10% at 8 threads).
+/// Runs `f` on `path` opened once per thread (reopening it per chunk costs 5-10% at 8 threads).
+/// The calling thread also uses it, so the cached file is replaced when `path` changes.
 fn with_thread_file<T>(path: &Path, f: impl FnOnce(&mut File) -> Result<T>) -> Result<T> {
-    thread_local!(static FILE: RefCell<Option<File>> = const { RefCell::new(None) });
-    FILE.with_borrow_mut(|file| match file {
-        Some(file) => f(file),
-        None => f(file.insert(File::open(path)?)),
+    thread_local!(static FILE: RefCell<Option<(PathBuf, File)>> = const { RefCell::new(None) });
+    FILE.with_borrow_mut(|cached| match cached {
+        Some((cached_path, file)) if cached_path == path => f(file),
+        _ => f(&mut cached.insert((path.to_path_buf(), File::open(path)?)).1),
     })
 }
 
@@ -479,8 +543,8 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
 
     /// Creates a parallel parser for a file on disk using the streaming multi-reader engine.
     ///
-    /// Reads records in parallel using positional reads with a 256 KiB buffer per thread,
-    /// bounding memory to ~2 MB total RAM across 8 threads.
+    /// Reads records and compressed frames in parallel with bounded memory,
+    /// avoiding memory mapping (`mmap`).
     ///
     /// Also see [`from_file_mmap`](Self::from_file_mmap) for zero-copy memory mapping on local SSD/NVMe.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
@@ -492,6 +556,7 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
 
     /// Creates a parallel parser for a file on disk using zero-copy memory mapping (`mmap`).
     ///
+    /// Supports uncompressed files, BGZF blocked gzip, and multi-frame Zstandard (`pzstd`).
     /// Yields maximum throughput on local SSD/NVMe storage.
     ///
     /// Also see [`from_file`](Self::from_file) for streaming multi-reader mode with bounded memory.

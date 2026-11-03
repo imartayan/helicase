@@ -1,4 +1,5 @@
 use super::zstd_frame_sizes;
+use std::io::Cursor;
 use zstd::zstd_safe::{find_frame_compressed_size, get_frame_content_size};
 
 fn compress(data: &[u8], level: i32, content_size: bool, checksum: bool) -> Vec<u8> {
@@ -38,7 +39,7 @@ fn zstd_frame_sizes_match_libzstd() {
             [(1, true, false), (3, false, true), (19, false, false)]
         {
             let frame = compress(data, level, content_size, checksum);
-            let (comp_len, uncomp_len) = zstd_frame_sizes(&frame).unwrap();
+            let (comp_len, uncomp_len) = zstd_frame_sizes(&mut Cursor::new(&frame)).unwrap();
             assert_eq!(comp_len, find_frame_compressed_size(&frame).unwrap());
             match get_frame_content_size(&frame).unwrap() {
                 Some(len) => assert_eq!(uncomp_len, len as usize),
@@ -51,7 +52,11 @@ fn zstd_frame_sizes_match_libzstd() {
                 .unwrap();
             assert_eq!(&out[..len], data);
             for cut in 0..frame.len() {
-                assert_eq!(zstd_frame_sizes(&frame[..cut]), None, "cut {cut}");
+                assert_eq!(
+                    zstd_frame_sizes(&mut Cursor::new(&frame[..cut])),
+                    None,
+                    "cut {cut}"
+                );
             }
         }
     }

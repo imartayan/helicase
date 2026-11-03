@@ -57,7 +57,8 @@
 //! ```
 //! ## Input
 //!
-//! Files are opened with [`from_file`](input::FromFile::from_file) (which supports [transparent decompression](#crate-features)) or [`from_file_mmap`](input::FromMmap::from_file_mmap) (which only supports uncompressed data but can be faster).
+//! Files are opened with [`from_file`](input::FromFile::from_file) or [`from_file_mmap`](FastxParser::from_file_mmap) (both supporting [transparent decompression](#crate-features) for [`FastxParser`] and [`ParallelFastxParser`](parallel::ParallelFastxParser)).
+//! `from_file_mmap` memory-maps the file for zero-copy parsing on uncompressed data, while transparently decompressing compressed inputs.
 //! In-memory slices ([`from_slice`](input::FromSlice::from_slice)) and generic streams ([`from_reader`](input::FromReader::from_reader)) are also supported.
 //!
 //! ## Adjusting the configuration

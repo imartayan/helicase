@@ -14,7 +14,7 @@ pub struct CpuInfo {
 }
 
 pub fn get_hardware_info() -> CpuInfo {
-    let mut sys = System::new();
+    let mut sys = System::new().unwrap();
     sys.refresh_cpu_all();
 
     let cpu = &sys.cpus()[0];

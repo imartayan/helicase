@@ -63,9 +63,53 @@ mod tests {
 
             assert_eq!(total_records, 5000, "Failed at threads={threads}");
             assert_eq!(total_len, 5000 * 30, "Failed at threads={threads}");
+
+            // Verify from_file_mmap
+            let (mmap_records, mmap_len) = ParallelFastxParser::<CONFIG>::from_file_mmap(temp_file)
+                .unwrap()
+                .threads(threads)
+                .for_each_with(
+                    || (0, 0),
+                    |(count, len), mut parser| {
+                        while let Some(event) = parser.next() {
+                            event?;
+                            *count += 1;
+                            *len += parser.get_dna_len();
+                        }
+                        Ok(())
+                    },
+                )
+                .unwrap()
+                .into_iter()
+                .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+
+            assert_eq!(
+                mmap_records, 5000,
+                "from_file_mmap failed at threads={threads}"
+            );
+            assert_eq!(
+                mmap_len,
+                5000 * 30,
+                "from_file_mmap len failed at threads={threads}"
+            );
         }
 
-        // Test single-threaded from_file and from_reader
+        // Test single-threaded from_file_mmap, from_file and from_reader
+        {
+            let mut parser = FastxParser::<CONFIG>::from_file_mmap(temp_file).unwrap();
+            let mut count = 0;
+            let mut len = 0;
+            while parser.next().is_some() {
+                count += 1;
+                len += parser.get_dna_len();
+            }
+            assert_eq!(count, 5000, "Single-threaded from_file_mmap mismatch");
+            assert_eq!(
+                len,
+                5000 * 30,
+                "Single-threaded from_file_mmap len mismatch"
+            );
+        }
         {
             let mut parser = FastxParser::<CONFIG>::from_file(temp_file).unwrap();
             let mut count = 0;
@@ -368,6 +412,40 @@ mod tests {
             let mut expected = expected.clone();
             expected.sort_unstable();
             assert_eq!(records, expected, "{chunks} chunks");
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_parallel_fastx_parser_zstd_single_frame_after_skippable() {
+        // Output of pzstd on a small file
+        let mut zst_data = vec![0x50, 0x2a, 0x4d, 0x18, 4, 0, 0, 0, 1, 2, 3, 4];
+        zst_data.extend(zstd::bulk::compress(&generate_test_fastq(100), 1).unwrap());
+        let path = std::env::temp_dir().join("test_helicase_zstd_skippable_single.fastq.zst");
+        std::fs::write(&path, &zst_data).unwrap();
+        for mmap in [false, true] {
+            let parser = if mmap {
+                ParallelFastxParser::<CONFIG>::from_file_mmap(&path)
+            } else {
+                ParallelFastxParser::<CONFIG>::from_file(&path)
+            };
+            let count: usize = parser
+                .unwrap()
+                .threads(4)
+                .for_each_with(
+                    || 0,
+                    |count, parser| {
+                        for event in parser {
+                            event?;
+                            *count += 1;
+                        }
+                        Ok(())
+                    },
+                )
+                .unwrap()
+                .into_iter()
+                .sum();
+            assert_eq!(count, 100, "mmap={mmap}");
         }
         let _ = std::fs::remove_file(path);
     }

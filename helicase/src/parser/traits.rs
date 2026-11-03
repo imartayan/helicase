@@ -154,6 +154,7 @@ pub trait HelicaseParser: crate::sealed::Sealed {
     fn record_index(&self) -> u64;
 }
 
+#[allow(clippy::redundant_pub_crate)]
 pub(crate) trait HelicaseParserIter:
     HelicaseParser + Iterator<Item = Result<Event>>
 {

@@ -1,20 +1,25 @@
 //! Parallel decompression of independent compressed frames (BGZF blocks, zstd frames).
 
-use super::Job;
+use super::{FramesSource, Job, with_thread_file};
 use crate::config::*;
 use crate::input::*;
 use crate::parser::*;
-use std::io::{self, Read};
+use std::io::{self, Read, Seek, SeekFrom};
 
 #[cfg(all(test, feature = "zstd"))]
 mod tests;
 
+#[cfg(feature = "gz")]
+const MAX_BGZF_BLOCK_LEN: usize = 1 << 16;
+#[cfg(feature = "gz")]
+const WINDOW_LEN: usize = 1 << 18;
+
 #[derive(Clone, Copy)]
 pub struct Frame {
-    comp_offset: usize,
-    comp_len: usize,
+    pub(super) comp_offset: usize,
+    pub(super) comp_len: usize,
     // Exact for BGZF, upper bound for zstd frames without content size.
-    uncomp_len: usize,
+    pub(super) uncomp_len: usize,
 }
 
 impl Frame {
@@ -61,34 +66,71 @@ impl FrameDecoder for BgzfDecoder {
     }
 }
 
+// Block at the start of `h`, possibly empty (the BGZF EOF marker is).
 #[cfg(feature = "gz")]
-pub(super) fn index_bgzf_blocks(compressed: &[u8]) -> Vec<Frame> {
-    let mut blocks = Vec::with_capacity(compressed.len() / 2048);
-    let mut comp_offset = 0;
-    while comp_offset + 18 <= compressed.len() {
-        let header = &compressed[comp_offset..];
-        if header[0] != 0x1f || header[1] != 0x8b || (header[3] & 0x04) == 0 {
-            break;
-        }
-        if header[12] != b'B' || header[13] != b'C' {
-            break;
-        }
-        let comp_len = u16::from_le_bytes([header[16], header[17]]) as usize + 1;
-        if comp_offset + comp_len > compressed.len() {
-            break;
-        }
-        let isize_bytes = &compressed[comp_offset + comp_len - 4..comp_offset + comp_len];
-        let uncomp_len = u32::from_le_bytes(isize_bytes.try_into().unwrap()) as usize;
-        if uncomp_len > 0 {
-            blocks.push(Frame {
+#[inline(always)]
+fn parse_bgzf_frame(h: &[u8], comp_offset: usize) -> Option<Frame> {
+    if h.len() >= 18
+        && h[0] == 0x1f
+        && h[1] == 0x8b
+        && (h[3] & 0x04) != 0
+        && h[12] == b'B'
+        && h[13] == b'C'
+    {
+        let comp_len = u16::from_le_bytes([h[16], h[17]]) as usize + 1;
+        if (18..=h.len()).contains(&comp_len) {
+            let isize_bytes = &h[comp_len - 4..comp_len];
+            let uncomp_len = u32::from_le_bytes(isize_bytes.try_into().unwrap()) as usize;
+            return Some(Frame {
                 comp_offset,
                 comp_len,
                 uncomp_len,
             });
         }
-        comp_offset += comp_len;
+    }
+    None
+}
+
+#[cfg(feature = "gz")]
+pub(super) fn index_bgzf_blocks(compressed: &[u8]) -> Vec<Frame> {
+    let mut blocks = Vec::new();
+    let mut comp_offset = 0;
+    while let Some(frame) = parse_bgzf_frame(&compressed[comp_offset..], comp_offset) {
+        comp_offset += frame.comp_len;
+        if frame.uncomp_len > 0 {
+            blocks.push(frame);
+        }
     }
     blocks
+}
+
+#[cfg(feature = "gz")]
+pub(super) fn index_bgzf_file(path: &std::path::Path) -> io::Result<Vec<Frame>> {
+    let mut file = std::fs::File::open(path)?;
+    let mut blocks = Vec::new();
+    let mut comp_offset = 0;
+    // The window holds the file bytes from `window_start`
+    let mut window = Vec::with_capacity(WINDOW_LEN);
+    let mut window_start = 0;
+    loop {
+        let mut rel = comp_offset - window_start;
+        if window.len() - rel < MAX_BGZF_BLOCK_LEN {
+            window.drain(..rel);
+            window_start = comp_offset;
+            rel = 0;
+            (&mut file)
+                .take((WINDOW_LEN - window.len()) as u64)
+                .read_to_end(&mut window)?;
+        }
+        let Some(frame) = parse_bgzf_frame(&window[rel..], comp_offset) else {
+            break;
+        };
+        comp_offset += frame.comp_len;
+        if frame.uncomp_len > 0 {
+            blocks.push(frame);
+        }
+    }
+    Ok(blocks)
 }
 
 #[cfg(feature = "zstd")]
@@ -154,48 +196,58 @@ fn zstd_error(code: usize) -> io::Error {
 
 // Frames of the file, without the skippable frames written by pzstd.
 #[cfg(feature = "zstd")]
-pub fn index_zstd_frames(compressed: &[u8]) -> Vec<Frame> {
-    let mut frames = Vec::with_capacity(compressed.len() / (1024 * 1024) + 1);
+pub(super) fn index_zstd_frames(reader: &mut (impl Read + Seek)) -> Vec<Frame> {
+    let mut frames = Vec::new();
     let mut comp_offset = 0;
-    while comp_offset + 4 <= compressed.len() {
-        let slice = &compressed[comp_offset..];
-        // Skippable frame: magic 0x184D2A50..=0x184D2A5F, then a u32 payload size.
-        if slice.len() >= 8
-            && slice[3] == 0x18
-            && slice[2] == 0x4d
-            && slice[1] == 0x2a
-            && (slice[0] & 0xf0) == 0x50
-        {
-            let payload_len = u32::from_le_bytes(slice[4..8].try_into().unwrap()) as usize;
-            comp_offset += 8 + payload_len;
-            continue;
+    // `zstd_frame_sizes` leaves the reader at the end of the frame
+    while let Some((comp_len, uncomp_len)) = zstd_frame_sizes(reader) {
+        if uncomp_len > 0 {
+            frames.push(Frame {
+                comp_offset,
+                comp_len,
+                uncomp_len,
+            });
         }
-        match zstd_frame_sizes(slice) {
-            Some((comp_len, uncomp_len)) => {
-                frames.push(Frame {
-                    comp_offset,
-                    comp_len,
-                    uncomp_len,
-                });
-                comp_offset += comp_len;
-            }
-            _ => break,
-        }
+        comp_offset += comp_len;
     }
     frames
 }
 
 // Decompressed data from position `start` to `end`, as (frame index, offset in the frame).
 struct FrameRangeReader<'a, D> {
-    compressed: &'a [u8],
+    source: FramesSource<'a>,
     frames: &'a [Frame],
     start: (usize, usize),
     end: (usize, usize),
     next_frame: usize,
     decoder: D,
+    comp_buf: Vec<u8>,
     buf: Vec<u8>,
     pos: usize,
     len: usize,
+}
+
+impl<'a, D: FrameDecoder> FrameRangeReader<'a, D> {
+    const fn new(
+        source: FramesSource<'a>,
+        frames: &'a [Frame],
+        start: (usize, usize),
+        end: (usize, usize),
+        decoder: D,
+    ) -> Self {
+        Self {
+            source,
+            frames,
+            start,
+            end,
+            next_frame: start.0,
+            decoder,
+            comp_buf: Vec::new(),
+            buf: Vec::new(),
+            pos: 0,
+            len: 0,
+        }
+    }
 }
 
 impl<D: FrameDecoder> Read for FrameRangeReader<'_, D> {
@@ -209,7 +261,7 @@ impl<D: FrameDecoder> Read for FrameRangeReader<'_, D> {
                 return Ok(0);
             }
             let frame = self.frames[idx];
-            let bytes = frame.bytes(self.compressed);
+            let bytes = frame_bytes(self.source, &frame, &mut self.comp_buf)?;
             if idx == self.end.0 {
                 // Only the bytes before the end of the range are needed
                 let len = self.end.1;
@@ -234,21 +286,43 @@ impl<D: FrameDecoder> Read for FrameRangeReader<'_, D> {
     }
 }
 
+// The compressed bytes of `frame`, read into `buf` if the source is a file.
+fn frame_bytes<'b>(
+    source: FramesSource<'b>,
+    frame: &Frame,
+    buf: &'b mut Vec<u8>,
+) -> io::Result<&'b [u8]> {
+    match source {
+        FramesSource::Slice(slice) => Ok(frame.bytes(slice)),
+        FramesSource::File(path) => {
+            buf.resize(frame.comp_len, 0);
+            with_thread_file(path, |file| {
+                file.seek(SeekFrom::Start(frame.comp_offset as u64))?;
+                Ok(file.read_exact(buf)?)
+            })?;
+            Ok(buf)
+        }
+    }
+}
+
 // First record starting in frame `frame_idx` or after it.
 fn find_record_start_in_frames<D: FrameDecoder>(
-    compressed: &[u8],
+    source: FramesSource<'_>,
     frames: &[Frame],
     mut frame_idx: usize,
     format: Format,
 ) -> (usize, usize) {
-    let mut data = Vec::new();
-    if let Ok(mut decoder) = D::new() {
-        while frame_idx < frames.len() {
-            let frame = frames[frame_idx];
+    let (mut data, mut comp_buf) = (Vec::new(), Vec::new());
+    let Ok(mut decoder) = D::new() else {
+        return (frames.len(), 0);
+    };
+    while frame_idx < frames.len() {
+        let frame = frames[frame_idx];
+        if let Ok(bytes) = frame_bytes(source, &frame, &mut comp_buf) {
             // The record start is usually close to the frame start, so decode a doubling prefix
             let mut len = 64 * 1024;
             while decoder
-                .decode_prefix(frame.bytes(compressed), frame.uncomp_len, len, &mut data)
+                .decode_prefix(bytes, frame.uncomp_len, len, &mut data)
                 .is_ok()
             {
                 if let Some(cand) = format.find_record_start(&data, 0) {
@@ -259,8 +333,8 @@ fn find_record_start_in_frames<D: FrameDecoder>(
                 }
                 len *= 2;
             }
-            frame_idx += 1;
         }
+        frame_idx += 1;
     }
     (frames.len(), 0)
 }
@@ -274,7 +348,7 @@ where
 {
     pub(super) fn run_frames<D: FrameDecoder>(
         &self,
-        compressed: &[u8],
+        source: FramesSource<'_>,
         frames: &[Frame],
         threads: usize,
         custom_chunks: Option<usize>,
@@ -283,9 +357,9 @@ where
         let Some(first) = frames.first() else {
             return self.run_single(FastxParser::from_slice(&[]));
         };
-        let mut first_bytes = Vec::new();
+        let (mut first_bytes, mut comp_buf) = (Vec::new(), Vec::new());
         D::new()?.decode_prefix(
-            first.bytes(compressed),
+            frame_bytes(source, first, &mut comp_buf)?,
             first.uncomp_len,
             1,
             &mut first_bytes,
@@ -302,24 +376,14 @@ where
             ((0, 0), (frames.len(), 0)),
             |i| {
                 find_record_start_in_frames::<D>(
-                    compressed,
+                    source,
                     frames,
                     i * frames.len() / num_chunks,
                     format,
                 )
             },
             |state, ticket, start, end| {
-                let reader = FrameRangeReader {
-                    compressed,
-                    frames,
-                    start,
-                    end,
-                    next_frame: start.0,
-                    decoder: D::new()?,
-                    buf: Vec::new(),
-                    pos: 0,
-                    len: 0,
-                };
+                let reader = FrameRangeReader::new(source, frames, start, end, D::new()?);
                 (self.process)(state, ticket, FastxParser::from_reader(reader)?)
             },
         )
@@ -327,46 +391,67 @@ where
 }
 
 // Compressed size and decompressed size (or an upper bound if the header has none) of the zstd
-// frame starting `data`, by walking its block headers (RFC 8878).
+// frame at the current position, by walking its block headers (RFC 8878). Skippable frames have
+// a decompressed size of 0. On success, the reader is left at the end of the frame.
 #[cfg(feature = "zstd")]
-fn zstd_frame_sizes(data: &[u8]) -> Option<(usize, usize)> {
+pub fn zstd_frame_sizes(reader: &mut (impl Read + Seek)) -> Option<(usize, usize)> {
     const MAX_BLOCK_LEN: usize = 128 * 1024;
-    if data.get(..4)? != [0x28, 0xb5, 0x2f, 0xfd] {
-        return None;
-    }
-    let descriptor = *data.get(4)?;
-    let single_segment = descriptor & 0x20 != 0;
-    let fcs_len = match descriptor >> 6 {
-        0 => single_segment as usize,
-        1 => 2,
-        2 => 4,
-        _ => 8,
+    let start = reader.stream_position().ok()?;
+    let mut read_at = |pos: usize, buf: &mut [u8]| {
+        reader.seek(SeekFrom::Start(start + pos as u64)).ok()?;
+        reader.read_exact(buf).ok()
     };
-    let dict_len = [0, 1, 2, 4][(descriptor & 3) as usize];
-    let fcs_start = 5 + !single_segment as usize + dict_len;
-    let fcs = data.get(fcs_start..fcs_start + fcs_len)?;
-    let content_len = fcs.iter().rev().fold(0, |acc, &b| (acc << 8) | b as usize)
-        + if fcs_len == 2 { 256 } else { 0 };
-    let mut pos = fcs_start + fcs_len;
-    let mut num_blocks = 0;
-    loop {
-        let header = data.get(pos..pos + 3)?;
-        let header = u32::from_le_bytes([header[0], header[1], header[2], 0]);
-        pos += 3 + match (header >> 1) & 3 {
-            1 => 1,
-            3 => return None,
-            _ => (header >> 3) as usize,
+    let mut head = [0u8; 18];
+    read_at(0, &mut head[..5])?;
+    let (len, uncomp_len) = if head[1..4] == [0x2a, 0x4d, 0x18] && head[0] & 0xf0 == 0x50 {
+        read_at(4, &mut head[..4])?;
+        (
+            8 + u32::from_le_bytes(head[..4].try_into().unwrap()) as usize,
+            0,
+        )
+    } else if head[..4] == [0x28, 0xb5, 0x2f, 0xfd] {
+        let descriptor = head[4];
+        let single_segment = descriptor & 0x20 != 0;
+        let fcs_len = match descriptor >> 6 {
+            0 => single_segment as usize,
+            1 => 2,
+            2 => 4,
+            _ => 8,
         };
-        num_blocks += 1;
-        if header & 1 != 0 {
-            break;
+        let dict_len = [0, 1, 2, 4][(descriptor & 3) as usize];
+        let fcs_start = 5 + !single_segment as usize + dict_len;
+        let mut pos = fcs_start + fcs_len;
+        read_at(5, &mut head[5..pos])?;
+        let content_len = head[fcs_start..pos]
+            .iter()
+            .rev()
+            .fold(0, |acc, &b| (acc << 8) | b as usize)
+            + if fcs_len == 2 { 256 } else { 0 };
+        let mut num_blocks = 0;
+        loop {
+            read_at(pos, &mut head[..3])?;
+            let header = u32::from_le_bytes([head[0], head[1], head[2], 0]);
+            pos += 3 + match (header >> 1) & 3 {
+                1 => 1,
+                3 => return None,
+                _ => (header >> 3) as usize,
+            };
+            num_blocks += 1;
+            if header & 1 != 0 {
+                break;
+            }
         }
-    }
-    pos += if descriptor & 4 != 0 { 4 } else { 0 };
-    let uncomp_len = if fcs_len > 0 {
-        content_len
+        pos += if descriptor & 4 != 0 { 4 } else { 0 };
+        let uncomp_len = if fcs_len > 0 {
+            content_len
+        } else {
+            num_blocks * MAX_BLOCK_LEN
+        };
+        (pos, uncomp_len)
     } else {
-        num_blocks * MAX_BLOCK_LEN
+        return None;
     };
-    (pos <= data.len()).then_some((pos, uncomp_len))
+    // Reading the last byte checks that the frame is complete
+    read_at(len - 1, &mut head[..1])?;
+    Some((len, uncomp_len))
 }

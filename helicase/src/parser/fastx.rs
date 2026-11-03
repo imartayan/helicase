@@ -37,6 +37,22 @@ use alloc::boxed::Box;
 /// ```
 pub struct FastxParser<'a, const CONFIG: Config>(Box<dyn HelicaseParserIter + Send + 'a>);
 
+#[cfg(feature = "std")]
+impl<'a, const CONFIG: Config> FastxParser<'a, CONFIG> {
+    /// Opens a memory-mapped file, with transparent decompression if compressed.
+    ///
+    /// Memory-maps the file for zero-copy parsing on uncompressed data, and automatically
+    /// decompresses compressed inputs (`.gz`, `.bgz`, `.zst`, `.bz2`, `.xz`).
+    pub fn from_file_mmap<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
+        let mmap = unsafe { memmap2::Mmap::map(&std::fs::File::open(path)?)? };
+        if CompressionFormat::from_bytes(&mmap).is_some() {
+            Self::from_reader(std::io::Cursor::new(mmap))
+        } else {
+            Self::from_input(MmapInput::from_mmap(mmap))
+        }
+    }
+}
+
 impl<'a, const CONFIG: Config, I: InputData<'a> + Send + 'a> FromInputData<'a, I>
     for FastxParser<'a, CONFIG>
 {

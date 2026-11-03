@@ -65,3 +65,25 @@ fn stream_stops_on_error() {
     assert!(res.is_err());
     assert!(count_stream(b"xyz\n".repeat(100).as_slice(), 2, 100).is_err());
 }
+
+#[test]
+fn thread_file_follows_path() {
+    let dir = std::env::temp_dir();
+    let (a, b) = (
+        dir.join("helicase_thread_file_a"),
+        dir.join("helicase_thread_file_b"),
+    );
+    std::fs::write(&a, b"a").unwrap();
+    std::fs::write(&b, b"b").unwrap();
+    for (path, expected) in [(&a, b'a'), (&b, b'b'), (&a, b'a')] {
+        let mut byte = [0];
+        with_thread_file(path, |file| {
+            file.seek(SeekFrom::Start(0))?;
+            Ok(file.read_exact(&mut byte)?)
+        })
+        .unwrap();
+        assert_eq!(byte[0], expected);
+    }
+    let _ = std::fs::remove_file(a);
+    let _ = std::fs::remove_file(b);
+}

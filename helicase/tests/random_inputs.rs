@@ -33,18 +33,18 @@ const REJECT: Config = ParserOptions::default()
 struct Rng(u64);
 
 impl Rng {
-    fn next(&mut self) -> u64 {
+    const fn next(&mut self) -> u64 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
         self.0
     }
 
-    fn below(&mut self, n: usize) -> usize {
+    const fn below(&mut self, n: usize) -> usize {
         (self.next() % n as u64) as usize
     }
 
-    fn pick(&mut self, bytes: &[u8]) -> u8 {
+    const fn pick(&mut self, bytes: &[u8]) -> u8 {
         bytes[self.below(bytes.len())]
     }
 }
@@ -57,7 +57,7 @@ fn cases() -> core::ops::Range<u64> {
     seed..seed + var("HELICASE_RANDOM_CASES", 1000)
 }
 
-fn is_actg(b: u8) -> bool {
+const fn is_actg(b: u8) -> bool {
     matches!(b & 0xDF, b'A' | b'C' | b'G' | b'T')
 }
 

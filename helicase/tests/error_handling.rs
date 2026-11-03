@@ -50,6 +50,16 @@ fn test_empty_input_yields_no_records() {
         count_events(parser::FastqParser::<PACKED, _>::from_reader(empty).unwrap()),
         0
     );
+    #[cfg(feature = "std")]
+    {
+        let empty_path = std::env::temp_dir().join("helicase_test_empty.fa");
+        std::fs::write(&empty_path, b"").unwrap();
+        assert_eq!(
+            count_events(FastxParser::<CONFIG>::from_file_mmap(&empty_path).unwrap()),
+            0
+        );
+        let _ = std::fs::remove_file(empty_path);
+    }
 }
 
 #[test]

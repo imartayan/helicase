@@ -3,7 +3,6 @@ use crate::parser::Result;
 use core::marker::PhantomData;
 use core::mem::{replace, take};
 use deko::read::AnyDecoder;
-use memmap2::Mmap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::Path;
@@ -29,13 +28,14 @@ impl CompressionFormat {
         if n > 0 {
             let format = Self::from_bytes(&buf[..n]);
             if format == Some(Self::Zstd) {
+                // More than one frame if the first one ends before the end of the file
                 #[cfg(feature = "zstd")]
                 {
-                    if let Ok(mmap) = unsafe { Mmap::map(&file) } {
-                        let frames = crate::parallel::index_zstd_frames(&mmap);
-                        if frames.len() > 1 {
-                            return Ok(Some(Self::Pzstd));
-                        }
+                    std::io::Seek::rewind(&mut &file)?;
+                    if let Some((len, _)) = crate::parallel::zstd_frame_sizes(&mut &file)
+                        && (len as u64) < file.metadata()?.len()
+                    {
+                        return Ok(Some(Self::Pzstd));
                     }
                 }
                 return Ok(Some(Self::Zstd));
@@ -63,25 +63,26 @@ impl CompressionFormat {
 }
 
 /// Memory-mapped file.
-/// It does not support transparent decompression.
 pub struct MmapInput<'a> {
     slice: SliceInput<'a>,
     _mmap: Mmap,
 }
 
 impl<'a> MmapInput<'a> {
+    /// Creates an input from an existing memory map.
+    pub fn from_mmap(mmap: Mmap) -> Self {
+        let data = unsafe { core::slice::from_raw_parts(mmap.as_ptr(), mmap.len()) };
+        Self {
+            slice: SliceInput::new(data),
+            _mmap: mmap,
+        }
+    }
+
     /// Memory-maps the file at `path`.
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        // Unsafe: mmap are intrisically unsafe.
-        // Here we add on the top of that a slice of [u8] that will live as long as file is not dropped.
-        // To enforce this, we keep the file in the struct.
         let file = File::open(path)?;
-        let _mmap = unsafe { Mmap::map(&file)? };
-        let data = unsafe { core::slice::from_raw_parts(_mmap.as_ptr(), _mmap.len()) };
-        Ok(Self {
-            slice: SliceInput::new(data),
-            _mmap,
-        })
+        let mmap = unsafe { Mmap::map(&file)? };
+        Ok(Self::from_mmap(mmap))
     }
 }
 
@@ -131,7 +132,6 @@ impl<'a> InputBuffer<'a> for MmapInput<'a> {
 /// Types that can be built from a memory-mapped file, such as parsers.
 pub trait FromMmap<'a>: FromInputData<'a, MmapInput<'a>> {
     /// Build the struct from a memory-mapped file.
-    /// It does not support transparent decompression.
     ///
     /// Also see [`from_file`](FromFile::from_file) to use a file reader.
     #[inline(always)]
@@ -471,6 +471,7 @@ impl<'a, R: Read + 'a> ReaderInput<'a, R> {
 }
 
 /// Decompresses `reader` on the fly, like [`ReaderInput::new`] but without parsing.
+#[allow(clippy::redundant_pub_crate)]
 pub(crate) fn decompress<R: Read>(reader: R) -> io::Result<impl Read> {
     ReaderInput::<R>::decoder(reader).map(|(decoder, _)| decoder)
 }

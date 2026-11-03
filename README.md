@@ -58,7 +58,7 @@ fn main() -> std::io::Result<()> {
 
 ### Input
 
-Files are opened with `from_file` (which supports [transparent decompression](#crate-features)) or `from_file_mmap` (which only supports uncompressed data but can be faster).
+Files are opened with `from_file` or `from_file_mmap`, which both support [transparent decompression](#crate-features) for `FastxParser` and `ParallelFastxParser`.
 In-memory slices (`from_slice`) and generic streams (`from_reader`) are also supported.
 
 ### Adjusting the configuration

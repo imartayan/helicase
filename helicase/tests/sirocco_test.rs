@@ -146,9 +146,53 @@ mod tests {
 
             assert_eq!(total_records, 2000, "Failed at threads={threads}");
             assert_eq!(total_len, 2000 * 30, "Failed at threads={threads}");
+
+            // Verify from_file_mmap on BGZF
+            let (mmap_records, mmap_len) = ParallelFastxParser::<CONFIG>::from_file_mmap(temp_file)
+                .unwrap()
+                .threads(threads)
+                .for_each_with(
+                    || (0, 0),
+                    |(count, len), mut parser| {
+                        while let Some(event) = parser.next() {
+                            event?;
+                            *count += 1;
+                            *len += parser.get_dna_len();
+                        }
+                        Ok(())
+                    },
+                )
+                .unwrap()
+                .into_iter()
+                .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+
+            assert_eq!(
+                mmap_records, 2000,
+                "from_file_mmap failed at threads={threads}"
+            );
+            assert_eq!(
+                mmap_len,
+                2000 * 30,
+                "from_file_mmap len failed at threads={threads}"
+            );
         }
 
-        // Test single-threaded ReaderInput and FileInput with BGZF multi-block data
+        // Test single-threaded ReaderInput, FileInput, and from_file_mmap with BGZF multi-block data
+        {
+            let mut parser = FastxParser::<CONFIG>::from_file_mmap(temp_file).unwrap();
+            let mut count = 0;
+            let mut len = 0;
+            while parser.next().is_some() {
+                count += 1;
+                len += parser.get_dna_len();
+            }
+            assert_eq!(count, 2000, "Single-threaded from_file_mmap BGZF mismatch");
+            assert_eq!(
+                len,
+                2000 * 30,
+                "Single-threaded from_file_mmap BGZF len mismatch"
+            );
+        }
         {
             let mut parser = FastxParser::<CONFIG>::from_file(temp_file).unwrap();
             let mut count = 0;
@@ -165,7 +209,7 @@ mod tests {
             );
         }
         {
-            let cursor = std::io::Cursor::new(bgzf_data.clone());
+            let cursor = std::io::Cursor::new(bgzf_data);
             let mut parser = FastxParser::<CONFIG>::from_reader(cursor).unwrap();
             let mut count = 0;
             let mut len = 0;
@@ -205,6 +249,41 @@ mod tests {
                 })
                 .unwrap();
             assert_eq!(calls.into_inner(), expected, "chunks({chunks:?})");
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_parallel_bgzf_concatenated_files() {
+        // Each file ends with an empty block, the BGZF EOF marker
+        let file = encode_bgzf(&[&generate_test_fastq(1000), &generate_test_fastq(1000), b""]);
+        let path = std::env::temp_dir().join("test_helicase_bgzf_concatenated.fastq.gz");
+        std::fs::write(&path, [file.clone(), file].concat()).unwrap();
+        for threads in [1, 4] {
+            for mmap in [false, true] {
+                let parser = if mmap {
+                    ParallelFastxParser::<CONFIG>::from_file_mmap(&path)
+                } else {
+                    ParallelFastxParser::<CONFIG>::from_file(&path)
+                };
+                let count: usize = parser
+                    .unwrap()
+                    .threads(threads)
+                    .for_each_with(
+                        || 0,
+                        |count, parser| {
+                            for event in parser {
+                                event?;
+                                *count += 1;
+                            }
+                            Ok(())
+                        },
+                    )
+                    .unwrap()
+                    .into_iter()
+                    .sum();
+                assert_eq!(count, 4000, "threads={threads} mmap={mmap}");
+            }
         }
         let _ = std::fs::remove_file(path);
     }

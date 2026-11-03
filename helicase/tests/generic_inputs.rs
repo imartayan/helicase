@@ -83,6 +83,15 @@ fn test_across_all_inputs(generator: FastxGen, test_id: &str) {
     let from_mmap = parse_all(FastxParser::<CONFIG>::from_file_mmap(&raw_file_path).unwrap());
     assert_eq!(from_slice, from_mmap, "MmapInput mismatch for {test_id}");
 
+    // 4. MmapInput (transparent decompression)
+    if cfg!(feature = "gz") {
+        let from_mmap_gz = parse_all(FastxParser::<CONFIG>::from_file_mmap(&gz_file_path).unwrap());
+        assert_eq!(
+            from_slice, from_mmap_gz,
+            "FastxParser::from_file_mmap (gzip) mismatch for {test_id}"
+        );
+    }
+
     // 5. FileInput (uncompressed)
     let from_file = parse_all(FastxParser::<CONFIG>::from_file(&raw_file_path).unwrap());
     assert_eq!(

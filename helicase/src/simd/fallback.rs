@@ -5,7 +5,7 @@ const UPPERCASE: u8 = 0b11011111;
 const LUT_ACTG: [u8; 16] = *b"A_C_T_G_________";
 
 #[inline(always)]
-pub fn load(buf: &[u8]) -> &[u8] {
+pub const fn load(buf: &[u8]) -> &[u8] {
     buf
 }
 

@@ -90,8 +90,9 @@ fn parse_bgzf_frame(h: &[u8], comp_offset: usize) -> Option<Frame> {
     None
 }
 
+// `None` if the input ends with something else than BGZF blocks.
 #[cfg(feature = "gz")]
-pub(super) fn index_bgzf_blocks(compressed: &[u8]) -> Vec<Frame> {
+pub(super) fn index_bgzf_blocks(compressed: &[u8]) -> Option<Vec<Frame>> {
     let mut blocks = Vec::new();
     let mut comp_offset = 0;
     while let Some(frame) = parse_bgzf_frame(&compressed[comp_offset..], comp_offset) {
@@ -100,11 +101,11 @@ pub(super) fn index_bgzf_blocks(compressed: &[u8]) -> Vec<Frame> {
             blocks.push(frame);
         }
     }
-    blocks
+    compressed[comp_offset..].is_empty().then_some(blocks)
 }
 
 #[cfg(feature = "gz")]
-pub(super) fn index_bgzf_file(path: &std::path::Path) -> io::Result<Vec<Frame>> {
+pub(super) fn index_bgzf_file(path: &std::path::Path) -> io::Result<Option<Vec<Frame>>> {
     let mut file = std::fs::File::open(path)?;
     let mut blocks = Vec::new();
     let mut comp_offset = 0;
@@ -122,14 +123,13 @@ pub(super) fn index_bgzf_file(path: &std::path::Path) -> io::Result<Vec<Frame>> 
                 .read_to_end(&mut window)?;
         }
         let Some(frame) = parse_bgzf_frame(&window[rel..], comp_offset) else {
-            break;
+            return Ok(window[rel..].is_empty().then_some(blocks));
         };
         comp_offset += frame.comp_len;
         if frame.uncomp_len > 0 {
             blocks.push(frame);
         }
     }
-    Ok(blocks)
 }
 
 #[cfg(feature = "zstd")]

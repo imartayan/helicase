@@ -252,6 +252,20 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
+    fn count_records(parser: ParallelFastxParser<CONFIG>) -> usize {
+        let counts = parser.for_each_with(
+            || 0,
+            |count, parser| {
+                for event in parser {
+                    event?;
+                    *count += 1;
+                }
+                Ok(())
+            },
+        );
+        counts.unwrap().into_iter().sum()
+    }
+
     #[test]
     fn test_parallel_bgzf_concatenated_files() {
         // Each file ends with an empty block, the BGZF EOF marker
@@ -265,25 +279,41 @@ mod tests {
                 } else {
                     ParallelFastxParser::<CONFIG>::from_file(&path)
                 };
-                let count: usize = parser
-                    .unwrap()
-                    .threads(threads)
-                    .for_each_with(
-                        || 0,
-                        |count, parser| {
-                            for event in parser {
-                                event?;
-                                *count += 1;
-                            }
-                            Ok(())
-                        },
-                    )
-                    .unwrap()
-                    .into_iter()
-                    .sum();
+                let count = count_records(parser.unwrap().threads(threads));
                 assert_eq!(count, 4000, "threads={threads} mmap={mmap}");
             }
         }
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_parallel_bgzf_followed_by_plain_gzip() {
+        let mut data = encode_bgzf(&[&generate_test_fastq(1000), &generate_test_fastq(1000), b""]);
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(&generate_test_fastq(1000)).unwrap();
+        data.extend(encoder.finish().unwrap());
+        let path = std::env::temp_dir().join("test_helicase_bgzf_then_gzip.fastq.gz");
+        std::fs::write(&path, &data).unwrap();
+        for threads in [1, 4] {
+            for mmap in [false, true] {
+                let parser = if mmap {
+                    ParallelFastxParser::<CONFIG>::from_file_mmap(&path)
+                } else {
+                    ParallelFastxParser::<CONFIG>::from_file(&path)
+                };
+                let count = count_records(parser.unwrap().threads(threads));
+                assert_eq!(count, 3000, "threads={threads} mmap={mmap}");
+            }
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_parallel_from_slice_decompresses_bgzf() {
+        let data = encode_bgzf(&[&generate_test_fastq(1000), &generate_test_fastq(1000), b""]);
+        for threads in [1, 4] {
+            let parser = ParallelFastxParser::<CONFIG>::from_slice(&data).threads(threads);
+            assert_eq!(count_records(parser), 2000, "threads={threads}");
+        }
     }
 }

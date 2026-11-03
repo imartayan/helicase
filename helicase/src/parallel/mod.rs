@@ -117,10 +117,10 @@ where
         let (threads, chunks, max_chunk_len) =
             (parser.threads, parser.chunks, parser.max_chunk_len);
         match parser.source {
-            ParallelSource::Slice(slice) => self.run_mmap(slice, threads, chunks, max_chunk_len),
+            ParallelSource::Slice(slice) => self.run_bytes(slice, threads, chunks, max_chunk_len),
             ParallelSource::Mmap(path) => {
                 let mmap = unsafe { memmap2::Mmap::map(&File::open(&path)?)? };
-                self.run_mmap(&mmap, threads, chunks, max_chunk_len)
+                self.run_bytes(&mmap, threads, chunks, max_chunk_len)
             }
             ParallelSource::File(path) => self.run_file(&path, threads, chunks, max_chunk_len),
             ParallelSource::Reader(reader) => {
@@ -245,7 +245,7 @@ where
         )
     }
 
-    fn run_mmap(
+    fn run_bytes(
         &self,
         mmap: &[u8],
         threads: usize,
@@ -282,13 +282,16 @@ where
                         FramesSource::Slice(slice) => frames::index_bgzf_blocks(slice),
                         FramesSource::File(path) => frames::index_bgzf_file(path)?,
                     };
-                    return self.run_frames::<frames::BgzfDecoder>(
-                        source,
-                        &blocks,
-                        threads,
-                        custom_chunks,
-                        max_chunk_len,
-                    );
+                    // `None` if a member is not BGZF, a single decoder reads all the members
+                    if let Some(blocks) = blocks {
+                        return self.run_frames::<frames::BgzfDecoder>(
+                            source,
+                            &blocks,
+                            threads,
+                            custom_chunks,
+                            max_chunk_len,
+                        );
+                    }
                 }
                 #[cfg(feature = "zstd")]
                 CompressionFormat::Zstd | CompressionFormat::Pzstd => {
@@ -535,7 +538,7 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
         }
     }
 
-    /// Creates a parallel parser over an in-memory byte slice.
+    /// Creates a parallel parser over an in-memory byte slice, with transparent decompression.
     #[inline]
     pub fn from_slice(slice: &'a [u8]) -> Self {
         Self::with_source(ParallelSource::Slice(slice))

@@ -137,6 +137,29 @@ mod tests {
     }
 
     #[test]
+    fn test_parallel_from_slice_decompresses_zstd_multiframe() {
+        let frames: Vec<_> = (0..4)
+            .map(|_| zstd::bulk::compress(&generate_test_fastq(500), 1).unwrap())
+            .collect();
+        let data = frames.concat();
+        for threads in [1, 4] {
+            let counts = ParallelFastxParser::<CONFIG>::from_slice(&data)
+                .threads(threads)
+                .for_each_with(
+                    || 0,
+                    |count, parser| {
+                        for event in parser {
+                            event?;
+                            *count += 1;
+                        }
+                        Ok(())
+                    },
+                );
+            assert_eq!(counts.unwrap().into_iter().sum::<usize>(), 2000);
+        }
+    }
+
+    #[test]
     fn test_parallel_fastx_parser_zstd_multiframe_fasta() {
         let chunk1 = generate_test_fasta(1000);
         let chunk2 = generate_test_fasta(1000);

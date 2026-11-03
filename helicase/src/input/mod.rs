@@ -3,6 +3,9 @@
 use crate::parser::Result;
 use core::ops::Range;
 
+mod slice;
+pub use slice::*;
+
 #[cfg(feature = "std")]
 mod reader;
 #[cfg(feature = "std")]
@@ -165,106 +168,6 @@ pub trait FromInputData<'a, I: InputData<'a>>: Sized {
     /// Build the struct from a type implementing [`InputData`].
     fn from_input(input: I) -> Result<Self>;
 }
-
-/// Slice input.
-/// It does not support transparent decompression.
-pub struct SliceInput<'a> {
-    data: &'a [u8],
-    pos: usize,
-    first_byte: u8,
-    last_block: [u8; 64],
-}
-
-impl<'a> SliceInput<'a> {
-    /// Creates an input reading `data`.
-    pub fn new(data: &'a [u8]) -> Self {
-        let mut last_block = [0; 64];
-        last_block[..data.len() % 64].copy_from_slice(&data[(data.len() / 64) * 64..]);
-        Self {
-            data,
-            pos: 0,
-            first_byte: data.first().copied().unwrap_or(0),
-            last_block,
-        }
-    }
-}
-
-impl<'a> Iterator for SliceInput<'a> {
-    type Item = Result<&'a [u8]>;
-
-    #[inline(always)]
-    fn next(&mut self) -> Option<Self::Item> {
-        let pos = self.pos;
-        self.pos += 64;
-        if pos + 64 <= self.data.len() {
-            unsafe {
-                Some(Ok(core::slice::from_raw_parts(
-                    self.data.as_ptr().add(pos),
-                    64,
-                )))
-            }
-        } else if pos < self.data.len() {
-            unsafe {
-                Some(Ok(core::slice::from_raw_parts(
-                    self.last_block.as_ptr(),
-                    self.data.len() % 64,
-                )))
-            }
-        } else {
-            None
-        }
-    }
-}
-
-impl<'a> InputBuffer<'a> for SliceInput<'a> {
-    const RANDOM_ACCESS: bool = true;
-
-    #[inline(always)]
-    fn first_byte(&self) -> u8 {
-        self.first_byte
-    }
-
-    #[inline(always)]
-    fn current_block(&self) -> &[u8] {
-        if 64 <= self.pos && self.pos <= self.data.len() {
-            unsafe { core::slice::from_raw_parts(self.data.as_ptr().add(self.pos - 64), 64) }
-        } else {
-            &self.last_block
-        }
-    }
-
-    #[inline(always)]
-    fn buffer(&self) -> &[u8] {
-        self.data
-    }
-
-    #[inline(always)]
-    fn is_end_of_buffer(&self) -> bool {
-        self.pos >= self.data.len()
-    }
-
-    #[inline(always)]
-    fn compression_format(&mut self) -> Result<Option<CompressionFormat>> {
-        Ok(CompressionFormat::from_bytes(self.data))
-    }
-
-    #[inline(always)]
-    fn seek_block(&mut self, block_idx: usize) {
-        self.pos = (block_idx + 1) * 64;
-    }
-}
-
-/// Types that can be built from a slice, such as parsers.
-pub trait FromSlice<'a>: FromInputData<'a, SliceInput<'a>> {
-    /// Build the struct from a slice.
-    /// It does not support transparent decompression.
-    #[inline(always)]
-    fn from_slice(data: &'a [u8]) -> Result<Self> {
-        Self::from_input(SliceInput::new(data))
-    }
-}
-
-impl<'a, F: FromInputData<'a, SliceInput<'a>>> FromSlice<'a> for F {}
 
 #[cfg(test)]
 mod tests {

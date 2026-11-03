@@ -3,7 +3,6 @@ mod tests {
     use flate2::Compression;
     use flate2::write::GzEncoder;
     use helicase::config::*;
-    use helicase::input::*;
     use helicase::*;
     use std::io::Write;
 

@@ -2,7 +2,6 @@
 #![cfg(feature = "std")]
 
 use helicase::config::*;
-use helicase::input::*;
 use helicase::parser::{Error, Event};
 use helicase::*;
 use std::io::Cursor;

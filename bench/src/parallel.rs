@@ -5,7 +5,6 @@ use std::time::Instant;
 
 use colored::Colorize;
 use helicase::config::*;
-use helicase::input::*;
 use helicase::*;
 use paraseq::fastx;
 use paraseq::parallel::{ParallelProcessor, ParallelReader};

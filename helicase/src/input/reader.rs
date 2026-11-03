@@ -1,4 +1,4 @@
-use super::{CompressionFormat, FromInputData, InputBuffer, SliceInput};
+use super::{CompressionFormat, FromInputData, InputBuffer};
 use crate::parser::Result;
 use core::marker::PhantomData;
 use core::mem::{replace, take};
@@ -61,86 +61,6 @@ impl CompressionFormat {
         Ok(None)
     }
 }
-
-/// Memory-mapped file.
-pub struct MmapInput<'a> {
-    slice: SliceInput<'a>,
-    _mmap: Mmap,
-}
-
-impl<'a> MmapInput<'a> {
-    /// Creates an input from an existing memory map.
-    pub fn from_mmap(mmap: Mmap) -> Self {
-        let data = unsafe { core::slice::from_raw_parts(mmap.as_ptr(), mmap.len()) };
-        Self {
-            slice: SliceInput::new(data),
-            _mmap: mmap,
-        }
-    }
-
-    /// Memory-maps the file at `path`.
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let file = File::open(path)?;
-        let mmap = unsafe { Mmap::map(&file)? };
-        Ok(Self::from_mmap(mmap))
-    }
-}
-
-impl<'a> Iterator for MmapInput<'a> {
-    type Item = Result<&'a [u8]>;
-
-    #[inline(always)]
-    fn next(&mut self) -> Option<Self::Item> {
-        self.slice.next()
-    }
-}
-
-impl<'a> InputBuffer<'a> for MmapInput<'a> {
-    const RANDOM_ACCESS: bool = true;
-
-    #[inline(always)]
-    fn first_byte(&self) -> u8 {
-        self.slice.first_byte()
-    }
-
-    #[inline(always)]
-    fn current_block(&self) -> &[u8] {
-        self.slice.current_block()
-    }
-
-    #[inline(always)]
-    fn compression_format(&mut self) -> Result<Option<CompressionFormat>> {
-        self.slice.compression_format()
-    }
-
-    #[inline(always)]
-    fn buffer(&self) -> &[u8] {
-        self.slice.buffer()
-    }
-
-    #[inline(always)]
-    fn is_end_of_buffer(&self) -> bool {
-        self.slice.is_end_of_buffer()
-    }
-
-    #[inline(always)]
-    fn seek_block(&mut self, block_idx: usize) {
-        self.slice.seek_block(block_idx);
-    }
-}
-
-/// Types that can be built from a memory-mapped file, such as parsers.
-pub trait FromMmap<'a>: FromInputData<'a, MmapInput<'a>> {
-    /// Build the struct from a memory-mapped file.
-    ///
-    /// Also see [`from_file`](FromFile::from_file) to use a file reader.
-    #[inline(always)]
-    fn from_file_mmap<P: AsRef<Path>>(path: P) -> Result<Self> {
-        Self::from_input(MmapInput::new(path)?)
-    }
-}
-
-impl<'a, F: FromInputData<'a, MmapInput<'a>>> FromMmap<'a> for F {}
 
 #[cfg(feature = "gz")]
 const SIROCCO_BUF_LEN: usize = 256 * 1024;

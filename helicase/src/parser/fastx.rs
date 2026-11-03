@@ -37,8 +37,28 @@ use alloc::boxed::Box;
 /// ```
 pub struct FastxParser<'a, const CONFIG: Config>(Box<dyn HelicaseParserIter + Send + 'a>);
 
+impl<'a, const CONFIG: Config> FastxParser<'a, CONFIG> {
+    /// Creates a parser reading `slice`.
+    #[inline(always)]
+    pub fn from_slice(slice: &'a [u8]) -> Result<Self> {
+        Self::from_input(SliceInput::new(slice))
+    }
+}
+
 #[cfg(feature = "std")]
 impl<'a, const CONFIG: Config> FastxParser<'a, CONFIG> {
+    /// Creates a parser reading from `path`, with transparent decompression.
+    #[inline(always)]
+    pub fn from_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
+        Self::from_input(FileInput::open(path)?)
+    }
+
+    /// Creates a parser reading from `reader`, with transparent decompression.
+    #[inline(always)]
+    pub fn from_reader<R: std::io::Read + Send + 'a>(reader: R) -> Result<Self> {
+        Self::from_input(ReaderInput::new(reader)?)
+    }
+
     /// Opens a memory-mapped file, with transparent decompression if compressed.
     ///
     /// Memory-maps the file for zero-copy parsing on uncompressed data, and automatically

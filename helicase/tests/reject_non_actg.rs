@@ -2,7 +2,6 @@
 
 use helicase::config::*;
 use helicase::dna_format::{ColumnarDNA, PackedDNA};
-use helicase::input::*;
 use helicase::parser::{Error, ErrorKind, Event};
 use helicase::*;
 use std::io::Cursor;

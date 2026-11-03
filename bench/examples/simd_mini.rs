@@ -1,4 +1,3 @@
-use helicase::input::*;
 use helicase::*;
 use needletail::parse_fastx_file;
 use simd_minimizers::minimizers;

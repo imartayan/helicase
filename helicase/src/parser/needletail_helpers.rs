@@ -1,6 +1,5 @@
 use super::{FastxParser, Format, HelicaseParser, Result};
 use crate::config::*;
-use crate::input::*;
 use alloc::borrow::Cow;
 use std::io;
 use std::path::Path;

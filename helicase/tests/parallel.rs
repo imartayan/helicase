@@ -2,7 +2,6 @@
 
 use fastx_gen::FastxGen;
 use helicase::config::*;
-use helicase::input::*;
 use helicase::*;
 
 const CONFIG_STR: Config = ParserOptions::default().dna_string().config();

@@ -5,7 +5,6 @@ use std::path::Path;
 use colored::Colorize;
 use fastx_gen::FastxGen;
 use helicase::config::*;
-use helicase::input::*;
 use helicase::*;
 use needletail::{parse_fastx_file, parse_fastx_reader};
 use packed_seq::{PackedSeqVec, Seq, SeqVec};

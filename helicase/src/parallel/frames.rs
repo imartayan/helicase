@@ -2,7 +2,6 @@
 
 use super::{FramesSource, Job, with_thread_file};
 use crate::config::*;
-use crate::input::*;
 use crate::parser::*;
 use std::io::{self, Read, Seek, SeekFrom};
 

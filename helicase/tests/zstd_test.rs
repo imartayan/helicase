@@ -1,7 +1,6 @@
 #[cfg(feature = "zstd")]
 mod tests {
     use helicase::config::*;
-    use helicase::input::*;
     use helicase::*;
 
     const CONFIG: Config = ParserOptions::default().config();

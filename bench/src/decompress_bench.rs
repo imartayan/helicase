@@ -14,7 +14,6 @@ use std::time::Instant;
 use colored::Colorize;
 use helicase::HelicaseParser;
 use helicase::config::advanced::DEFAULT_CONFIG;
-use helicase::input::{FromReader, FromSlice};
 use helicase::parser::FastxParser;
 
 // ============================================================================

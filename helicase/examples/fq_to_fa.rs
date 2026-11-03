@@ -1,4 +1,3 @@
-use helicase::input::*;
 use helicase::*;
 use std::fs::File;
 use std::io::{BufWriter, Write};

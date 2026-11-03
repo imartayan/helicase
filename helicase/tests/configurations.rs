@@ -2,7 +2,6 @@
 
 use fastx_gen::{Alphabet, FastxGen};
 use helicase::config::*;
-use helicase::input::*;
 use helicase::parser::Event;
 use helicase::*;
 

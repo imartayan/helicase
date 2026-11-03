@@ -2,7 +2,6 @@
 
 use fastx_gen::{FastxGen, Format};
 use helicase::config::*;
-use helicase::input::*;
 use helicase::*;
 use std::io::Cursor;
 

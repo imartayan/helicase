@@ -1,6 +1,5 @@
 use fastx_gen::{Alphabet, FastxGen};
 use helicase::config::*;
-use helicase::input::*;
 use helicase::*;
 use needletail::parse_fastx_reader;
 

@@ -72,7 +72,7 @@ mod scalar;
 mod tests;
 
 #[cfg(target_feature = "neon")]
-pub use backend::all_actg;
+pub use backend::{all_actg, all_actg_len};
 
 #[inline(always)]
 pub fn extract_bitmask<const CONFIG: Config, const MODE: u8>(buf: &[u8]) -> Bitmask {

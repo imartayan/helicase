@@ -314,6 +314,8 @@ fn check_reader_buffers(fasta: bool) {
         std::fs::write(&path, &data).unwrap();
         check_file::<STRING>(&data, &path, &id);
         check_file::<PACKED>(&data, &path, &id);
+        check_file::<SPLIT>(&data, &path, &id);
+        check_file::<SKIP>(&data, &path, &id);
     }
     let _ = std::fs::remove_dir_all(&tmp_dir);
 }

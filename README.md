@@ -57,8 +57,9 @@ fn main() -> std::io::Result<()> {
 
 ### Input
 
-Files are opened with `from_file` or `from_file_mmap`, which both support [transparent decompression](#crate-features) for `FastxParser` and `ParallelFastxParser`.
-In-memory slices (`from_slice`) and generic streams (`from_reader`) are also supported.
+Files are opened with `from_file` or `from_file_mmap`, and generic streams with `from_reader`.
+All three support [transparent decompression](#decompression) on `FastxParser`, `FastaParser`, `FastqParser` and `ParallelFastxParser`, except `from_file_mmap` of `FastaParser` and `FastqParser`, which rejects compressed files.
+In-memory slices (`from_slice`) are parsed as is, except by `ParallelFastxParser` which also decompresses them.
 
 ### Adjusting the configuration
 
@@ -229,13 +230,13 @@ This is useful for [hashing *k*-mers](https://github.com/rust-seq/seq-hash) or [
 
 ### Decompression
 
-Helicase supports transparent decompression via `from_file`, automatically detecting the following formats:
+Helicase supports transparent decompression in `from_file`, `from_file_mmap` and `from_reader` (see [Input](#input)), automatically detecting the following formats from the first bytes:
 - `gz` (default) for gzip and BGZF using [sirocco](https://github.com/srijs/sirocco)
-- `zstd` (default) for zstd, including multi-frame files
+- `zstd` (default) for zstd, including multi-frame files, using [zefiro](https://github.com/imartayan/zefiro)
 - `bz2` for bzip2
 - `xz` for xz
 
-`zstd` and `xz` need a C compiler, use `default-features = false, features = ["std", "gz"]` (and optionally `bz2`) for a pure Rust build.
+Only `xz` needs a C compiler, the other formats are pure Rust.
 
 ### No PDEP (`no-pdep`)
 

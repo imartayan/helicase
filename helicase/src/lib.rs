@@ -56,10 +56,10 @@
 //! ```
 //! ## Input
 //!
-//! Files are opened with [`from_file`](FastxParser::from_file) or [`from_file_mmap`](FastxParser::from_file_mmap) (both supporting [transparent decompression](#crate-features) for [`FastxParser`] and [`ParallelFastxParser`](parallel::ParallelFastxParser)).
-//! `from_file_mmap` memory-maps the file for zero-copy parsing on uncompressed data, while transparently decompressing compressed inputs.
-//! In-memory slices ([`from_slice`](FastxParser::from_slice)) and generic streams ([`from_reader`](FastxParser::from_reader)) are also supported (`FastxParser::from_slice` does not decompress).
-//! [`FastaParser`](parser::FastaParser) and [`FastqParser`](parser::FastqParser) have the same constructors, but their `from_file_mmap` rejects compressed files.
+//! Files are opened with [`from_file`](FastxParser::from_file) or [`from_file_mmap`](FastxParser::from_file_mmap), and generic streams with [`from_reader`](FastxParser::from_reader).
+//! All three support [transparent decompression](#decompression) on [`FastxParser`], [`FastaParser`](parser::FastaParser), [`FastqParser`](parser::FastqParser) and [`ParallelFastxParser`].
+//! `FastxParser::from_file_mmap` memory-maps the file for zero-copy parsing on uncompressed data, while the `from_file_mmap` of `FastaParser` and `FastqParser` rejects compressed files.
+//! In-memory slices ([`from_slice`](FastxParser::from_slice)) are parsed as is, except by `ParallelFastxParser` which also decompresses them.
 //!
 //! ## Adjusting the configuration
 //!
@@ -272,9 +272,9 @@
 //!
 //! ## Decompression
 //!
-//! Helicase supports transparent decompression via [`from_file`](FastxParser::from_file), automatically detecting the following formats:
+//! Helicase supports transparent decompression in `from_file`, `from_file_mmap` and `from_reader` (see [Input](#input)), automatically detecting the following formats from the first bytes:
 //! - `gz` (default) for gzip and BGZF using [sirocco](https://github.com/srijs/sirocco)
-//! - `zstd` (default) for zstd, including multi-frame files
+//! - `zstd` (default) for zstd, including multi-frame files, using [zefiro](https://github.com/imartayan/zefiro)
 //! - `bz2` for bzip2
 //! - `xz` for xz
 //!

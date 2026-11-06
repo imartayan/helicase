@@ -217,24 +217,21 @@ impl FrameSource for BgzfBlocks<'_> {
 }
 
 #[cfg(feature = "zstd")]
-pub(super) struct ZstdDecoder(zstd::zstd_safe::DCtx<'static>);
+pub(super) struct ZstdDecoder(zefiro::Decoder);
 
 #[cfg(feature = "zstd")]
 impl FrameDecoder for ZstdDecoder {
     fn new() -> io::Result<Self> {
-        let context = zstd::zstd_safe::DCtx::try_create();
-        context
-            .map(Self)
-            .ok_or_else(|| io::Error::other("cannot create zstd context"))
+        let mut decoder = zefiro::Decoder::new();
+        decoder.set_verify_checksum(false);
+        Ok(Self(decoder))
     }
 
     fn decode(&mut self, frame: &[u8], uncomp_len: usize, out: &mut Vec<u8>) -> io::Result<()> {
-        out.resize(uncomp_len, 0);
-        let len = self
-            .0
-            .decompress(out.as_mut_slice(), frame)
-            .map_err(zstd_error)?;
-        out.truncate(len);
+        if out.capacity() < uncomp_len {
+            out.reserve(uncomp_len - out.capacity());
+        }
+        self.0.decompress_into_vec(frame, out)?;
         Ok(())
     }
 
@@ -246,35 +243,28 @@ impl FrameDecoder for ZstdDecoder {
         len: usize,
         out: &mut Vec<u8>,
     ) -> io::Result<()> {
-        use zstd::zstd_safe::{InBuffer, OutBuffer, ResetDirective};
         let len = len.min(uncomp_len);
         out.resize(len, 0);
-        self.0
-            .reset(ResetDirective::SessionOnly)
-            .map_err(zstd_error)?;
-        let mut input = InBuffer::around(frame);
-        let mut output = OutBuffer::around(out.as_mut_slice());
-        while output.pos() < len {
-            let remaining = self
+        self.0.reset();
+        let mut in_pos = 0;
+        let mut out_pos = 0;
+        while out_pos < len {
+            let progress = self
                 .0
-                .decompress_stream(&mut output, &mut input)
-                .map_err(zstd_error)?;
-            if remaining == 0 {
+                .decompress_stream(&frame[in_pos..], &mut out[out_pos..])?;
+            in_pos += progress.consumed();
+            out_pos += progress.written();
+            if progress.frame_done() || (progress.consumed() == 0 && progress.written() == 0) {
                 break;
             }
-            if input.pos() == frame.len() {
+            if in_pos == frame.len() && out_pos < len {
                 return Err(io::ErrorKind::UnexpectedEof.into());
             }
         }
-        let decoded = output.pos();
-        out.truncate(decoded);
+        self.0.reset();
+        out.truncate(out_pos);
         Ok(())
     }
-}
-
-#[cfg(feature = "zstd")]
-fn zstd_error(code: usize) -> io::Error {
-    io::Error::other(zstd::zstd_safe::get_error_name(code))
 }
 
 // Frames of the file, without the skippable frames written by pzstd.

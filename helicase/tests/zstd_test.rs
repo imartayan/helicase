@@ -235,6 +235,65 @@ mod tests {
     }
 
     #[test]
+    fn test_parallel_fastx_parser_zstd_singleframe_decoded_with_threads() {
+        // A few MiB in one frame, so that zefiro decodes it with its thread pipeline
+        let mut state = 1u64;
+        let mut data = Vec::new();
+        for i in 0..20_000 {
+            data.extend_from_slice(format!("@read_{i}\n").as_bytes());
+            for _ in 0..100 {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                data.push(b"ACGT"[(state >> 62) as usize]);
+            }
+            data.extend_from_slice(b"\n+\n");
+            data.extend(std::iter::repeat_n(b'I', 100));
+            data.push(b'\n');
+        }
+        let compressed = zstd::stream::encode_all(&data[..], 3).unwrap();
+
+        let mut serial = (0usize, 0usize);
+        let mut parser =
+            FastxParser::<CONFIG>::from_reader(std::io::Cursor::new(&compressed)).unwrap();
+        while let Some(event) = parser.next() {
+            event.unwrap();
+            serial.0 += 1;
+            serial.1 += parser
+                .get_dna_string()
+                .iter()
+                .map(|&b| b as usize)
+                .sum::<usize>();
+        }
+        assert_eq!(serial.0, 20_000);
+
+        for threads in [2, 3, 4, 8] {
+            let (count, sum) =
+                ParallelFastxParser::<CONFIG>::from_reader(std::io::Cursor::new(&compressed))
+                    .threads(threads)
+                    .for_each_with(
+                        || (0usize, 0usize),
+                        |(count, sum), mut parser| {
+                            while let Some(event) = parser.next() {
+                                event?;
+                                *count += 1;
+                                *sum += parser
+                                    .get_dna_string()
+                                    .iter()
+                                    .map(|&b| b as usize)
+                                    .sum::<usize>();
+                            }
+                            Ok(())
+                        },
+                    )
+                    .unwrap()
+                    .into_iter()
+                    .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+            assert_eq!((count, sum), serial, "Failed at threads={threads}");
+        }
+    }
+
+    #[test]
     fn test_parallel_fastx_parser_zstd_records_crossing_frame_boundary() {
         let raw_fastq = generate_test_fastq(3000);
 

@@ -30,6 +30,7 @@ sysinfo = "0.40"
 simd-minimizers = { version = "3.0", features = ["scalar"], optional = true }
 sirocco = "0.3"
 zstd = "0.14"
+zefiro = "1.0"
 
 [package.metadata.cargo-machete]
 ignored = ["simd-minimizers"]
@@ -48,6 +49,10 @@ bench = false
 name = "decompress_bench"
 path = "src/decompress_bench.rs"
 bench = false
+
+[[example]]
+name = "zstd_vs_zefiro"
+path = "examples/zstd_vs_zefiro.rs"
 
 [[bench]]
 name = "bench"

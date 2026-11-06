@@ -6,6 +6,8 @@
 - `FastaParser` and `FastqParser` have their own constructors (`from_file`, `from_slice`...), the `From*` input traits are deprecated.
 - `from_file_mmap` transparently decompresses with `FastxParser` and `ParallelFastxParser`.
 - `ParallelFastxParser::from_file` no longer memory-maps compressed files, and is ~10% faster on BGZF.
+- Switch `zstd` decompression to `zefiro` (pure Rust, ~10% faster)
+- `ParallelFastxParser` now decodes single-frame zstd in parallel (up to 2.4× faster).
 
 ## 1.2.0
 

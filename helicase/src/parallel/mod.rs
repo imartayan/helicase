@@ -124,7 +124,7 @@ where
             }
             ParallelSource::File(path) => self.run_file(&path, threads, chunks, max_chunk_len),
             ParallelSource::Reader(reader) => {
-                self.run_stream(decompress(reader)?, threads, max_chunk_len)
+                self.run_stream(decompress(reader, threads)?, threads, max_chunk_len)
             }
         }
     }
@@ -325,7 +325,7 @@ where
             FramesSource::Slice(slice) => Box::new(std::io::Cursor::new(slice)),
             FramesSource::File(path) => Box::new(File::open(path)?),
         };
-        self.run_stream(decompress(reader)?, threads, max_chunk_len)
+        self.run_stream(decompress(reader, threads)?, threads, max_chunk_len)
     }
 
     fn run_file(
@@ -577,6 +577,9 @@ impl<'a, const CONFIG: Config> ParallelFastxParser<'a, CONFIG> {
     }
 
     /// Sets the number of worker threads.
+    ///
+    /// A single-frame zstd stream is also decompressed with this many threads, on top of the
+    /// workers: the two stages wait for each other, so about `threads` threads run at a time.
     #[inline]
     pub fn threads(mut self, threads: usize) -> Self {
         self.threads = threads.max(1);

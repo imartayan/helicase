@@ -23,7 +23,7 @@ memmap2 = { version = "0.9", optional = true }
 packed-seq = { version = "5.1", default-features = false, optional = true }
 paraseq = { version = "0.6", default-features = false, optional = true }
 sirocco = { version = "0.3", default-features = false, optional = true }
-zstd = { version = "0.14", default-features = false, optional = true }
+zefiro = { version = "1.0", default-features = false, optional = true }
 
 [dev-dependencies]
 fastx-gen = { path = "../fastx-gen" }
@@ -33,11 +33,11 @@ zstd = "0.14"
 
 [features]
 default = ["std", "gz", "zstd"]
-std = ["dep:deko", "dep:memmap2", "memchr/std", "sirocco?/std"]
+std = ["dep:deko", "dep:memmap2", "memchr/std", "sirocco?/std", "zefiro?/std"]
 bz2 = ["std", "deko/bzip2"]
 gz = ["std", "dep:sirocco"]
 xz = ["std", "deko/xz"]
-zstd = ["std", "dep:zstd"]
+zstd = ["std", "dep:zefiro"]
 no-pdep = []
 needletail = ["std"]
 packed-seq = ["std", "dep:packed-seq"]

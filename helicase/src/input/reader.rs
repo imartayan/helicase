@@ -150,7 +150,7 @@ enum ReaderDecoder<R: Read> {
     #[cfg(feature = "gz")]
     Sirocco(Box<SiroccoMultiGzReader<BufReader<R>>>),
     #[cfg(feature = "zstd")]
-    Zstd(Box<zstd::stream::read::Decoder<'static, BufReader<R>>>),
+    Zstd(Box<zefiro::Reader<BufReader<R>>>),
     Deko(Box<AnyDecoder<BufReader<R>>>),
 }
 
@@ -301,11 +301,16 @@ impl<'a, R: Read + 'a> ReaderInput<'a, R> {
 
     /// Creates an input reading from `reader`, with transparent decompression.
     pub(crate) fn new(reader: R) -> io::Result<Self> {
-        let (decoder, compression) = Self::decoder(reader)?;
+        let (decoder, compression) = Self::decoder(reader, 1)?;
         Self::with_source(Source::Direct(decoder), compression)
     }
 
-    fn decoder(reader: R) -> io::Result<(ReaderDecoder<R>, Option<CompressionFormat>)> {
+    // `zstd_threads` is the number of threads zefiro may use to decompress a frame.
+    #[cfg_attr(not(feature = "zstd"), allow(unused_variables))]
+    fn decoder(
+        reader: R,
+        zstd_threads: usize,
+    ) -> io::Result<(ReaderDecoder<R>, Option<CompressionFormat>)> {
         let mut buf_reader = BufReader::with_capacity(64 * 1024, reader);
         let compression = {
             let peek = buf_reader.fill_buf()?;
@@ -318,9 +323,12 @@ impl<'a, R: Read + 'a> ReaderInput<'a, R> {
                 ReaderDecoder::Sirocco(Box::new(SiroccoMultiGzReader::new(buf_reader)))
             }
             #[cfg(feature = "zstd")]
-            Some(CompressionFormat::Zstd | CompressionFormat::Pzstd) => ReaderDecoder::Zstd(
-                Box::new(zstd::stream::read::Decoder::with_buffer(buf_reader)?),
-            ),
+            Some(CompressionFormat::Zstd | CompressionFormat::Pzstd) => {
+                let mut decoder = zefiro::Decoder::new();
+                decoder.set_verify_checksum(false);
+                decoder.set_threads(zstd_threads);
+                ReaderDecoder::Zstd(Box::new(zefiro::Reader::with_decoder(decoder, buf_reader)))
+            }
             _ => ReaderDecoder::Deko(Box::new(AnyDecoder::new(buf_reader))),
         };
 
@@ -394,14 +402,14 @@ impl<'a, R: Read + 'a> ReaderInput<'a, R> {
 
 /// Decompresses `reader` on the fly, like [`ReaderInput::new`] but without parsing.
 #[allow(clippy::redundant_pub_crate)]
-pub(crate) fn decompress<R: Read>(reader: R) -> io::Result<impl Read> {
-    ReaderInput::<R>::decoder(reader).map(|(decoder, _)| decoder)
+pub(crate) fn decompress<R: Read>(reader: R, zstd_threads: usize) -> io::Result<impl Read> {
+    ReaderInput::<R>::decoder(reader, zstd_threads).map(|(decoder, _)| decoder)
 }
 
 impl<R: Read + Send + 'static> ReaderInput<'static, R> {
     /// Build a reader input that reads and decompresses ahead in a background thread.
     pub(crate) fn with_read_ahead(reader: R) -> io::Result<Self> {
-        let (decoder, compression) = Self::decoder(reader)?;
+        let (decoder, compression) = Self::decoder(reader, 1)?;
         let (filled_sender, filled) = sync_channel(BUFFERS_AHEAD);
         let (free, free_receiver) = channel();
         std::thread::spawn(move || read_buffers(decoder, filled_sender, free_receiver));

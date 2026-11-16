@@ -443,7 +443,7 @@ fn bench_ram_dataset<M: Measurement>(
                 FastxParser::<DNA_PACKED_SPLIT>::from_slice(slice).expect("Failed to parse slice");
             let mut len = 0;
             while parser.next().is_some() {
-                len += parser.get_dna_packed().len();
+                len += parser.get_packed_seq().len();
             }
             len
         });
@@ -839,40 +839,42 @@ pub fn print_markdown_table(summaries: &[DatasetSummary], has_baseline: bool) {
 }
 
 pub fn print_pack_comparison_table(summaries: &[DatasetSummary], has_baseline: bool) {
-    println!("{}", "=".repeat(132).dimmed());
+    println!("{}", "=".repeat(146).dimmed());
     println!(
         "{}",
         "BITPACKING BREAKDOWN SCOREBOARD (Throughput in GB/s & Delta vs ASCII conversion)"
             .bold()
             .yellow()
     );
-    println!("{}", "-".repeat(132).dimmed());
+    println!("{}", "-".repeat(146).dimmed());
     if has_baseline {
         println!(
-            "{:<22} {:>7} | {:>12} {:>12} {:>12} {:>12} {:>12} | {:>14} {:>14}",
+            "{:<22} {:>7} | {:>12} {:>12} {:>12} {:>12} {:>12} {:>12} | {:>14} {:>14}",
             "Dataset",
             "Size",
             "Needle+pkSeq",
             "Heli+pkSeq",
             "Heli(keep)",
             "Heli(split)",
+            "Heli(skip)",
             "Heli(col)",
             "vs Needle+pk",
             "vs Heli+pkSeq"
         );
     } else {
         println!(
-            "{:<22} {:>7} | {:>12} {:>12} {:>12} {:>12} | {:>14}",
+            "{:<22} {:>7} | {:>12} {:>12} {:>12} {:>12} {:>12} | {:>14}",
             "Dataset",
             "Size",
             "Heli+pkSeq",
             "Heli(keep)",
             "Heli(split)",
+            "Heli(skip)",
             "Heli(col)",
             "vs Heli+pkSeq"
         );
     }
-    println!("{}", "-".repeat(132).dimmed());
+    println!("{}", "-".repeat(146).dimmed());
 
     for s in summaries {
         let size_str = format!("{:.1} MB", s.size_mb);
@@ -890,6 +892,10 @@ pub fn print_pack_comparison_table(summaries: &[DatasetSummary], has_baseline: b
             .unwrap_or_else(|| "-".to_string());
         let split_str = s
             .helicase_packed_split
+            .map(|(m, _)| format!("{:5.2} GB/s", m))
+            .unwrap_or_else(|| "-".to_string());
+        let skip_str = s
+            .helicase_packed
             .map(|(m, _)| format!("{:5.2} GB/s", m))
             .unwrap_or_else(|| "-".to_string());
         let col_str = s
@@ -923,45 +929,47 @@ pub fn print_pack_comparison_table(summaries: &[DatasetSummary], has_baseline: b
 
         if has_baseline {
             println!(
-                "{:<22} {:>7} | {:>12} {:>12} {:>12} {:>12} {:>12} | {:>14} {:>14}",
+                "{:<22} {:>7} | {:>12} {:>12} {:>12} {:>12} {:>12} {:>12} | {:>14} {:>14}",
                 s.name,
                 size_str,
                 np_str,
                 hp_str,
                 pack_str.bright_green(),
                 split_str.bright_green(),
+                skip_str.bright_green(),
                 col_str,
                 vs_needle,
                 vs_heli_str_pack
             );
         } else {
             println!(
-                "{:<22} {:>7} | {:>12} {:>12} {:>12} {:>12} | {:>14}",
+                "{:<22} {:>7} | {:>12} {:>12} {:>12} {:>12} {:>12} | {:>14}",
                 s.name,
                 size_str,
                 hp_str,
                 pack_str.bright_green(),
                 split_str.bright_green(),
+                skip_str.bright_green(),
                 col_str,
                 vs_heli_str_pack
             );
         }
     }
-    println!("{}\n", "=".repeat(132).dimmed());
+    println!("{}\n", "=".repeat(146).dimmed());
 }
 
 pub fn print_pack_comparison_markdown(summaries: &[DatasetSummary], has_baseline: bool) {
     println!("\n### 2-Bit Bitpacking Comparison");
     if has_baseline {
         println!(
-            "| Dataset | Size | Needletail + pkSeq | Heli str + pkSeq | Heli native (keep) | Heli native (split) | Heli native col | Delta vs Needle+pk | Delta vs Heli+pk |"
+            "| Dataset | Size | Needletail + pkSeq | Heli str + pkSeq | Heli native (keep) | Heli native (split) | Heli native (skip) | Heli native col | Delta vs Needle+pk | Delta vs Heli+pk |"
         );
-        println!("|---|---|---|---|---|---|---|---|---|");
+        println!("|---|---|---|---|---|---|---|---|---|---|");
     } else {
         println!(
-            "| Dataset | Size | Heli str + pkSeq | Heli native (keep) | Heli native (split) | Heli native col | Delta vs Heli+pk |"
+            "| Dataset | Size | Heli str + pkSeq | Heli native (keep) | Heli native (split) | Heli native (skip) | Heli native col | Delta vs Heli+pk |"
         );
-        println!("|---|---|---|---|---|---|---|");
+        println!("|---|---|---|---|---|---|---|---|");
     }
 
     for s in summaries {
@@ -979,6 +987,10 @@ pub fn print_pack_comparison_markdown(summaries: &[DatasetSummary], has_baseline
             .unwrap_or_else(|| "-".to_string());
         let split = s
             .helicase_packed_split
+            .map(|(m, _)| format!("**{:5.2} GB/s**", m))
+            .unwrap_or_else(|| "-".to_string());
+        let skip = s
+            .helicase_packed
             .map(|(m, _)| format!("**{:5.2} GB/s**", m))
             .unwrap_or_else(|| "-".to_string());
         let col = s
@@ -1010,13 +1022,13 @@ pub fn print_pack_comparison_markdown(summaries: &[DatasetSummary], has_baseline
 
         if has_baseline {
             println!(
-                "| **{}** | {:.1} MB | {} | {} | {} | {} | {} | {} | {} |",
-                s.name, s.size_mb, np, hp, pack, split, col, vs_needle, vs_heli
+                "| **{}** | {:.1} MB | {} | {} | {} | {} | {} | {} | {} | {} |",
+                s.name, s.size_mb, np, hp, pack, split, skip, col, vs_needle, vs_heli
             );
         } else {
             println!(
-                "| **{}** | {:.1} MB | {} | {} | {} | {} | {} |",
-                s.name, s.size_mb, hp, pack, split, col, vs_heli
+                "| **{}** | {:.1} MB | {} | {} | {} | {} | {} | {} |",
+                s.name, s.size_mb, hp, pack, split, skip, col, vs_heli
             );
         }
     }

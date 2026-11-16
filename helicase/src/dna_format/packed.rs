@@ -226,8 +226,7 @@ impl PackedDNA {
             let mut p = self.word_ptr(start_len);
             if rem == 0 {
                 for k in start..q {
-                    let m =
-                        crate::simd::extract_dna_bitmask::<CONFIG>(&data[64 * k..64 * (k + 1)]);
+                    let m = crate::simd::extract_dna_bitmask::<CONFIG>(&data[64 * k..64 * (k + 1)]);
                     if crate::config::advanced::flag_is_set(
                         CONFIG,
                         crate::config::advanced::SPLIT_NON_ACTG,
@@ -244,8 +243,7 @@ impl PackedDNA {
                 let inv = BITS_PER_BLOCK - rem;
                 let mut cur = self.cur;
                 for k in start..q {
-                    let m =
-                        crate::simd::extract_dna_bitmask::<CONFIG>(&data[64 * k..64 * (k + 1)]);
+                    let m = crate::simd::extract_dna_bitmask::<CONFIG>(&data[64 * k..64 * (k + 1)]);
                     if crate::config::advanced::flag_is_set(
                         CONFIG,
                         crate::config::advanced::SPLIT_NON_ACTG,

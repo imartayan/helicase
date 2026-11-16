@@ -1,9 +1,9 @@
 use crate::config::{advanced::*, *};
 use crate::dna_format::{BitMask, ColumnarDNA, PackedDNA};
 use crate::lexer::Chunk;
+use crate::simd::extract_dna_bitmask;
 #[cfg(target_feature = "neon")]
 use crate::simd::{all_actg, all_actg_len};
-use crate::simd::extract_dna_bitmask;
 
 /// Unified container managing on-the-fly 2-bit bitpacking representations
 /// across FASTA and FASTQ parsers.
@@ -116,7 +116,12 @@ impl DnaBitpackers {
     }
 
     #[inline(always)]
-    fn pack_run<const CONFIG: Config>(&mut self, data: &[u8], q: usize, rem_len: usize) -> (usize, bool) {
+    fn pack_run<const CONFIG: Config>(
+        &mut self,
+        data: &[u8],
+        q: usize,
+        rem_len: usize,
+    ) -> (usize, bool) {
         let (count, rem_valid) = if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
             actg_prefix_blocks(data, q, rem_len)
         } else {
@@ -131,7 +136,10 @@ impl DnaBitpackers {
                 self.columnar.append_full(m.high_bit, m.low_bit);
             }
         }
-        (self.pack_blocks_checked::<CONFIG>(data, count, q), rem_valid)
+        (
+            self.pack_blocks_checked::<CONFIG>(data, count, q),
+            rem_valid,
+        )
     }
 
     #[inline(always)]

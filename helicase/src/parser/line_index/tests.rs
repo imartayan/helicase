@@ -72,12 +72,16 @@ where
                 }
                 out.push(Parsed::Record {
                     event,
-                    header: set(COMPUTE_HEADER)
-                        .then(|| parser.get_header_owned())
-                        .unwrap_or_default(),
-                    dna: set(COMPUTE_DNA_STRING)
-                        .then(|| parser.get_dna_string_owned())
-                        .unwrap_or_default(),
+                    header: if set(COMPUTE_HEADER) {
+                        parser.get_header_owned()
+                    } else {
+                        Vec::new()
+                    },
+                    dna: if set(COMPUTE_DNA_STRING) {
+                        parser.get_dna_string_owned()
+                    } else {
+                        Vec::new()
+                    },
                     qual: set(COMPUTE_QUALITY).then(|| parser.get_quality_owned()),
                     dna_len: parser.get_dna_len(),
                     packed: set(COMPUTE_DNA_PACKED).then(|| parser.get_dna_packed().to_string()),

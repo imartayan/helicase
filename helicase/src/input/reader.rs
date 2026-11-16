@@ -489,7 +489,7 @@ impl<'a, R: Read + 'a> InputBuffer<'a> for ReaderInput<'a, R> {
     fn make_room(&mut self, keep_from: usize) {
         // Round the shift down to a 64-byte multiple so that `pos` (which is
         // always a multiple of 64) stays aligned after the copy.
-        let aligned_shift = (keep_from.saturating_sub(self.offset) / 64) * 64;
+        let aligned_shift = (keep_from.saturating_sub(self.offset).min(self.len) / 64) * 64;
         self.refill(aligned_shift);
     }
 

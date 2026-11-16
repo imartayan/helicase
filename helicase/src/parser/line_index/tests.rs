@@ -26,6 +26,10 @@ const SPLIT: Config = ParserOptions::default()
     .and_dna_packed()
     .and_dna_columnar()
     .config();
+const SPLIT_PACKED: Config = ParserOptions::default()
+    .ignore_headers()
+    .dna_packed()
+    .config();
 const SKIP: Config = ParserOptions::default()
     .compute_quality()
     .compute_dna_len()
@@ -57,17 +61,32 @@ where
     let mut out = Vec::new();
     while let Some(event) = parser.next() {
         match event {
-            Ok(event) => out.push(Parsed::Record {
-                event,
-                header: parser.get_header_owned(),
-                dna: parser.get_dna_string_owned(),
-                qual: set(COMPUTE_QUALITY).then(|| parser.get_quality_owned()),
-                dna_len: parser.get_dna_len(),
-                packed: set(COMPUTE_DNA_PACKED).then(|| parser.get_dna_packed().to_string()),
-                columnar: set(COMPUTE_DNA_COLUMNAR).then(|| parser.get_dna_columnar().to_string()),
-                masks: set(COMPUTE_MASK_NON_ACTG)
-                    .then(|| (bits(parser.get_mask_non_actg()), bits(parser.get_mask_n()))),
-            }),
+            Ok(event) => {
+                #[cfg(feature = "packed-seq")]
+                if set(COMPUTE_DNA_PACKED) {
+                    use packed_seq::Seq;
+                    let packed = parser.get_dna_packed();
+                    let packed_seq = parser.get_packed_seq();
+                    assert_eq!(packed_seq.len(), packed.len());
+                    assert!((0..packed.len()).all(|i| packed_seq.get(i) == packed.get(i)));
+                }
+                out.push(Parsed::Record {
+                    event,
+                    header: set(COMPUTE_HEADER)
+                        .then(|| parser.get_header_owned())
+                        .unwrap_or_default(),
+                    dna: set(COMPUTE_DNA_STRING)
+                        .then(|| parser.get_dna_string_owned())
+                        .unwrap_or_default(),
+                    qual: set(COMPUTE_QUALITY).then(|| parser.get_quality_owned()),
+                    dna_len: parser.get_dna_len(),
+                    packed: set(COMPUTE_DNA_PACKED).then(|| parser.get_dna_packed().to_string()),
+                    columnar: set(COMPUTE_DNA_COLUMNAR)
+                        .then(|| parser.get_dna_columnar().to_string()),
+                    masks: set(COMPUTE_MASK_NON_ACTG)
+                        .then(|| (bits(parser.get_mask_non_actg()), bits(parser.get_mask_n()))),
+                })
+            }
             Err(e) => {
                 out.push(Parsed::Error(e.to_string()));
                 break;
@@ -116,6 +135,7 @@ fn check(data: &[u8], test_id: &str) {
     check_config::<STRING>(data, &format!("string {test_id}"));
     check_config::<PACKED>(data, &format!("packed {test_id}"));
     check_config::<SPLIT>(data, &format!("split {test_id}"));
+    check_config::<SPLIT_PACKED>(data, &format!("split_packed {test_id}"));
     check_config::<SKIP>(data, &format!("skip {test_id}"));
 }
 
@@ -315,6 +335,7 @@ fn check_reader_buffers(fasta: bool) {
         check_file::<STRING>(&data, &path, &id);
         check_file::<PACKED>(&data, &path, &id);
         check_file::<SPLIT>(&data, &path, &id);
+        check_file::<SPLIT_PACKED>(&data, &path, &id);
         check_file::<SKIP>(&data, &path, &id);
     }
     let _ = std::fs::remove_dir_all(&tmp_dir);

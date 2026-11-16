@@ -70,9 +70,9 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
         && (flag_is_set(CONFIG, SPLIT_NON_ACTG) && flag_is_set(CONFIG, MERGE_DNA_CHUNKS)
             || flag_is_set(CONFIG, MERGE_RECORDS));
 
-    const INDEXED: bool = flag_is_set(CONFIG, RETURN_RECORD)
-        && flag_is_not_set(CONFIG, RETURN_DNA_CHUNK | MERGE_RECORDS)
-        && (flag_is_not_set(CONFIG, SPLIT_NON_ACTG) || flag_is_set(CONFIG, REJECT_NON_ACTG));
+    const INDEXED: bool = flag_is_not_set(CONFIG, MERGE_RECORDS)
+        && (flag_is_set(CONFIG, RETURN_RECORD) != flag_is_set(CONFIG, RETURN_DNA_CHUNK))
+        && flag_is_not_set(CONFIG, RETURN_DNA_CHUNK & COMPUTE_QUALITY);
 
     fn from_lexer(mut lexer: Lexer<'a, CONFIG, I>) -> Self {
         let first_block = lexer.next_block::<SCAN_MODE_DNA>().transpose();
@@ -250,34 +250,50 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
     fn next_indexed(&mut self) -> Option<Result<Event>> {
         let (data, offset) = (self.lexer.input.buffer(), self.lexer.input.buffer_offset());
         let [header_end, seq_end, plus_end, qual_end] = self.line_index.peek::<4>(data, offset)?;
+        let crlf_len = self.crlf_len;
+        let seq_start = header_end + 1;
+        let seq_len = (seq_end - seq_start).saturating_sub(crlf_len);
         // The block parser jumps over quality lines using the sequence length,
         // and skips blank lines.
         if qual_end - plus_end != seq_end - header_end
-            || header_end - self.line_index.next_start <= self.crlf_len
+            || header_end - self.line_index.next_start <= crlf_len
+            || (flag_is_set(CONFIG, SPLIT_NON_ACTG)
+                && (seq_len == 0 || (crlf_len != 0 && data[seq_end - 1 - offset] != b'\r')))
         {
             return None;
         }
         let start = self.line_index.next_start;
+        self.record_start = start;
+        self.clear_record();
+        if flag_is_set(CONFIG, COMPUTE_HEADER) {
+            self.header_range = start + 1..header_end.saturating_sub(crlf_len);
+        }
+        self.dna_range = seq_start..seq_start + seq_len;
+        let data = self.lexer.input.buffer();
+        let packed = self
+            .bitpackers
+            .pack_contiguous::<CONFIG>(&data[seq_start - offset..], seq_len);
+        if packed < seq_len {
+            if flag_is_set(CONFIG, REJECT_NON_ACTG) {
+                self.line_index.consume::<4>(qual_end + 1);
+                #[cfg(feature = "paraseq")]
+                {
+                    self.record_index = self.record_counter;
+                    self.record_counter += 1;
+                }
+                return self.reject_first_non_actg(self.dna_range.clone());
+            }
+            return None;
+        }
         self.line_index.consume::<4>(qual_end + 1);
         #[cfg(feature = "paraseq")]
         {
             self.record_index = self.record_counter;
             self.record_counter += 1;
         }
-        self.record_start = start;
-        self.clear_record();
-        let crlf_len = self.crlf_len;
-        if flag_is_set(CONFIG, COMPUTE_HEADER) {
-            self.header_range = start + 1..header_end.saturating_sub(crlf_len);
-        }
-        let seq_len = (seq_end - header_end - 1).saturating_sub(crlf_len);
-        self.dna_range = header_end + 1..seq_end.saturating_sub(crlf_len);
-        let data = self.lexer.input.buffer();
-        let packed = self
-            .bitpackers
-            .pack_contiguous::<CONFIG>(&data[header_end + 1 - offset..], seq_len);
-        if flag_is_set(CONFIG, REJECT_NON_ACTG) && packed < seq_len {
-            return self.reject_first_non_actg(self.dna_range.clone());
+        if Self::MERGE_DNA_STRING {
+            self.cur_dna_string
+                .extend_from_slice(&data[seq_start - offset..seq_start - offset + seq_len]);
         }
         if flag_is_set(CONFIG, COMPUTE_DNA_LEN) {
             self.dna_len = seq_len;
@@ -285,7 +301,11 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
         if flag_is_set(CONFIG, COMPUTE_QUALITY) {
             self.quality_range = plus_end + 1..qual_end.saturating_sub(crlf_len);
         }
-        Some(Ok(Event::Record(start..qual_end + 1)))
+        if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
+            Some(Ok(Event::DnaChunk(self.dna_range.clone())))
+        } else {
+            Some(Ok(Event::Record(start..qual_end + 1)))
+        }
     }
 
     #[inline(always)]
@@ -293,13 +313,13 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
         if flag_is_set(CONFIG, REJECT_NON_ACTG) && self.finished {
             return self.return_error_or_none();
         }
-        if Self::INDEXED && self.line_index.active {
-            if let Some(event) = self.next_indexed() {
-                return Some(event);
-            }
-            self.leave_indexed();
-        }
         loop {
+            if Self::INDEXED && self.line_index.active {
+                if let Some(event) = self.next_indexed() {
+                    return Some(event);
+                }
+                self.leave_indexed();
+            }
             if !flag_is_set(CONFIG, RETURN_DNA_CHUNK) || self.line_count == 0 {
                 // HEADER
                 // A line feed at the record start, after the `\r` with CRLF, is a blank line.
@@ -503,17 +523,12 @@ impl<'a, const CONFIG: Config, I: InputData<'a>> FastqParser<'a, CONFIG, I> {
             if flag_is_set(CONFIG, RETURN_DNA_CHUNK) {
                 self.line_count = 0;
             }
+            if Self::INDEXED && !self.finished {
+                let (data, offset) = (self.lexer.input.buffer(), self.lexer.input.buffer_offset());
+                self.line_index
+                    .record_parsed(data, offset, self.record_start, self.global_pos());
+            }
             if flag_is_set(CONFIG, RETURN_RECORD) {
-                if Self::INDEXED && !self.finished {
-                    let (data, offset) =
-                        (self.lexer.input.buffer(), self.lexer.input.buffer_offset());
-                    self.line_index.record_parsed(
-                        data,
-                        offset,
-                        self.record_start,
-                        self.global_pos(),
-                    );
-                }
                 return Some(Ok(Event::Record(self.record_start..self.global_pos())));
             }
         }

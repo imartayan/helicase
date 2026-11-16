@@ -122,6 +122,49 @@ pub fn all_actg(buf: &[u8]) -> bool {
 }
 
 #[inline(always)]
+pub fn all_actg_len(buf: &[u8], len: usize) -> bool {
+    debug_assert!(len >= 16 && len <= buf.len());
+    unsafe {
+        let ptr = buf.as_ptr();
+        let is_actg = |off: usize| actg_mask(vld1q_u8(ptr.add(off)));
+        if len <= 32 {
+            return vminvq_u8(vandq_u8(is_actg(0), is_actg(len - 16))) == 0xFF;
+        }
+        if len <= 64 {
+            let a = vandq_u8(is_actg(0), is_actg(16));
+            let b = vandq_u8(is_actg(len - 32), is_actg(len - 16));
+            return vminvq_u8(vandq_u8(a, b)) == 0xFF;
+        }
+        let mut acc0 = is_actg(0);
+        let mut acc1 = is_actg(16);
+        let mut acc2 = is_actg(32);
+        let mut acc3 = is_actg(48);
+        let mut off = 64;
+        while off + 64 <= len {
+            acc0 = vandq_u8(acc0, is_actg(off));
+            acc1 = vandq_u8(acc1, is_actg(off + 16));
+            acc2 = vandq_u8(acc2, is_actg(off + 32));
+            acc3 = vandq_u8(acc3, is_actg(off + 48));
+            off += 64;
+        }
+        let r = len - off;
+        if r > 32 {
+            acc0 = vandq_u8(acc0, is_actg(len - 64));
+            acc1 = vandq_u8(acc1, is_actg(len - 48));
+            acc2 = vandq_u8(acc2, is_actg(len - 32));
+            acc3 = vandq_u8(acc3, is_actg(len - 16));
+        } else if r > 16 {
+            acc0 = vandq_u8(acc0, is_actg(off));
+            acc1 = vandq_u8(acc1, is_actg(len - 16));
+        } else if r > 0 {
+            acc0 = vandq_u8(acc0, is_actg(len - 16));
+        }
+        let all = vandq_u8(vandq_u8(acc0, acc1), vandq_u8(acc2, acc3));
+        vminvq_u8(all) == 0xFF
+    }
+}
+
+#[inline(always)]
 unsafe fn actg_mask(v: uint8x16_t) -> uint8x16_t {
     unsafe {
         vqtbl2q_u8(

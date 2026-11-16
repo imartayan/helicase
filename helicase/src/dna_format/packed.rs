@@ -180,7 +180,9 @@ impl PackedDNA {
             let mut p = self.word_ptr(start_len);
             if rem == 0 {
                 for k in 0..q {
-                    let m = crate::simd::extract_dna_bitmask::<CONFIG>(&data[64 * k..64 * (k + 1)]);
+                    let m = crate::simd::extract_dna_bitmask::<
+                        { crate::config::advanced::COMPUTE_DNA_PACKED },
+                    >(&data[64 * k..64 * (k + 1)]);
                     p.write_unaligned(m.two_bits as u64);
                     p.add(1).write_unaligned((m.two_bits >> 64) as u64);
                     p = p.add(2);
@@ -189,7 +191,9 @@ impl PackedDNA {
                 let inv = BITS_PER_BLOCK - rem;
                 let mut cur = self.cur;
                 for k in 0..q {
-                    let m = crate::simd::extract_dna_bitmask::<CONFIG>(&data[64 * k..64 * (k + 1)]);
+                    let m = crate::simd::extract_dna_bitmask::<
+                        { crate::config::advanced::COMPUTE_DNA_PACKED },
+                    >(&data[64 * k..64 * (k + 1)]);
                     let lo = m.two_bits as u64;
                     let hi = (m.two_bits >> 64) as u64;
                     p.write_unaligned(cur | (lo << rem));
@@ -203,6 +207,66 @@ impl PackedDNA {
         }
     }
 
+    #[inline(always)]
+    pub(crate) fn pack_blocks_checked<const CONFIG: crate::config::Config>(
+        &mut self,
+        data: &[u8],
+        start: usize,
+        q: usize,
+    ) -> usize {
+        let max_blocks = q - start;
+        if max_blocks == 0 {
+            return q;
+        }
+        self.ensure_spare(2 * max_blocks);
+        let rem = self.num_bits % BITS_PER_BLOCK;
+        let start_len = self.num_words();
+        let mut done = 0;
+        unsafe {
+            let mut p = self.word_ptr(start_len);
+            if rem == 0 {
+                for k in start..q {
+                    let m = crate::simd::extract_dna_bitmask::<CONFIG>(&data[64 * k..64 * (k + 1)]);
+                    if crate::config::advanced::flag_is_set(
+                        CONFIG,
+                        crate::config::advanced::SPLIT_NON_ACTG,
+                    ) && m.is_dna != !0
+                    {
+                        break;
+                    }
+                    p.write_unaligned(m.two_bits as u64);
+                    p.add(1).write_unaligned((m.two_bits >> 64) as u64);
+                    p = p.add(2);
+                    done += 1;
+                }
+            } else {
+                let inv = BITS_PER_BLOCK - rem;
+                let mut cur = self.cur;
+                for k in start..q {
+                    let m = crate::simd::extract_dna_bitmask::<CONFIG>(&data[64 * k..64 * (k + 1)]);
+                    if crate::config::advanced::flag_is_set(
+                        CONFIG,
+                        crate::config::advanced::SPLIT_NON_ACTG,
+                    ) && m.is_dna != !0
+                    {
+                        break;
+                    }
+                    let lo = m.two_bits as u64;
+                    let hi = (m.two_bits >> 64) as u64;
+                    p.write_unaligned(cur | (lo << rem));
+                    p.add(1).write_unaligned((lo >> inv) | (hi << rem));
+                    cur = hi >> inv;
+                    p = p.add(2);
+                    done += 1;
+                }
+                self.cur = cur;
+            }
+            self.num_bits += 128 * done;
+            self.set_num_words(start_len + 2 * done);
+        }
+        start + done
+    }
+
     /// Appends the `num_bases` bases packed in the low bits of `packed`, other bits are ignored.
     /// `num_bases` must be at most 64.
     #[inline(always)]
@@ -214,6 +278,34 @@ impl PackedDNA {
         }
         let lo = packed as u64;
         let hi = (packed >> 64) as u64;
+        if self.num_bits.is_multiple_of(BITS_PER_BLOCK) {
+            if num_bits < 64 {
+                self.cur = lo & ((1u64 << num_bits) - 1);
+                self.num_bits += num_bits;
+            } else {
+                self.ensure_spare(2);
+                let len = self.num_words();
+                let rem_bits = num_bits - 64;
+                unsafe {
+                    let ptr = self.word_ptr(len);
+                    ptr.write_unaligned(lo);
+                    if rem_bits == 64 {
+                        ptr.add(1).write_unaligned(hi);
+                        self.set_num_words(len + 2);
+                        self.cur = 0;
+                    } else {
+                        self.set_num_words(len + 1);
+                        self.cur = if rem_bits == 0 {
+                            0
+                        } else {
+                            hi & ((1u64 << rem_bits) - 1)
+                        };
+                    }
+                }
+                self.num_bits += num_bits;
+            }
+            return;
+        }
         if num_bits <= 64 {
             self.append_u64(lo, num_bits);
         } else {

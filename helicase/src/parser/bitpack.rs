@@ -1,9 +1,9 @@
 use crate::config::{advanced::*, *};
 use crate::dna_format::{BitMask, ColumnarDNA, PackedDNA};
 use crate::lexer::Chunk;
-#[cfg(target_feature = "neon")]
-use crate::simd::all_actg;
 use crate::simd::extract_dna_bitmask;
+#[cfg(target_feature = "neon")]
+use crate::simd::{all_actg, all_actg_len};
 
 /// Unified container managing on-the-fly 2-bit bitpacking representations
 /// across FASTA and FASTQ parsers.
@@ -116,22 +116,30 @@ impl DnaBitpackers {
     }
 
     #[inline(always)]
-    fn pack_run<const CONFIG: Config>(&mut self, data: &[u8], q: usize) -> usize {
-        let count = if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
-            actg_prefix_blocks(data, q)
+    fn pack_run<const CONFIG: Config>(
+        &mut self,
+        data: &[u8],
+        q: usize,
+        rem_len: usize,
+    ) -> (usize, bool) {
+        let (count, rem_valid) = if flag_is_set(CONFIG, SPLIT_NON_ACTG) {
+            actg_prefix_blocks(data, q, rem_len)
         } else {
-            q
+            (q, true)
         };
         if flag_is_set(CONFIG, COMPUTE_DNA_PACKED) {
             self.packed.pack_blocks::<CONFIG>(data, count);
         }
         if flag_is_set(CONFIG, COMPUTE_DNA_COLUMNAR) {
             for k in 0..count {
-                let m = extract_dna_bitmask::<CONFIG>(&data[64 * k..64 * (k + 1)]);
+                let m = extract_dna_bitmask::<COMPUTE_DNA_COLUMNAR>(&data[64 * k..64 * (k + 1)]);
                 self.columnar.append_full(m.high_bit, m.low_bit);
             }
         }
-        self.pack_blocks_checked::<CONFIG>(data, count, q)
+        (
+            self.pack_blocks_checked::<CONFIG>(data, count, q),
+            rem_valid,
+        )
     }
 
     #[inline(always)]
@@ -141,6 +149,14 @@ impl DnaBitpackers {
         start: usize,
         q: usize,
     ) -> usize {
+        if flag_is_set(CONFIG, COMPUTE_DNA_PACKED)
+            && flag_is_not_set(
+                CONFIG,
+                COMPUTE_DNA_COLUMNAR | COMPUTE_MASK_NON_ACTG | COMPUTE_MASK_N,
+            )
+        {
+            return self.packed.pack_blocks_checked::<CONFIG>(data, start, q);
+        }
         for k in start..q {
             let m = extract_dna_bitmask::<CONFIG>(&data[64 * k..64 * (k + 1)]);
             if flag_is_set(CONFIG, SPLIT_NON_ACTG) && m.is_dna != !0 {
@@ -185,10 +201,10 @@ impl DnaBitpackers {
         let r = rem_len % 64;
         let mut curr_pos = 0;
 
-        let processed_blocks = if !need_mask_non_actg && !need_mask_n {
-            self.pack_run::<CONFIG>(data, q)
+        let (processed_blocks, rem_valid) = if !need_mask_non_actg && !need_mask_n {
+            self.pack_run::<CONFIG>(data, q, rem_len)
         } else {
-            self.pack_blocks_checked::<CONFIG>(data, 0, q)
+            (self.pack_blocks_checked::<CONFIG>(data, 0, q), false)
         };
 
         if processed_blocks < q {
@@ -199,7 +215,25 @@ impl DnaBitpackers {
 
         if r > 0 {
             let rem_data = &data[curr_pos..curr_pos + r];
-            let m = if curr_pos + 64 <= data.len() {
+            let m = if rem_valid {
+                const PURE_PACKED: Config = COMPUTE_DNA_PACKED;
+                const PURE_COL: Config = COMPUTE_DNA_COLUMNAR;
+                const PURE_BOTH: Config = COMPUTE_DNA_PACKED | COMPUTE_DNA_COLUMNAR;
+                let extract = if need_packed && need_columnar {
+                    extract_dna_bitmask::<PURE_BOTH>
+                } else if need_packed {
+                    extract_dna_bitmask::<PURE_PACKED>
+                } else {
+                    extract_dna_bitmask::<PURE_COL>
+                };
+                if curr_pos + 64 <= data.len() {
+                    extract(&data[curr_pos..curr_pos + 64])
+                } else {
+                    let mut tmp = [b'A'; 64];
+                    tmp[..r].copy_from_slice(rem_data);
+                    extract(&tmp)
+                }
+            } else if curr_pos + 64 <= data.len() {
                 extract_dna_bitmask::<CONFIG>(&data[curr_pos..curr_pos + 64])
             } else {
                 let mut tmp = [b'A'; 64];
@@ -208,7 +242,7 @@ impl DnaBitpackers {
             };
 
             let r_mask = (1u64 << r) - 1;
-            if !is_keep && (m.is_dna & r_mask) != r_mask {
+            if !rem_valid && !is_keep && (m.is_dna & r_mask) != r_mask {
                 return curr_pos;
             }
 
@@ -236,16 +270,24 @@ impl DnaBitpackers {
 // the blocks are only checked while packing.
 #[cfg(not(target_feature = "neon"))]
 #[inline(always)]
-const fn actg_prefix_blocks(_data: &[u8], _q: usize) -> usize {
-    0
+const fn actg_prefix_blocks(_data: &[u8], _q: usize, _rem_len: usize) -> (usize, bool) {
+    (0, false)
 }
 
 #[cfg(target_feature = "neon")]
 #[inline(always)]
-fn actg_prefix_blocks(data: &[u8], q: usize) -> usize {
+fn actg_prefix_blocks(data: &[u8], q: usize, rem_len: usize) -> (usize, bool) {
     let mut n = 0;
-    while n + 4 <= q && all_actg(&data[64 * n..]) {
+    while n + 4 <= q {
+        if !all_actg(&data[64 * n..]) {
+            return (n, false);
+        }
         n += 4;
     }
-    n
+    let tail_len = rem_len - 64 * n;
+    if tail_len == 0 || (tail_len >= 16 && all_actg_len(&data[64 * n..], tail_len)) {
+        (q, true)
+    } else {
+        (n, false)
+    }
 }
